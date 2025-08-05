@@ -11,8 +11,11 @@ const PORT = process.env.PORT || 8080;
 // Middleware
 app.use(cors({
   origin: process.env.NODE_ENV === 'production'
-    ? ['https://tu-dominio.com'] // Cambia por tu dominio en producción
-    : ['http://localhost:3000', 'http://localhost:5173'], // Vite y Create React App
+    ? [
+      'https://andrei-frontend-algo.vercel.app', // Tu URL de Vercel
+      'https://*.vercel.app' // Cualquier subdominio de Vercel
+    ]
+    : ['http://localhost:3000', 'http://localhost:5173'],
   credentials: true
 }));
 
