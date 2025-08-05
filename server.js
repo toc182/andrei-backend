@@ -10,14 +10,22 @@ const PORT = process.env.PORT || 8080;
 
 // Middleware
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? [
-      'https://andrei-frontend-algo.vercel.app', // Tu URL de Vercel
-      'https://*.vercel.app' // Cualquier subdominio de Vercel
-    ]
-    : ['http://localhost:3000', 'http://localhost:5173'],
-  credentials: true
+  origin: [
+    'https://andrei-frontend.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:5173'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Debug temporal
+app.use((req, res, next) => {
+  console.log('🌐 Request from:', req.headers.origin);
+  console.log('🔧 Method:', req.method);
+  next();
+});
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
