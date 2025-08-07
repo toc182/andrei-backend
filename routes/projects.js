@@ -44,6 +44,7 @@ router.get('/', authenticateToken, async (req, res) => {
     // Paginación
     const offset = (page - 1) * limit;
     queryParams.push(limit, offset);
+    paramCounter += 2;
 
     console.log('Final whereClause:', whereClause);
     console.log('Query params array:', queryParams);
@@ -63,7 +64,7 @@ router.get('/', authenticateToken, async (req, res) => {
             ${whereClause}
         GROUP BY p.id, c.nombre, u.nombre
         ORDER BY p.created_at DESC
-            LIMIT $${paramCounter - 1} OFFSET $${paramCounter}
+            LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
     `, queryParams);
 
     // Contar total para paginación
