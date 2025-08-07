@@ -39,26 +39,27 @@ router.get('/', authenticateToken, async (req, res) => {
     queryParams.push(limit, offset);
 
     const result = await query(`
-      SELECT 
-        p.*,
-        c.nombre as cliente_nombre,
-        u.nombre as manager_nombre
-      FROM proyectos p
-      LEFT JOIN clientes c ON p.cliente_id = c.id
-      LEFT JOIN users u ON p.manager_id = u.id
-      LEFT JOIN proyecto_usuarios pu ON p.id = pu.proyecto_id
-      ${whereClause}
-      GROUP BY p.id, c.nombre, u.nombre
-      ORDER BY p.created_at DESC
-      LIMIT $${paramCounter - 1} OFFSET $${paramCounter}
+        SELECT
+            p.*,
+            c.nombre as cliente_nombre,
+            u.nombre as manager_nombre,
+            COUNT(DISTINCT pu.user_id) as usuarios_asignados
+        FROM proyectos p
+                 LEFT JOIN clientes c ON p.cliente_id = c.id
+                 LEFT JOIN users u ON p.manager_id = u.id
+                 LEFT JOIN proyecto_usuarios pu ON p.id = pu.proyecto_id
+            ${whereClause}
+        GROUP BY p.id, c.nombre, u.nombre
+        ORDER BY p.created_at DESC
+            LIMIT $${paramCounter - 1} OFFSET $${paramCounter}
     `, queryParams);
 
     // Contar total para paginación
     const countResult = await query(`
-      SELECT COUNT(DISTINCT p.id) as total
-      FROM proyectos p
-      LEFT JOIN proyecto_usuarios pu ON p.id = pu.proyecto_id
-      ${whereClause.replace(`LIMIT $${paramCounter - 1} OFFSET $${paramCounter}`, '')}
+        SELECT COUNT(DISTINCT p.id) as total
+        FROM proyectos p
+                 LEFT JOIN proyecto_usuarios pu ON p.id = pu.proyecto_id
+            ${whereClause.replace(/LIMIT.*OFFSET.*/, '')}
     `, queryParams.slice(0, -2));
 
     res.json({
