@@ -8,89 +8,33 @@ const router = express.Router();
 // Obtener todos los proyectos
 router.get('/', authenticateToken, async (req, res) => {
   try {
-
-    console.log('=== DEBUG GET PROJECTS ===');
-    console.log('User:', req.user);
-    console.log('Query params:', req.query);
-
-    const { estado, manager_id, page = 1, limit = 10 } = req.query;
-
-    let whereClause = 'WHERE p.activo = true';
-    const queryParams = [];
-    let paramCounter = 1;
-
-    console.log('Initial whereClause:', whereClause);
-
-    // Filtros opcionales
-    if (estado) {
-      whereClause += ` AND p.estado = $${paramCounter}`;
-      queryParams.push(estado);
-      paramCounter++;
-    }
-
-    if (manager_id) {
-      whereClause += ` AND p.manager_id = $${paramCounter}`;
-      queryParams.push(manager_id);
-      paramCounter++;
-    }
-
-    // Si no es admin, solo ver proyectos asignados
-    if (req.user.rol !== 'admin') {
-      whereClause += ` AND (p.manager_id = $${paramCounter} OR pu.user_id = $${paramCounter})`;
-      queryParams.push(req.user.id);
-      paramCounter++;
-    }
-
-    // Paginación
-    const offset = (page - 1) * limit;
-    queryParams.push(limit, offset);
-    paramCounter += 2;
-
-    console.log('Final whereClause:', whereClause);
-    console.log('Query params array:', queryParams);
-    console.log('Param counter:', paramCounter);
-
+    console.log('=== SIMPLE QUERY TEST ===');
 
     const result = await query(`
-        SELECT
-            p.*,
-            c.nombre as cliente_nombre,
-            u.nombre as manager_nombre,
-            COUNT(DISTINCT pu.user_id) as usuarios_asignados
-        FROM proyectos p
-                 LEFT JOIN clientes c ON p.cliente_id = c.id
-                 LEFT JOIN users u ON p.manager_id = u.id
-                 LEFT JOIN proyecto_usuarios pu ON p.id = pu.proyecto_id
-            ${whereClause}
-        GROUP BY p.id, c.nombre, u.nombre
-        ORDER BY p.created_at DESC
-            LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
-    `, queryParams);
+      SELECT 
+        id,
+        nombre,
+        descripcion,
+        estado,
+        presupuesto_inicial,
+        created_at
+      FROM proyectos 
+      WHERE activo = true
+      ORDER BY created_at DESC
+    `);
 
-    // Contar total para paginación
-    const countResult = await query(`
-        SELECT COUNT(DISTINCT p.id) as total
-        FROM proyectos p
-                 LEFT JOIN proyecto_usuarios pu ON p.id = pu.proyecto_id
-            ${whereClause.replace(/LIMIT.*OFFSET.*/, '')}
-    `, queryParams.slice(0, -2));
+    console.log('Found projects:', result.rows.length);
 
     res.json({
       success: true,
-      proyectos: result.rows,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total: parseInt(countResult.rows[0].total),
-        totalPages: Math.ceil(countResult.rows[0].total / limit)
-      }
+      proyectos: result.rows
     });
 
   } catch (error) {
-    console.error('Error obteniendo proyectos:', error);
+    console.error('Simple query error:', error);
     res.status(500).json({
       success: false,
-      message: 'Error interno del servidor'
+      message: error.message
     });
   }
 });
