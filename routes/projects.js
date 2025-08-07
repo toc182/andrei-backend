@@ -8,11 +8,18 @@ const router = express.Router();
 // Obtener todos los proyectos
 router.get('/', authenticateToken, async (req, res) => {
   try {
+
+    console.log('=== DEBUG GET PROJECTS ===');
+    console.log('User:', req.user);
+    console.log('Query params:', req.query);
+
     const { estado, manager_id, page = 1, limit = 10 } = req.query;
 
     let whereClause = 'WHERE p.activo = true';
     const queryParams = [];
     let paramCounter = 1;
+
+    console.log('Initial whereClause:', whereClause);
 
     // Filtros opcionales
     if (estado) {
@@ -37,6 +44,11 @@ router.get('/', authenticateToken, async (req, res) => {
     // Paginación
     const offset = (page - 1) * limit;
     queryParams.push(limit, offset);
+
+    console.log('Final whereClause:', whereClause);
+    console.log('Query params array:', queryParams);
+    console.log('Param counter:', paramCounter);
+
 
     const result = await query(`
         SELECT
