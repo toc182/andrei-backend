@@ -81,7 +81,7 @@ router.post('/login', [
 
     // Buscar usuario
     const result = await query(
-      'SELECT id, nombre, email, password, rol FROM users WHERE email = $1 AND activo = true',
+      'SELECT id, nombre, email, password, rol FROM users WHERE email = $1',
       [email]
     );
 
