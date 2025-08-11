@@ -1,7 +1,7 @@
 ### Test Health Check
 GET http://localhost:5000/api/health
 
-### Test Login
+### Test Login Local
 POST http://localhost:5000/api/auth/login
 Content-Type: application/json
 
@@ -9,3 +9,103 @@ Content-Type: application/json
   "email": "admin@andrei.com",
   "password": "123456"
 }
+
+### Get JWT Token (Production)
+POST https://andrei-backend-production.up.railway.app/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@andrei.com",
+  "password": "123456"
+}
+
+### Test Projects Stats
+GET https://andrei-backend-production.up.railway.app/api/projects/stats/dashboard
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU0NTk4NTE0LCJleHAiOjE3NTQ2ODQ5MTR9.cDDr_eXWHa-jSylqkUsLoLmaBK1j8Ct-mfGcLDHe9z4
+
+### Test Get All Projects
+GET https://andrei-backend-production.up.railway.app/api/projects
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU0NTk4NTE0LCJleHAiOjE3NTQ2ODQ5MTR9.cDDr_eXWHa-jSylqkUsLoLmaBK1j8Ct-mfGcLDHe9z4
+
+### Test Get All Projects with Filters
+GET https://andrei-backend-production.up.railway.app/api/projects?estado=planificacion&search=Torre
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU0NTk4NTE0LCJleHAiOjE3NTQ2ODQ5MTR9.cDDr_eXWHa-jSylqkUsLoLmaBK1j8Ct-mfGcLDHe9z4
+
+### Test Create Project (Nueva Estructura)
+POST https://andrei-backend-production.up.railway.app/api/projects
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU0NTk4NTE0LCJleHAiOjE3NTQ2ODQ5MTR9.cDDr_eXWHa-jSylqkUsLoLmaBK1j8Ct-mfGcLDHe9z4
+Content-Type: application/json
+
+{
+  "nombre": "Edificio Torre Central",
+  "nombre_corto": "Torre Central",
+  "contratista": "Constructora Panama S.A.",
+  "ingeniero_residente": "Ing. Carlos Mendoza",
+  "fecha_inicio": "2025-02-01",
+  "fecha_fin_estimada": "2025-12-31",
+  "monto_contrato_original": 2500000.00,
+  "contrato": "CT-2025-001",
+  "acto_publico": "AP-001-2025",
+  "estado": "planificacion",
+  "datos_adicionales": {
+    "superficie_m2": 5000,
+    "pisos": 15,
+    "tipo_estructura": "concreto_armado"
+  }
+}
+
+### Test Create Project Minimal
+POST https://andrei-backend-production.up.railway.app/api/projects
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU0NTk4NTE0LCJleHAiOjE3NTQ2ODQ5MTR9.cDDr_eXWHa-jSylqkUsLoLmaBK1j8Ct-mfGcLDHe9z4
+Content-Type: application/json
+
+{
+  "nombre": "Casa Residencial Los Alamos",
+  "nombre_corto": "Los Alamos"
+}
+
+### Test Get Specific Project
+GET https://andrei-backend-production.up.railway.app/api/projects/1
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU0NTk4NTE0LCJleHAiOjE3NTQ2ODQ5MTR9.cDDr_eXWHa-jSylqkUsLoLmaBK1j8Ct-mfGcLDHe9z4
+
+### Test Update Project
+PUT https://andrei-backend-production.up.railway.app/api/projects/1
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU0NTk4NTE0LCJleHAiOjE3NTQ2ODQ5MTR9.cDDr_eXWHa-jSylqkUsLoLmaBK1j8Ct-mfGcLDHe9z4
+Content-Type: application/json
+
+{
+  "estado": "en_curso",
+  "ingeniero_residente": "Ing. Maria Rodriguez",
+  "datos_adicionales": {
+    "superficie_m2": 5000,
+    "pisos": 15,
+    "tipo_estructura": "concreto_armado",
+    "avance_porcentual": 25,
+    "ultima_inspeccion": "2025-08-07"
+  }
+}
+
+### Test Update Datos Adicionales Only
+PATCH https://andrei-backend-production.up.railway.app/api/projects/1/datos-adicionales
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU0NTk4NTE0LCJleHAiOjE3NTQ2ODQ5MTR9.cDDr_eXWHa-jSylqkUsLoLmaBK1j8Ct-mfGcLDHe9z4
+Content-Type: application/json
+
+{
+  "datos": {
+    "adendas": [
+      {
+        "numero": 1,
+        "fecha_firma": "2025-03-15",
+        "tipo": "ampliacion_plazo",
+        "ajuste_monto": 150000,
+        "nueva_fecha_fin": "2026-01-31",
+        "motivo": "Cambios en especificaciones del cliente"
+      }
+    ],
+    "observaciones": "Proyecto en desarrollo normal"
+  }
+}
+
+### Test Delete Project
+DELETE https://andrei-backend-production.up.railway.app/api/projects/1
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU0NTk4NTE0LCJleHAiOjE3NTQ2ODQ5MTR9.cDDr_eXWHa-jSylqkUsLoLmaBK1j8Ct-mfGcLDHe9z4
