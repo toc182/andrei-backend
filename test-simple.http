@@ -1,0 +1,15 @@
+### Test ruta básica de seguimiento
+GET http://localhost:5000/api/seguimiento/test
+
+### Login para obtener token
+POST http://localhost:5000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@andrei.com",
+  "password": "123456"
+}
+
+### Test Dashboard (reemplaza TOKEN_AQUI)
+GET http://localhost:5000/api/seguimiento/3/dashboard
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU1MTE2MTUyLCJleHAiOjE3NTUyMDI1NTJ9.e9MZDRBgKrEBnFp74PwihO9DOCI3NQmuePf1cZsdPmQ

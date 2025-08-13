@@ -34,6 +34,8 @@ app.use(express.urlencoded({ extended: true }));
 // Rutas
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
+// Rutas de seguimiento de tuberías
+app.use('/api/seguimiento', require('./routes/seguimiento'));
 
 // Ruta de prueba
 app.get('/api/health', (req, res) => {
