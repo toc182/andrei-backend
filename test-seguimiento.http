@@ -1,0 +1,12 @@
+### Login Railway
+POST https://andrei-backend-production.up.railway.app/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@andrei.com",
+  "password": "123456"
+}
+
+### Dashboard Railway
+GET https://andrei-backend-production.up.railway.app/api/seguimiento/5/dashboard
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU1MTE2OTMyLCJleHAiOjE3NTUyMDMzMzJ9.sXwMCZJPnreKHZKk0WaqL1M6LzIJRwgLlGFm1piCbOk

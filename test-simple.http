@@ -1,7 +1,4 @@
-### Test ruta básica de seguimiento
-GET http://localhost:5000/api/seguimiento/test
-
-### Login para obtener token
+### 1. Login para obtener token
 POST http://localhost:5000/api/auth/login
 Content-Type: application/json
 
@@ -10,6 +7,42 @@ Content-Type: application/json
   "password": "123456"
 }
 
-### Test Dashboard (reemplaza TOKEN_AQUI)
+> {% client.global.set("auth_token", response.body.token); %}
+
+### 2. Obtener tramos disponibles
+GET http://localhost:5000/api/seguimiento/3/tramos
+Authorization: Bearer {{auth_token}}
+
+### 3. Obtener frentes actuales
+GET http://localhost:5000/api/seguimiento/3/frentes
+Authorization: Bearer {{auth_token}}
+
+### 4. Crear nuevo frente en Tramo 1
+POST http://localhost:5000/api/seguimiento/3/frentes
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "tramo_id": 1,
+  "nombre": "Frente C",
+  "descripcion": "Nuevo frente para pruebas"
+}
+
+### 5. Crear otro frente en Tramo 2
+POST http://localhost:5000/api/seguimiento/3/frentes
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "tramo_id": 2,
+  "nombre": "Frente C",
+  "descripcion": "Frente C en campo abierto"
+}
+
+### 6. Obtener estadísticas por frente
+GET http://localhost:5000/api/seguimiento/3/estadisticas-frentes
+Authorization: Bearer {{auth_token}}
+
+### 7. Dashboard actualizado
 GET http://localhost:5000/api/seguimiento/3/dashboard
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU1MTE2MTUyLCJleHAiOjE3NTUyMDI1NTJ9.e9MZDRBgKrEBnFp74PwihO9DOCI3NQmuePf1cZsdPmQ
+Authorization: Bearer {{auth_token}}

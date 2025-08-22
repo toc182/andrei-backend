@@ -1,0 +1,23 @@
+### 1. Login
+POST http://localhost:5000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@andrei.com",
+  "password": "123456"
+}
+
+### 2. Obtener tramos
+GET http://localhost:5000/api/seguimiento/3/tramos
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU1MTIxNDg5LCJleHAiOjE3NTUyMDc4ODl9.fctlIAt8rcLzm_-l4oDOYKJQBk7tzw2lk0N4egfLgV0
+
+### 3. Crear frente
+POST http://localhost:5000/api/seguimiento/3/frentes
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU1MTIxNDg5LCJleHAiOjE3NTUyMDc4ODl9.fctlIAt8rcLzm_-l4oDOYKJQBk7tzw2lk0N4egfLgV0
+Content-Type: application/json
+
+{
+  "tramo_id": 6,
+  "nombre": "T1B",
+  "descripcion": "Frente B - Quebrada Bonyic"
+}
