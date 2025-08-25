@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const { testConnection } = require('./database/config');
+const { runAllMigrations } = require('./database/migrate');
 const authRoutes = require('./routes/auth');
 const projectRoutes = require('./routes/projects');
 const clientesRoutes = require('./routes/clientes');
@@ -73,6 +74,12 @@ app.use((error, req, res, next) => {
 async function startServer() {
   try {
     await testConnection();
+    
+    // Run database migrations
+    if (process.env.NODE_ENV === 'production') {
+      console.log('🔄 Ejecutando migraciones de base de datos...');
+      await runAllMigrations();
+    }
 
     app.listen(PORT, () => {
       console.log(`🚀 Servidor ejecutándose en puerto ${PORT}`);

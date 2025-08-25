@@ -10,7 +10,17 @@ async function runMigration(migrationFile) {
     const sqlContent = fs.readFileSync(migrationPath, 'utf8');
     
     // Execute the SQL
-    await query(sqlContent);
+    // Split by semicolon and execute each statement separately to handle complex migrations
+    const statements = sqlContent
+      .split(';')
+      .map(s => s.trim())
+      .filter(s => s.length > 0 && !s.startsWith('--'));
+    
+    for (const statement of statements) {
+      if (statement.trim()) {
+        await query(statement);
+      }
+    }
     
     console.log(`✅ Migración completada: ${migrationFile}`);
     
