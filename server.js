@@ -5,6 +5,8 @@ require('dotenv').config();
 const { testConnection } = require('./database/config');
 const authRoutes = require('./routes/auth');
 const projectRoutes = require('./routes/projects');
+const clientesRoutes = require('./routes/clientes');
+const costsRoutes = require('./routes/costs');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -15,7 +17,8 @@ app.use(cors({
     'https://andrei-frontend.vercel.app',
     'http://localhost:3000',
     'http://localhost:5173',
-    'http://localhost:5174'
+    'http://localhost:5174',
+    'http://localhost:5175'
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -35,6 +38,8 @@ app.use(express.urlencoded({ extended: true }));
 // Rutas
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api/clientes', clientesRoutes);
+app.use('/api/costs', costsRoutes);
 // Rutas de seguimiento de tuberías
 app.use('/api/seguimiento', require('./routes/seguimiento'));
 
