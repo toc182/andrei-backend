@@ -76,10 +76,8 @@ async function startServer() {
     await testConnection();
     
     // Run database migrations
-    if (process.env.NODE_ENV === 'production') {
-      console.log('🔄 Ejecutando migraciones de base de datos...');
-      await runAllMigrations();
-    }
+    console.log('🔄 Ejecutando migraciones de base de datos...');
+    await runAllMigrations();
 
     app.listen(PORT, () => {
       console.log(`🚀 Servidor ejecutándose en puerto ${PORT}`);

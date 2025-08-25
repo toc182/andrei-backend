@@ -9,6 +9,8 @@ const router = express.Router();
 router.get('/', authenticateToken, async (req, res) => {
   try {
     console.log('=== PROJECTS QUERY ===');
+    console.log('📊 Environment:', process.env.NODE_ENV);
+    console.log('🔍 User ID:', req.user?.id);
 
     const { page = 1, limit = 10, estado, search } = req.query;
     const offset = (page - 1) * limit;
@@ -37,35 +39,71 @@ router.get('/', authenticateToken, async (req, res) => {
       paramCounter++;
     }
 
-    const result = await query(`
-      SELECT 
-        p.id,
-        p.nombre,
-        p.nombre_corto,
-        p.cliente_id,
-        p.fecha_inicio,
-        p.fecha_fin_estimada,
-        p.estado,
-        p.contratista,
-        p.ingeniero_residente,
-        p.codigo_proyecto,
-        p.contrato,
-        p.acto_publico,
-        p.monto_contrato_original,
-        COALESCE(p.presupuesto_base, 0) as presupuesto_base,
-        COALESCE(p.itbms, 0) as itbms,
-        COALESCE(p.monto_total, p.monto_contrato_original) as monto_total,
-        p.datos_adicionales,
-        p.created_at,
-        p.updated_at,
-        c.nombre as cliente_nombre,
-        c.abreviatura as cliente_abreviatura
-      FROM proyectos p
-      LEFT JOIN clientes c ON p.cliente_id = c.id
-      ${whereClause.replace('WHERE 1=1', 'WHERE 1=1')}
-      ORDER BY p.created_at DESC
-      LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
-    `, [...queryParams, limit, offset]);
+    let result;
+    try {
+      // Try with new budget fields
+      result = await query(`
+        SELECT 
+          p.id,
+          p.nombre,
+          p.nombre_corto,
+          p.cliente_id,
+          p.fecha_inicio,
+          p.fecha_fin_estimada,
+          p.estado,
+          p.contratista,
+          p.ingeniero_residente,
+          p.codigo_proyecto,
+          p.contrato,
+          p.acto_publico,
+          p.monto_contrato_original,
+          COALESCE(p.presupuesto_base, 0) as presupuesto_base,
+          COALESCE(p.itbms, 0) as itbms,
+          COALESCE(p.monto_total, p.monto_contrato_original) as monto_total,
+          p.datos_adicionales,
+          p.created_at,
+          p.updated_at,
+          c.nombre as cliente_nombre,
+          c.abreviatura as cliente_abreviatura
+        FROM proyectos p
+        LEFT JOIN clientes c ON p.cliente_id = c.id
+        ${whereClause.replace('WHERE 1=1', 'WHERE 1=1')}
+        ORDER BY p.created_at DESC
+        LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
+      `, [...queryParams, limit, offset]);
+    } catch (queryError) {
+      console.log('⚠️  New budget fields not available, using fallback query');
+      // Fallback query without new budget fields
+      result = await query(`
+        SELECT 
+          p.id,
+          p.nombre,
+          p.nombre_corto,
+          p.cliente_id,
+          p.fecha_inicio,
+          p.fecha_fin_estimada,
+          p.estado,
+          p.contratista,
+          p.ingeniero_residente,
+          p.codigo_proyecto,
+          p.contrato,
+          p.acto_publico,
+          p.monto_contrato_original,
+          0 as presupuesto_base,
+          0 as itbms,
+          p.monto_contrato_original as monto_total,
+          p.datos_adicionales,
+          p.created_at,
+          p.updated_at,
+          c.nombre as cliente_nombre,
+          c.abreviatura as cliente_abreviatura
+        FROM proyectos p
+        LEFT JOIN clientes c ON p.cliente_id = c.id
+        ${whereClause.replace('WHERE 1=1', 'WHERE 1=1')}
+        ORDER BY p.created_at DESC
+        LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
+      `, [...queryParams, limit, offset]);
+    }
 
     // Contar total para paginación
     const countResult = await query(`
@@ -78,6 +116,17 @@ router.get('/', authenticateToken, async (req, res) => {
     const total = parseInt(countResult.rows[0].total);
 
     console.log('Found projects:', result.rows.length);
+    
+    // Debug: Log first project structure
+    if (result.rows.length > 0) {
+      console.log('📋 First project keys:', Object.keys(result.rows[0]));
+      console.log('💰 First project budget fields:', {
+        monto_contrato_original: result.rows[0].monto_contrato_original,
+        presupuesto_base: result.rows[0].presupuesto_base,
+        itbms: result.rows[0].itbms,
+        monto_total: result.rows[0].monto_total
+      });
+    }
 
     res.json({
       success: true,
@@ -91,10 +140,15 @@ router.get('/', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Projects query error:', error);
+    console.error('❌ Projects query error:', error);
+    console.error('❌ Error code:', error.code);
+    console.error('❌ Error message:', error.message);
+    console.error('❌ Error detail:', error.detail);
+    
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
