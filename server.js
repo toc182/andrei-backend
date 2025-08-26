@@ -73,19 +73,38 @@ app.use((error, req, res, next) => {
 // Iniciar servidor
 async function startServer() {
   try {
+    console.log('🔧 Starting server initialization...');
+    console.log('📊 Environment:', process.env.NODE_ENV || 'development');
+    console.log('🌐 Port:', PORT);
+    console.log('🔌 Database URL exists:', !!process.env.DATABASE_URL);
+    console.log('🔑 JWT Secret exists:', !!process.env.JWT_SECRET);
+    
+    console.log('📡 Testing database connection...');
     await testConnection();
+    console.log('✅ Database connection successful');
     
     // Run database migrations
     console.log('🔄 Ejecutando migraciones de base de datos...');
     await runAllMigrations();
+    console.log('✅ Migrations completed');
 
+    console.log('🚀 Starting HTTP server...');
     app.listen(PORT, () => {
-      console.log(`🚀 Servidor ejecutándose en puerto ${PORT}`);
-      console.log(`📊 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`✅ Server running successfully on port ${PORT}`);
+      console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+      console.log('🎉 Server startup complete!');
     });
   } catch (error) {
-    console.error('❌ Error iniciando servidor:', error);
+    console.error('💥 CRITICAL: Server startup failed');
+    console.error('❌ Error type:', error.constructor.name);
+    console.error('❌ Error message:', error.message);
+    console.error('❌ Error stack:', error.stack);
+    console.error('🔍 Environment debug:');
+    console.error('   - NODE_ENV:', process.env.NODE_ENV);
+    console.error('   - PORT:', process.env.PORT);
+    console.error('   - DATABASE_URL exists:', !!process.env.DATABASE_URL);
+    console.error('   - JWT_SECRET exists:', !!process.env.JWT_SECRET);
     process.exit(1);
   }
 }
