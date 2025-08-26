@@ -31,6 +31,16 @@ router.get('/categories', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error fetching expense categories:', error);
+    
+    // If table doesn't exist, return empty array
+    if (error.message.includes('relation "expense_categories" does not exist')) {
+      console.log('⚠️ Cost tracking tables not yet created, returning empty categories');
+      return res.json({
+        success: true,
+        categories: []
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Error cargando categorías de gastos',
@@ -167,6 +177,23 @@ router.get('/projects/:projectId/budget', authenticateToken, [
 
   } catch (error) {
     console.error('Error fetching project budget:', error);
+    
+    // If cost tracking tables don't exist, return empty budget
+    if (error.message.includes('does not exist')) {
+      console.log('⚠️ Cost tracking tables not yet created, returning empty budget');
+      return res.json({
+        success: true,
+        budget: {
+          total_presupuestado: 0,
+          total_gastado: 0,
+          saldo_disponible: 0,
+          porcentaje_usado: 0
+        },
+        categories: [],
+        expenses: []
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Error cargando presupuesto del proyecto'
@@ -378,6 +405,24 @@ router.get('/projects/:projectId/expenses', authenticateToken, [
 
   } catch (error) {
     console.error('Error fetching project expenses:', error);
+    
+    // If cost tracking tables don't exist, return empty expenses
+    if (error.message.includes('does not exist')) {
+      console.log('⚠️ Cost tracking tables not yet created, returning empty expenses');
+      return res.json({
+        success: true,
+        expenses: [],
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: 0,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false
+        }
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Error cargando gastos del proyecto'
@@ -530,6 +575,26 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
 
   } catch (error) {
     console.error('Error fetching cost dashboard:', error);
+    
+    // If cost tracking tables don't exist, return empty dashboard
+    if (error.message.includes('does not exist')) {
+      console.log('⚠️ Cost tracking tables not yet created, returning empty dashboard');
+      return res.json({
+        success: true,
+        dashboard: {
+          budget: {
+            total_presupuestado: 0,
+            total_gastado: 0,
+            saldo_disponible: 0,
+            porcentaje_usado: 0
+          },
+          categories: [],
+          recentExpenses: [],
+          monthlyTrend: []
+        }
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Error cargando dashboard de costos'

@@ -26,7 +26,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Debug temporal
+// Debug temporal - updated
 app.use((req, res, next) => {
   console.log('🌐 Request from:', req.headers.origin);
   console.log('🔧 Method:', req.method);

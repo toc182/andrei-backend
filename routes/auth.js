@@ -68,8 +68,11 @@ router.post('/login', [
   body('password').notEmpty().withMessage('Password requerido')
 ], async (req, res) => {
   try {
+    console.log('🔐 Login attempt for:', req.body.email);
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('❌ Validation errors:', errors.array());
       return res.status(400).json({
         success: false,
         message: 'Datos inválidos',
@@ -80,12 +83,16 @@ router.post('/login', [
     const { email, password } = req.body;
 
     // Buscar usuario
+    console.log('🔍 Looking for user:', email);
     const result = await query(
       'SELECT id, nombre, email, password, rol FROM users WHERE email = $1',
       [email]
     );
 
+    console.log('👥 Users found:', result.rows.length);
+    
     if (result.rows.length === 0) {
+      console.log('❌ User not found');
       return res.status(401).json({
         success: false,
         message: 'Credenciales inválidas'
@@ -121,10 +128,14 @@ router.post('/login', [
     });
 
   } catch (error) {
-    console.error('Error en login:', error);
+    console.error('❌ Error en login:', error);
+    console.error('❌ Error code:', error.code);
+    console.error('❌ Error message:', error.message);
+    console.error('❌ Error detail:', error.detail);
     res.status(500).json({
       success: false,
-      message: 'Error interno del servidor'
+      message: 'Error interno del servidor',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
