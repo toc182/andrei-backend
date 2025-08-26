@@ -503,6 +503,22 @@ router.get('/stats/dashboard', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('Error obteniendo estadísticas:', error);
+    
+    // If proyectos table doesn't exist, return zero stats
+    if (error.message.includes('does not exist')) {
+      console.log('⚠️ Proyectos table not found, returning zero stats');
+      return res.json({
+        success: true,
+        stats: {
+          proyectos_activos: 0,
+          proyectos_planificacion: 0,
+          proyectos_completados: 0,
+          total_proyectos: 0,
+          monto_contratos_total: 0
+        }
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Error interno del servidor'

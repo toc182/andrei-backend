@@ -135,6 +135,16 @@ router.get('/:projectId/frentes', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('Error obteniendo frentes:', error);
+    
+    // If seguimiento tables don't exist, return empty frentes
+    if (error.message.includes('does not exist')) {
+      console.log('⚠️ Seguimiento tables not found, returning empty frentes');
+      return res.json({
+        success: true,
+        frentes: []
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Error interno del servidor'
