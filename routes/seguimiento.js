@@ -15,6 +15,34 @@ router.get('/test', (req, res) => {
 router.get('/:projectId/dashboard', authenticateToken, async (req, res) => {
   try {
     const { projectId } = req.params;
+    
+    // First check if seguimiento tables exist
+    try {
+      await query('SELECT 1 FROM tramos_proyecto LIMIT 1');
+    } catch (tableError) {
+      if (tableError.message.includes('does not exist')) {
+        console.log('⚠️ Seguimiento tables not found, returning empty dashboard');
+        return res.json({
+          success: true,
+          dashboard: {
+            resumen: {
+              tubos_totales_requeridos: 0,
+              metros_totales_requeridos: 0,
+              tubos_instalados_total: 0,
+              metros_instalados_total: 0,
+              porcentaje_avance_total: 0
+            },
+            promedio_reciente: {
+              promedio_tubos_dia: 0,
+              dias_con_reporte: 0
+            },
+            metas: [],
+            actividad_reciente: [],
+            avance_por_tramo: []
+          }
+        });
+      }
+    }
 
     console.log('🔍 Buscando datos para proyecto ID:', projectId);
 

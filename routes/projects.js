@@ -145,9 +145,24 @@ router.get('/', authenticateToken, async (req, res) => {
     console.error('❌ Error message:', error.message);
     console.error('❌ Error detail:', error.detail);
     
+    // If core tables don't exist, return empty results
+    if (error.message.includes('does not exist')) {
+      console.log('⚠️ Core project tables not found, returning empty results');
+      return res.json({
+        success: true,
+        proyectos: [],
+        pagination: {
+          current_page: 1,
+          total_pages: 0,
+          total_records: 0,
+          per_page: parseInt(limit)
+        }
+      });
+    }
+    
     res.status(500).json({
       success: false,
-      message: error.message,
+      message: 'Error de conexión al cargar proyectos',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

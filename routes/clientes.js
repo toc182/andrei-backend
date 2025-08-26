@@ -19,6 +19,16 @@ router.get('/', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('Error obteniendo clientes:', error);
+    
+    // If clientes table doesn't exist, return empty array
+    if (error.message.includes('relation "clientes" does not exist')) {
+      console.log('⚠️ Clientes table not found, returning empty list');
+      return res.json({
+        success: true,
+        clientes: []
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Error interno del servidor'
