@@ -7,7 +7,7 @@ const { runAllMigrations } = require('./database/migrate');
 const authRoutes = require('./routes/auth');
 const projectRoutes = require('./routes/projects');
 const clientesRoutes = require('./routes/clientes');
-const costsRoutes = require('./routes/costs');
+// Cost routes will be loaded conditionally after migrations
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -36,11 +36,10 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rutas
+// Core routes
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/clientes', clientesRoutes);
-app.use('/api/costs', costsRoutes);
 // Rutas de seguimiento de tuberías
 app.use('/api/seguimiento', require('./routes/seguimiento'));
 
@@ -78,6 +77,17 @@ async function startServer() {
     // Run database migrations
     console.log('🔄 Ejecutando migraciones de base de datos...');
     await runAllMigrations();
+
+    // Load cost routes after successful migrations
+    try {
+      console.log('📊 Loading cost tracking routes...');
+      const costsRoutes = require('./routes/costs');
+      app.use('/api/costs', costsRoutes);
+      console.log('✅ Cost tracking routes loaded successfully');
+    } catch (error) {
+      console.log('⚠️  Cost tracking routes not loaded:', error.message);
+      console.log('   This is normal if cost tracking tables are not ready yet');
+    }
 
     app.listen(PORT, () => {
       console.log(`🚀 Servidor ejecutándose en puerto ${PORT}`);

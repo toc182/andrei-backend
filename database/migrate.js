@@ -9,17 +9,11 @@ async function runMigration(migrationFile) {
     const migrationPath = path.join(__dirname, 'migrations', migrationFile);
     const sqlContent = fs.readFileSync(migrationPath, 'utf8');
     
-    // Execute the SQL
-    // Split by semicolon and execute each statement separately to handle complex migrations
-    const statements = sqlContent
-      .split(';')
-      .map(s => s.trim())
-      .filter(s => s.length > 0 && !s.startsWith('--'));
-    
-    for (const statement of statements) {
-      if (statement.trim()) {
-        await query(statement);
-      }
+    // Execute the SQL as a single statement
+    // PostgreSQL can handle multiple statements separated by semicolons
+    // This avoids issues with functions that contain semicolons
+    if (sqlContent.trim()) {
+      await query(sqlContent);
     }
     
     console.log(`✅ Migración completada: ${migrationFile}`);
