@@ -155,7 +155,7 @@ router.get('/', authenticateToken, async (req, res) => {
           current_page: 1,
           total_pages: 0,
           total_records: 0,
-          per_page: parseInt(limit)
+          per_page: parseInt(req.query.limit || 10)
         }
       });
     }
