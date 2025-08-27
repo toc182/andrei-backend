@@ -256,8 +256,11 @@ router.post('/', [
   requireManager
 ], async (req, res) => {
   try {
+    console.log('📝 Project creation request body:', JSON.stringify(req.body, null, 2));
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('❌ Project validation errors:', errors.array());
       return res.status(400).json({
         success: false,
         message: 'Datos inválidos',
