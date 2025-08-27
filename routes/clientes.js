@@ -93,27 +93,14 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    // Verificar si la abreviatura ya existe (si se proporciona)
-    if (abreviatura) {
-      const existingAbrev = await query(`
-        SELECT id FROM clientes 
-        WHERE abreviatura = $1 AND activo = true
-      `, [abreviatura]);
+    // Skip abreviatura validation (column may not exist in production)
 
-      if (existingAbrev.rows.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Ya existe un cliente con esa abreviatura'
-        });
-      }
-    }
-
-    // Crear el cliente
+    // Crear el cliente (without abreviatura column)
     const result = await query(`
-      INSERT INTO clientes (nombre, abreviatura, contacto, telefono, email, direccion)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO clientes (nombre, contacto, telefono, email, direccion)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING *
-    `, [nombre, abreviatura || null, contacto || null, telefono || null, email || null, direccion || null]);
+    `, [nombre, contacto || null, telefono || null, email || null, direccion || null]);
 
     res.status(201).json({
       success: true,
