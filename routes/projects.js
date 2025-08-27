@@ -284,18 +284,37 @@ router.post('/', [
       datos_adicionales = {}
     } = req.body;
 
-    const result = await query(`
-      INSERT INTO proyectos (
-        nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada, 
+    let result;
+    try {
+      // Try with new budget fields
+      result = await query(`
+        INSERT INTO proyectos (
+          nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada, 
+          estado, contratista, ingeniero_residente, codigo_proyecto,
+          contrato, acto_publico, monto_contrato_original, presupuesto_base, itbms, monto_total, datos_adicionales
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING *
+      `, [
+        nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
         estado, contratista, ingeniero_residente, codigo_proyecto,
-        contrato, acto_publico, monto_contrato_original, presupuesto_base, itbms, monto_total, datos_adicionales
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-      RETURNING *
-    `, [
-      nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
-      estado, contratista, ingeniero_residente, codigo_proyecto,
-      contrato, acto_publico, monto_contrato_original, presupuesto_base, itbms, monto_total, JSON.stringify(datos_adicionales)
-    ]);
+        contrato, acto_publico, monto_contrato_original, presupuesto_base, itbms, monto_total, JSON.stringify(datos_adicionales)
+      ]);
+    } catch (budgetError) {
+      console.log('⚠️ Budget fields not available in proyectos, using fallback create');
+      // Fallback without budget fields
+      result = await query(`
+        INSERT INTO proyectos (
+          nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada, 
+          estado, contratista, ingeniero_residente, codigo_proyecto,
+          contrato, acto_publico, monto_contrato_original, datos_adicionales
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING *
+      `, [
+        nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
+        estado, contratista, ingeniero_residente, codigo_proyecto,
+        contrato, acto_publico, monto_contrato_original, JSON.stringify(datos_adicionales)
+      ]);
+    }
 
     const newProject = result.rows[0];
 
