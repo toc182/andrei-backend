@@ -73,7 +73,7 @@ app.use((error, req, res, next) => {
 // Iniciar servidor
 async function startServer() {
   try {
-    console.log('🔧 Starting server initialization...');
+    console.log('🔧 Starting server initialization... [BUILD: 20250827-1521]');
     console.log('📊 Environment:', process.env.NODE_ENV || 'development');
     console.log('🌐 Port:', PORT);
     console.log('🔌 Database URL exists:', !!process.env.DATABASE_URL);
