@@ -32,8 +32,7 @@ router.get('/', authenticateToken, async (req, res) => {
         p.nombre_corto ILIKE $${paramCounter} OR 
         p.codigo_proyecto ILIKE $${paramCounter} OR
         p.contratista ILIKE $${paramCounter} OR
-        c.nombre ILIKE $${paramCounter} OR
-        COALESCE(c.abreviatura, '') ILIKE $${paramCounter}
+        c.nombre ILIKE $${paramCounter}
       )`;
       queryParams.push(`%${search}%`);
       paramCounter++;
@@ -64,7 +63,7 @@ router.get('/', authenticateToken, async (req, res) => {
           p.created_at,
           p.updated_at,
           c.nombre as cliente_nombre,
-          COALESCE(c.abreviatura, '') as cliente_abreviatura
+          '' as cliente_abreviatura
         FROM proyectos p
         LEFT JOIN clientes c ON p.cliente_id = c.id
         ${whereClause.replace('WHERE 1=1', 'WHERE 1=1')}
@@ -96,7 +95,7 @@ router.get('/', authenticateToken, async (req, res) => {
           p.created_at,
           p.updated_at,
           c.nombre as cliente_nombre,
-          COALESCE(c.abreviatura, '') as cliente_abreviatura
+          '' as cliente_abreviatura
         FROM proyectos p
         LEFT JOIN clientes c ON p.cliente_id = c.id
         ${whereClause.replace('WHERE 1=1', 'WHERE 1=1')}
