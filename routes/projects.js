@@ -119,6 +119,11 @@ router.get('/', authenticateToken, async (req, res) => {
     // Debug: Log first project structure
     if (result.rows.length > 0) {
       console.log('📋 First project keys:', Object.keys(result.rows[0]));
+      console.log('👤 Client info:', {
+        cliente_id: result.rows[0].cliente_id,
+        cliente_nombre: result.rows[0].cliente_nombre,
+        cliente_abreviatura: result.rows[0].cliente_abreviatura
+      });
       console.log('💰 First project budget fields:', {
         monto_contrato_original: result.rows[0].monto_contrato_original,
         presupuesto_base: result.rows[0].presupuesto_base,
