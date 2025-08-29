@@ -95,12 +95,12 @@ router.post('/', authenticateToken, async (req, res) => {
 
     // Skip abreviatura validation (column may not exist in production)
 
-    // Crear el cliente (without abreviatura column)
+    // Crear el cliente (with abreviatura column)
     const result = await query(`
-      INSERT INTO clientes (nombre, contacto, telefono, email, direccion)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO clientes (nombre, abreviatura, contacto, telefono, email, direccion)
+      VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *
-    `, [nombre, contacto || null, telefono || null, email || null, direccion || null]);
+    `, [nombre, abreviatura || null, contacto || null, telefono || null, email || null, direccion || null]);
 
     res.status(201).json({
       success: true,
