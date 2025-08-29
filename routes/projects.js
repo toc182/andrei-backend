@@ -63,7 +63,7 @@ router.get('/', authenticateToken, async (req, res) => {
           p.created_at,
           p.updated_at,
           c.nombre as cliente_nombre,
-          '' as cliente_abreviatura
+          c.abreviatura as cliente_abreviatura
         FROM proyectos p
         LEFT JOIN clientes c ON p.cliente_id = c.id
         ${whereClause.replace('WHERE 1=1', 'WHERE 1=1')}
@@ -95,7 +95,7 @@ router.get('/', authenticateToken, async (req, res) => {
           p.created_at,
           p.updated_at,
           c.nombre as cliente_nombre,
-          '' as cliente_abreviatura
+          c.abreviatura as cliente_abreviatura
         FROM proyectos p
         LEFT JOIN clientes c ON p.cliente_id = c.id
         ${whereClause.replace('WHERE 1=1', 'WHERE 1=1')}
