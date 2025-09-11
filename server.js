@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
+// Force Railway redeploy - 2025-09-11
+
 const { testConnection } = require('./database/config');
 const { runAllMigrations } = require('./database/migrate');
 const authRoutes = require('./routes/auth');
