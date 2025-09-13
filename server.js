@@ -13,6 +13,7 @@ const costsRoutes = require('./routes/costs');
 const licitacionesRoutes = require('./routes/licitaciones');
 const oportunidadesRoutes = require('./routes/oportunidades');
 const adendasRoutes = require('./routes/adendas');
+const documentsRoutes = require('./routes/documents');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -50,6 +51,7 @@ app.use('/api/costs', costsRoutes);
 app.use('/api/licitaciones', licitacionesRoutes);
 app.use('/api/oportunidades', oportunidadesRoutes);
 app.use('/api/adendas', adendasRoutes);
+app.use('/api/documents', documentsRoutes);
 // Rutas de seguimiento de tuberías
 app.use('/api/seguimiento', require('./routes/seguimiento'));
 

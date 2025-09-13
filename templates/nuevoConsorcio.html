@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Acuerdo de Consorcio</title>
+  <style>
+    body {
+      font-family: Calibri;
+      font-size: 14px;
+      color: #333;
+      line-height: 1.5;
+    }
+
+    h1, h2 {
+      font-weight: bold;
+    }
+
+    h1 {
+      font-size: 14px;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+
+    h2 {
+      font-size: 14px;
+      margin-top: 20px;
+      margin-bottom: 10px;
+    }
+
+    p {
+      margin: 10px 0;
+      text-align: justify;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: bold;
+      margin: 20px 0 10px;
+      text-decoration: underline;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      margin-bottom: 20px;
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f4f4f4;
+      font-weight: bold;
+    }
+
+    .signature {
+      margin-top: 40px;
+      text-align: center;
+      font-size: 12px;
+    }
+
+    .signature-line {
+      border-top: 1px solid #000;
+      width: 60%;
+      margin: 0 auto;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>ACUERDO DE CONSORCIO O ASOCIACIÓN ACCIDENTAL</h1>
+
+  <p>{{company2}}
+    Entre los suscritos a saber <strong>{{company1_repLegal}}</strong>, {{company1_repLegalDetalles}}, 
+    actuando en mi condición de Representante Legal de la empresa 
+    <strong>{{company1}}</strong>, Sociedad Anónima debidamente constituida según las leyes de la 
+    República de Panamá e inscrita en la sección mercantil del Registro Público de 
+    Panamá con folio {{company1_folio}}, documento {{company1_documento}}, con domicilio 
+    en {{company1_direccion}}; y, <strong>{{company2_repLegal}}</strong>, {{company2_repLegalDetalles}}, quien actúa en su condición de Representante 
+    Legal de <strong>{{company2}}</strong>, Sociedad Anónima debidamente constituida según las leyes de la 
+    República de Panamá con folio {{company2_folio}}, Documento {{company2_documento}}, con domicilio en {{company2_direccion}}, a quienes 
+    conjuntamente se denominarán LAS PARTES; ambos de manera libre y espontánea, 
+    manifiestan tener y se reconocen, mutua y recíprocamente, la capacidad legal 
+    necesaria para otorgar el presente Acuerdo de Consorcio, incluyendo como 
+    mínimo las siguientes cláusulas:
+  </p>
+  <p><strong>CLAÚSULA PRIMERA:</strong>
+    Las empresas descritas conforman el consorcio denominado <strong>{{consorcioName}}</strong>, y se comprometen a presentar propuesta y participar 
+    en el proyecto <strong>{{projectName}}</strong>.</br>
+    Las empresas miembros del <strong>{{consorcioName}}</strong> se obligan a 
+    participar en forma conjunta y responder solidariamente ante el <strong>
+        {{cliente}}</strong> por todas y cada una de las obligaciones derivadas de la 
+    propuesta, el pliego de cargos, el contrato y de toda la ejecución de la obra, 
+    así como de las actuaciones, hechos y omisiones que se presenten en el desarrollo 
+    de la propuesta y del contrato. Esta solidaridad se extiende en el caso de que 
+    el <strong>{{cliente}}</strong> instaure cualquier tipo de acción legal 
+    en lo administrativo o judicial.
+  </p>
+
+  <p><strong>CLAÚSULA SEGUNDA:</strong>
+    Se designa como Representante Legal del <strong>{{consorcioName}}</strong> a 
+    <strong>{{repLegalConsorcio}}</strong>, con cédula de identidad <strong>{{cedulaRepLegalConsorcio}}</strong>, 
+    el cual contará con todas las facultades para ejercer sus funciones; sin 
+    embargo, deberá contar con el aval de <strong>{{company2_repLegal}}</strong> para efectos de 
+    suscribir compromisos no cubiertos por el presente convenio. Asimismo, 
+    declara que la participación de cada empresa miembro del Consorcio o 
+    Asociación Accidental es la siguiente:</br>
+  <ol>
+    <li>
+        <strong>{{company1}}</strong> {{company1_roleDescription}}. Su participación accionaria es del cincuenta por 
+        ciento (50%) del consorcio.
+      </li>      
+    <li>
+      <strong>{{company2}}</strong> {{company2_roleDescription}}. 
+      Su participación accionaria es del cincuenta por ciento (50%) del consorcio.
+    </li>
+      </ol>
+  Igualmente, los miembros que integran el <strong>{{consorcioName}}</strong> declaran 
+  que renuncian a intentar reclamar diplomáticamente cualquier reclamación futura 
+  que se genere como consecuencia del proyecto <strong>{{projectName}}</strong>.
+  </p>
+  <p><strong>CLAÚSULA TERCERA:</strong>
+    El <strong>{{consorcioName}}</strong> acuerda que, en caso de ejecución de los 
+    trabajos, cada parte asignará un representante con amplios poderes y disponibilidad 
+    durante todo el tiempo que se le requiera, para atender tanto el programa de 
+    trabajo que se elabore como cualquier otro asunto que requiera de su presencia, 
+    los cuales igualmente coordinarán las tareas técnicas y profesionales.
+  </p>
+  <p><strong>CLAÚSULA CUARTA:</strong>
+    Las acciones de cada empresa miembro del consorcio o asociación accidental son 
+    ominativas, y sus accionistas o beneficiarios finales son los siguientes:
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>EMPRESAS MIEMBRO</th>
+        <th>ROL</th>
+        <th>% DE ACCIONES</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>{{company1}}</td>
+            <td>{{company1_role}}</td>
+            <td>{{company1_porcentajeAcciones}}%</td>
+          </tr>
+      <tr>
+        <td>{{company2}}</td>
+        <td>{{company2_role}}</td>
+        <td>{{company2_porcentajeAcciones}}%</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p><strong>CLAÚSULA QUINTA:</strong>
+    Las partes acuerdan que la empresa líder del <strong>{{consorcioName}}</strong> 
+    será la empresa <strong>{{company1}}</strong>, la cual está debidamente inscrita en el Registro 
+    Público de Panamá, a Folio con No.{{company1_folio}}, Documento {{company1_documento}}, 
+    No obstante, todos los socios del consorcio son conjuntamente solidarios y 
+    responsables del cumplimiento cabal de todas las responsabilidades. Con 
+    dirección de correo y teléfonos para cualquier aclaración:
+  </p>
+  <p>
+    Correo: <strong>{{emailRepLegal}}</strong></br>
+    Dirigido a: <strong>{{repLegalConsorcio}}</strong></br>
+    Teléfono: <strong>{{telefonoRepLegal}}</strong>
+  </p>
+
+  <p><strong>CLAÚSULA SEXTA:</strong>
+    Las empresas miembros del <strong>{{consorcioName}}</strong> se comprometen, en 
+    caso de ser adjudicado, a ejecutar los trabajos con las mejores normas 
+    profesionales, técnicas y al tratarse de consorcios. Éstos podrán formalizarse 
+    ante el Registro Público, para cumplir con el objeto contractual de los 
+    mencionados proyectos, manteniendo en todo momento la responsabilidad solidaria 
+    por todas las empresas miembro del Consorcio o Asociación Accidental.
+  </p>
+
+  <p><strong>CLAÚSULA SÉPTIMA:</strong>
+    Las empresas miembros del <strong>{{consorcioName}}</strong> se comprometen 
+    solidariamente, a ejecutar la obra cumpliendo con todas las especificaciones 
+    técnicas aplicables.
+  </p>
+
+  <p><strong>CLAÚSULA OCTAVA:</strong>
+    Las empresas miembros del <strong>C{{consorcioName}}</strong>, sin perjuicio de la 
+    responsabilidad solidaria frente al Estado, determinan que las empresas <strong>
+        {{company1}}</strong> e <strong>{{company2}}</strong> serán las responsables por las responsabilidades 
+    fiscales, civiles, laborales o de cualquier otra naturaleza que surjan como 
+    consecuencia de la celebración de los contratos mencionados.
+  </p>
+
+  <p>
+    Estando las partes de acuerdo, se firma el presente documento, en la Ciudad de 
+    Panamá a los {{day}} días del mes de {{month}} de {{year}}.
+  </p>
+</br></br></br>
+  <p>
+    <strong>
+      Firma:_______________________________________</br>
+      {{company1_repLegal}}</br>
+      Representante Legal de la Empresa: {{company1}}
+    </strong>
+  </p>
+</br></br></br>
+<p>
+  <strong>
+    Firma:_______________________________________</br>
+    {{company2_repLegal}}</br>
+    Representante Legal de la Empresa: {{company2}}
+  </strong>
+</p>
+
+  
+</body>
+
+</html>
