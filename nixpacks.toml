@@ -1,11 +1,8 @@
 [phases.setup]
-nixPkgs = ["nodejs", "npm"]
+nixPkgs = ["nodejs_18", "python3"]
 
 [phases.install]
-cmds = ["npm ci"]
-
-[phases.build]
-cmds = ["npx puppeteer browsers install chrome"]
+cmds = ["npm ci", "npx puppeteer browsers install chrome"]
 
 [start]
 cmd = "npm start"

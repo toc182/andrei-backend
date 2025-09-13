@@ -16,7 +16,7 @@ const getPuppeteerConfig = () => {
     });
 
     if (isProduction) {
-        return {
+        const config = {
             headless: 'new',
             args: [
                 '--no-sandbox',
@@ -29,9 +29,26 @@ const getPuppeteerConfig = () => {
                 '--disable-extensions',
                 '--disable-background-timer-throttling',
                 '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding'
+                '--disable-renderer-backgrounding',
+                '--disable-features=VizDisplayCompositor'
             ]
         };
+
+        // En Railway, usar el path específico si está disponible
+        const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH ||
+                          process.env.CHROME_BIN ||
+                          '/usr/bin/google-chrome';
+
+        try {
+            if (require('fs').existsSync(chromePath)) {
+                config.executablePath = chromePath;
+                console.log('🔧 Using Chrome at:', chromePath);
+            }
+        } catch (err) {
+            console.log('🔧 Using default Chromium path');
+        }
+
+        return config;
     }
 
     return { headless: 'new' };
