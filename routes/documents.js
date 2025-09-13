@@ -5,6 +5,38 @@ const path = require('path');
 
 const router = express.Router();
 
+// Configuración de Puppeteer para Railway/producción
+const getPuppeteerConfig = () => {
+    const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT;
+
+    console.log('🔧 Environment check:', {
+        NODE_ENV: process.env.NODE_ENV,
+        RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT,
+        isProduction
+    });
+
+    if (isProduction) {
+        return {
+            headless: 'new',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-gpu',
+                '--disable-extensions',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding'
+            ]
+        };
+    }
+
+    return { headless: 'new' };
+};
+
 function embedImage(imagePath) {
     // Verificar que el archivo existe
     console.log('🖼️  Logo file exists:', fs.existsSync(imagePath));
@@ -23,12 +55,17 @@ function embedImage(imagePath) {
 
 // Acuerdo de Consorcio
 router.post('/acuerdo-consorcio-pdf', async (req, res) => {
+    let browser;
     try {
-        console.log('Request received for Acuerdo de Consorcio:', req.body);
+        console.log('📄 Request received for Acuerdo de Consorcio:', req.body);
         const { projectName, day, month, year } = req.body;
 
-        const browser = await puppeteer.launch();
+        console.log('🚀 Launching Puppeteer...');
+        browser = await puppeteer.launch(getPuppeteerConfig());
+        console.log('✅ Puppeteer launched successfully');
+
         const page = await browser.newPage();
+        console.log('✅ New page created');
 
         const htmlPath = path.resolve(__dirname, '../templates/acuerdoConsorcioTemplate.html');
         let htmlContent = fs.readFileSync(htmlPath, 'utf8');
@@ -54,12 +91,28 @@ router.post('/acuerdo-consorcio-pdf', async (req, res) => {
             },
         });
 
-        console.log('Acuerdo de Consorcio PDF generated successfully');
+        console.log('✅ Acuerdo de Consorcio PDF generated successfully');
         await browser.close();
+        console.log('✅ Browser closed');
         res.download(pdfPath);
     } catch (error) {
-        console.error('Error generating Acuerdo de Consorcio PDF:', error);
-        res.status(500).send('Error generating PDF');
+        console.error('❌ Error generating Acuerdo de Consorcio PDF:', error);
+        console.error('❌ Stack trace:', error.stack);
+
+        if (browser) {
+            try {
+                await browser.close();
+                console.log('✅ Browser closed after error');
+            } catch (closeError) {
+                console.error('❌ Error closing browser:', closeError);
+            }
+        }
+
+        res.status(500).json({
+            error: 'Error generating PDF',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -72,7 +125,7 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
         const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
         const imageSrc = embedImage(imagePath);
         
-        const browser = await puppeteer.launch();
+        const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
 
         const htmlPath = path.resolve(__dirname, '../templates/adhesionPinellasTemplate.html');
@@ -114,7 +167,7 @@ router.post('/adhesion-consorcio-pdf', async (req, res) => {
         console.log('Request received for Adhesión Consorcio:', req.body);
         const { day, month, year } = req.body;
 
-        const browser = await puppeteer.launch();
+        const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
 
         const htmlPath = path.resolve(__dirname, '../templates/adhesionConsorcioTemplate.html');
@@ -158,7 +211,7 @@ router.post('/retorsion-pinellas-pdf', async (req, res) => {
         const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
         const imageSrc = embedImage(imagePath);
         
-        const browser = await puppeteer.launch();
+        const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
 
         const htmlPath = path.resolve(__dirname, '../templates/retorsionPinellasTemplate.html');
@@ -201,7 +254,7 @@ router.post('/retorsion-consorcio-pdf', async (req, res) => {
         console.log('Request received for Retorsión Consorcio:', req.body);
         const { day, dayOfMonth, month, year } = req.body;
         
-        const browser = await puppeteer.launch();
+        const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
 
         const htmlPath = path.resolve(__dirname, '../templates/retorsionConsorcioTemplate.html');
@@ -246,7 +299,7 @@ router.post('/incapacidad-pinellas-pdf', async (req, res) => {
         const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
         const imageSrc = embedImage(imagePath);
         
-        const browser = await puppeteer.launch();
+        const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
 
         const htmlPath = path.resolve(__dirname, '../templates/incapacidadPinellasTemplate.html');
@@ -289,7 +342,7 @@ router.post('/incapacidad-consorcio-pdf', async (req, res) => {
         console.log('Request received for Incapacidad Consorcio:', req.body);
         const { projectName, day, month, year } = req.body;
         
-        const browser = await puppeteer.launch();
+        const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
 
         const htmlPath = path.resolve(__dirname, '../templates/incapacidadConsorcioTemplate.html');
@@ -334,7 +387,7 @@ router.post('/integridad-pinellas-pdf', async (req, res) => {
         const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
         const imageSrc = embedImage(imagePath);
         
-        const browser = await puppeteer.launch();
+        const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
 
         const htmlPath = path.resolve(__dirname, '../templates/integridadPinellasTemplate.html');
@@ -379,7 +432,7 @@ router.post('/integridad-consorcio-pdf', async (req, res) => {
         console.log('Request received for Integridad Consorcio:', req.body);
         const { projectName, codigoLic, day, dayOfMonth, month, year } = req.body;
         
-        const browser = await puppeteer.launch();
+        const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
 
         const htmlPath = path.resolve(__dirname, '../templates/integridadConsorcioTemplate.html');
