@@ -5,6 +5,15 @@ const path = require('path');
 
 const router = express.Router();
 
+// Endpoint de diagnóstico para verificar versión
+router.get('/version', (req, res) => {
+    res.json({
+        version: 'v2.0-high-quality-pdf',
+        timestamp: new Date().toISOString(),
+        message: 'Backend actualizado con mejoras de calidad PDF'
+    });
+});
+
 // Configuración de Puppeteer para Railway/producción
 const getPuppeteerConfig = () => {
     const isProduction = process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT;
@@ -151,6 +160,7 @@ router.post('/acuerdo-consorcio-pdf', async (req, res) => {
 // Adhesión - Pinellas
 router.post('/adhesion-pinellas-pdf', async (req, res) => {
     try {
+        console.log('🔥 ADHESION PINELLAS ENDPOINT HIT - NEW VERSION v2.0');
         console.log('Request received for Adhesión Pinellas:', req.body);
         const { day, month, year } = req.body;
 
