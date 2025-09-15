@@ -54,19 +54,19 @@ const getPuppeteerConfig = () => {
     return { headless: 'new' };
 };
 
-// Configurar página para renderizado consistente
+// Configurar página para renderizado de alta calidad
 const configurePageForPDF = async (page) => {
-    // Configurar viewport consistente
+    // Configurar viewport para mejor calidad de renderizado
     await page.setViewport({
         width: 1200,
-        height: 800,
-        deviceScaleFactor: 1
+        height: 1600,
+        deviceScaleFactor: 2  // Mayor resolución para mejor calidad
     });
 
     // Configurar media emulation para print
     await page.emulateMediaType('print');
 
-    console.log('✅ Page configured for consistent PDF rendering');
+    console.log('✅ Page configured for high quality PDF rendering');
 };
 
 function embedImage(imagePath) {
@@ -177,8 +177,6 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
             path: pdfPath,
             format: 'letter',
             printBackground: true,
-            preferCSSPageSize: false,
-            displayHeaderFooter: false,
             margin: {
                 top: '.5in',
                 right: '1in',
