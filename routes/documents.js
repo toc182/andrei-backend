@@ -54,6 +54,21 @@ const getPuppeteerConfig = () => {
     return { headless: 'new' };
 };
 
+// Configurar página para renderizado consistente
+const configurePageForPDF = async (page) => {
+    // Configurar viewport consistente
+    await page.setViewport({
+        width: 1200,
+        height: 800,
+        deviceScaleFactor: 1
+    });
+
+    // Configurar media emulation para print
+    await page.emulateMediaType('print');
+
+    console.log('✅ Page configured for consistent PDF rendering');
+};
+
 function embedImage(imagePath) {
     // Verificar que el archivo existe
     console.log('🖼️  Logo file exists:', fs.existsSync(imagePath));
@@ -138,12 +153,13 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
     try {
         console.log('Request received for Adhesión Pinellas:', req.body);
         const { day, month, year } = req.body;
-        
+
         const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
         const imageSrc = embedImage(imagePath);
-        
+
         const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
+        await configurePageForPDF(page);
 
         const htmlPath = path.resolve(__dirname, '../templates/adhesionPinellasTemplate.html');
         let htmlContent = fs.readFileSync(htmlPath, 'utf8');
@@ -161,6 +177,8 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
             path: pdfPath,
             format: 'letter',
             printBackground: true,
+            preferCSSPageSize: false,
+            displayHeaderFooter: false,
             margin: {
                 top: '.5in',
                 right: '1in',
