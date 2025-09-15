@@ -169,7 +169,6 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
 
         const browser = await puppeteer.launch(getPuppeteerConfig());
         const page = await browser.newPage();
-        await configurePageForPDF(page);
 
         const htmlPath = path.resolve(__dirname, '../templates/adhesionPinellasTemplate.html');
         let htmlContent = fs.readFileSync(htmlPath, 'utf8');
