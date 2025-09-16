@@ -173,12 +173,14 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
         const htmlPath = path.resolve(__dirname, '../templates/adhesionPinellasTemplate.html');
         let htmlContent = fs.readFileSync(htmlPath, 'utf8');
 
+        console.log('🔍 Variables before replacement:', { dayOfMonth, day, month, year });
         htmlContent = htmlContent
             .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
             .replace(/{{day}}/g, day || '')
             .replace(/{{month}}/g, month || '')
             .replace(/{{year}}/g, year || '')
             .replace(/{{imagePath}}/g, imageSrc);
+        console.log('🔍 HTML snippet after replacement:', htmlContent.substring(htmlContent.indexOf('Fecha:'), htmlContent.indexOf('Fecha:') + 100));
 
         await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
 
