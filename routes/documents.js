@@ -162,7 +162,7 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
     try {
         console.log('🔥 ADHESION PINELLAS ENDPOINT HIT - NEW VERSION v2.0');
         console.log('Request received for Adhesión Pinellas:', req.body);
-        const { day, month, year } = req.body;
+        const { day, dayOfMonth, month, year } = req.body;
 
         const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
         const imageSrc = embedImage(imagePath);
@@ -174,6 +174,7 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
         let htmlContent = fs.readFileSync(htmlPath, 'utf8');
 
         htmlContent = htmlContent
+            .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
             .replace(/{{day}}/g, day || '')
             .replace(/{{month}}/g, month || '')
             .replace(/{{year}}/g, year || '')
