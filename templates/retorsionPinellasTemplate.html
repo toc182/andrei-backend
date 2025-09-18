@@ -4,21 +4,60 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DECLARACIÓN JURADA DE MEDIDAS DE RETORSIÓN
-  </title>
+  <title>DECLARACIÓN JURADA DE MEDIDAS DE RETORSIÓN</title>
   <style>
+    @page {
+      size: legal;
+      margin: 0.5in 0;
+    }
+
     body {
       font-family: Arial, sans-serif;
-      font-size: 12pt;
-      color: #333;
+      font-size: 11pt;
+      line-height: 1.3;
+      color: #2c2c2c;
+      margin: 0;
+      padding: 0;
     }
+
+    .page-header {
+      position: fixed;
+      top: 0;
+      left: 0.5in;
+      right: 0.5in;
+      height: 60px;
+      padding: 5px 0;
+      background: white;
+      z-index: 1000;
+    }
+
+    .page-footer {
+      position: fixed;
+      bottom: 0;
+      left: 0.5in;
+      right: 0.5in;
+      border-top: 1pt solid #223961;
+      font-size: 10px;
+      color: gray;
+      padding: 5px 0;
+      background: white;
+      text-align: left;
+    }
+
+    .content {
+      margin: 45px 0.5in 50px 0.5in;
+    }
+
     h1 {
-      font-size: 12pt;
+      font-size: 13pt;
+      font-weight: 600;
       text-align: center;
+      margin-bottom: 10px;
     }
 
     p {
       text-align: justify;
+      margin-bottom: 8px;
     }
 
     table {
@@ -38,24 +77,33 @@
       background-color: #f4f4f4;
       font-weight: bold;
     }
-
   </style>
 </head>
 
 <body>
-  <img src="{{imagePath}}" alt="Logo" width="150">
+  <div class="page-header">
+    <img src="{{imagePath}}" alt="Logo" width="150">
+  </div>
+
+  <div class="page-footer">
+    Urb. Los Angeles, Calle 63 A, D-12, Ciudad de Panamá<br>
+    <span style="padding-top: 3px;">Tel: 394-0199&nbsp;&nbsp;&nbsp;&nbsp;-&nbsp;&nbsp;&nbsp;&nbsp;e-mail: info@pinellaspanama.com</span>
+  </div>
+
+  <div class="content">
 </br></br>
   <h1>DECLARACIÓN JURADA DE MEDIDAS DE RETORSIÓN</h1>
-<div style="margin-top: 30px;">Panamá, {{day}} de {{month}} de {{year}}</div>
-</br></br></br>
+</br>
+<div style="margin-top: 15px;">Panamá, {{dayOfMonth}} de {{month}} de {{year}}</div>
+</br></br>
 <div>
     Su Excelencia</br>
     <strong>José Luis Andrade</strong></br>
     Ministro</br>
     MINISTERIO DE OBRAS PÚBLICAS</br>
-    E.S.D.</br>
-    </br>
+    E.S.D.
 </div>
+</br>
 <div>Señor Ministro:</div>
   <p>En cumplimiento de lo establecido en el artículo 12 de la Ley No. 48 de 
     26 de octubre de 2016, el suscrito <strong><u>LUIS ALBERTO ORDOÑEZ 
@@ -103,8 +151,8 @@
     </li>
   </ol>
   
-  <p>      
-    Dada en la Ciudad de Panamá, {{dayOfMonth}} del mes de {{month}} de {{year}}.
+  <p>
+    Dada en la Ciudad de Panamá, a los {{dayInText}} ({{dayOfMonth}}) días del mes de {{month}} de {{year}}.
   </p>
   
 </br></br></br>
@@ -118,14 +166,7 @@
   </p>
 
 
-<div style="position: fixed; bottom: 20px; left: 0; width: 100%; border-top: 1pt solid #223961; text-align: left; font-size: 12px; font-family: Arial, sans-serif; color: gray; padding-top: 10px; padding-left: 10px; padding-bottom: 5px;">
-  Urb. Los Angeles, Calle 63 A, D-12, Ciudad de Panamá </br>
-  <div style="padding-top: 3px;">Tel: 394-0199&nbsp;&nbsp;&nbsp;&nbsp;-&nbsp;&nbsp;&nbsp;&nbsp;e-mail: info@pinellaspanama.com</div>
-</div>
-
-
-
-
+  </div>
 </body>
 
 </html>

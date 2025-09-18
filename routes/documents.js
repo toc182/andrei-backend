@@ -94,6 +94,37 @@ function embedImage(imagePath) {
     return dataSrc;
 }
 
+// Acuerdo de Consorcio Preview (devuelve HTML procesado)
+router.post('/acuerdo-consorcio-preview', async (req, res) => {
+    try {
+        console.log('🔍 Preview request for Acuerdo de Consorcio:', req.body);
+        const { projectName, day, month, year } = req.body;
+
+        const htmlPath = path.resolve(__dirname, '../templates/acuerdoConsorcioTemplate.html');
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+        htmlContent = htmlContent
+            .replace(/{{projectName}}/g, projectName || '')
+            .replace(/{{day}}/g, day || '')
+            .replace(/{{month}}/g, month || '')
+            .replace(/{{year}}/g, year || '');
+
+        console.log('✅ Preview HTML generated successfully');
+        res.json({
+            success: true,
+            html: htmlContent,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error generating preview:', error);
+        res.status(500).json({
+            error: 'Error generating preview',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
 // Acuerdo de Consorcio
 router.post('/acuerdo-consorcio-pdf', async (req, res) => {
     let browser;
@@ -157,6 +188,41 @@ router.post('/acuerdo-consorcio-pdf', async (req, res) => {
     }
 });
 
+// Adhesión - Pinellas Preview (devuelve HTML procesado)
+router.post('/adhesion-pinellas-preview', async (req, res) => {
+    try {
+        console.log('🔍 Preview request for Adhesión Pinellas:', req.body);
+        const { day, dayOfMonth, month, year } = req.body;
+
+        const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
+        const imageSrc = embedImage(imagePath);
+
+        const htmlPath = path.resolve(__dirname, '../templates/adhesionPinellasTemplate.html');
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+        htmlContent = htmlContent
+            .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
+            .replace(/{{day}}/g, day || '')
+            .replace(/{{month}}/g, month || '')
+            .replace(/{{year}}/g, year || '')
+            .replace(/{{imagePath}}/g, imageSrc);
+
+        console.log('✅ Preview HTML generated successfully');
+        res.json({
+            success: true,
+            html: htmlContent,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error generating preview:', error);
+        res.status(500).json({
+            error: 'Error generating preview',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
 // Adhesión - Pinellas
 router.post('/adhesion-pinellas-pdf', async (req, res) => {
     try {
@@ -185,13 +251,13 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
         const pdfPath = path.resolve(__dirname, '../templates/adhesion-pinellas.pdf');
         await page.pdf({
             path: pdfPath,
-            format: 'letter',
+            format: 'legal',
             printBackground: true,
             margin: {
-                top: '.5in',
-                right: '1in',
-                bottom: '0.3in',
-                left: '1in',
+                top: '0.5in',
+                right: '0.5in',
+                bottom: '0.5in',
+                left: '0.5in',
             },
         });
 
@@ -201,6 +267,36 @@ router.post('/adhesion-pinellas-pdf', async (req, res) => {
     } catch (error) {
         console.error('Error generating Adhesión Pinellas PDF:', error);
         res.status(500).send('Error generating PDF');
+    }
+});
+
+// Adhesión - Consorcio Preview (devuelve HTML procesado)
+router.post('/adhesion-consorcio-preview', async (req, res) => {
+    try {
+        console.log('🔍 Preview request for Adhesión Consorcio:', req.body);
+        const { day, month, year } = req.body;
+
+        const htmlPath = path.resolve(__dirname, '../templates/adhesionConsorcioTemplate.html');
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+        htmlContent = htmlContent
+            .replace(/{{day}}/g, day || '')
+            .replace(/{{month}}/g, month || '')
+            .replace(/{{year}}/g, year || '');
+
+        console.log('✅ Preview HTML generated successfully');
+        res.json({
+            success: true,
+            html: htmlContent,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error generating preview:', error);
+        res.status(500).json({
+            error: 'Error generating preview',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -226,13 +322,13 @@ router.post('/adhesion-consorcio-pdf', async (req, res) => {
         const pdfPath = path.resolve(__dirname, '../templates/adhesion-consorcio.pdf');
         await page.pdf({
             path: pdfPath,
-            format: 'letter',
+            format: 'legal',
             printBackground: true,
             margin: {
                 top: '0.5in',
-                right: '1in',
-                bottom: '0.3in',
-                left: '1in',
+                right: '0.5in',
+                bottom: '0.5in',
+                left: '0.5in',
             },
         });
 
@@ -245,12 +341,60 @@ router.post('/adhesion-consorcio-pdf', async (req, res) => {
     }
 });
 
+// Retorsión - Pinellas Preview (devuelve HTML procesado)
+router.post('/retorsion-pinellas-preview', async (req, res) => {
+    try {
+        console.log('🔍 Preview request for Retorsión Pinellas:', req.body);
+        const { day, dayOfMonth, month, year } = req.body;
+
+        // Crear número del día en texto
+        const dayNum = parseInt(dayOfMonth) || 17;
+        const numberToText = {
+            1: 'uno', 2: 'dos', 3: 'tres', 4: 'cuatro', 5: 'cinco', 6: 'seis', 7: 'siete', 8: 'ocho', 9: 'nueve', 10: 'diez',
+            11: 'once', 12: 'doce', 13: 'trece', 14: 'catorce', 15: 'quince', 16: 'dieciséis', 17: 'diecisiete',
+            18: 'dieciocho', 19: 'diecinueve', 20: 'veinte', 21: 'veintiuno', 22: 'veintidós', 23: 'veintitrés',
+            24: 'veinticuatro', 25: 'veinticinco', 26: 'veintiséis', 27: 'veintisiete', 28: 'veintiocho',
+            29: 'veintinueve', 30: 'treinta', 31: 'treinta y uno'
+        };
+        const dayInText = numberToText[dayNum] || dayOfMonth;
+        console.log('🔢 dayNum:', dayNum, 'dayInText:', dayInText);
+
+        const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
+        const imageSrc = embedImage(imagePath);
+
+        const htmlPath = path.resolve(__dirname, '../templates/retorsionPinellasTemplate.html');
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+        htmlContent = htmlContent
+            .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
+            .replace(/{{day}}/g, day || '')
+            .replace(/{{dayInText}}/g, dayInText)
+            .replace(/{{month}}/g, month || '')
+            .replace(/{{year}}/g, year || '')
+            .replace(/{{imagePath}}/g, imageSrc);
+
+        console.log('✅ Preview HTML generated successfully');
+        res.json({
+            success: true,
+            html: htmlContent,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error generating preview:', error);
+        res.status(500).json({
+            error: 'Error generating preview',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
 // Retorsión - Pinellas
 router.post('/retorsion-pinellas-pdf', async (req, res) => {
     try {
         console.log('Request received for Retorsión Pinellas:', req.body);
-        const { day, dayOfMonth, month, year } = req.body;
-        
+        const { day, dayOfMonth, dayInText, month, year } = req.body;
+
         const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
         const imageSrc = embedImage(imagePath);
         
@@ -263,6 +407,7 @@ router.post('/retorsion-pinellas-pdf', async (req, res) => {
         htmlContent = htmlContent
             .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
             .replace(/{{day}}/g, day || '')
+            .replace(/{{dayInText}}/g, dayInText)
             .replace(/{{month}}/g, month || '')
             .replace(/{{year}}/g, year || '')
             .replace(/{{imagePath}}/g, imageSrc);
@@ -275,10 +420,10 @@ router.post('/retorsion-pinellas-pdf', async (req, res) => {
             format: 'legal',
             printBackground: true,
             margin: {
-                top: '.5in',
-                right: '1in',
-                bottom: '0.3in',
-                left: '1in',
+                top: '0.5in',
+                right: '0.5in',
+                bottom: '0.5in',
+                left: '0.5in',
             },
         });
 
@@ -288,6 +433,37 @@ router.post('/retorsion-pinellas-pdf', async (req, res) => {
     } catch (error) {
         console.error('Error generating Retorsión Pinellas PDF:', error);
         res.status(500).send('Error generating PDF');
+    }
+});
+
+// Retorsión - Consorcio Preview (devuelve HTML procesado)
+router.post('/retorsion-consorcio-preview', async (req, res) => {
+    try {
+        console.log('🔍 Preview request for Retorsión Consorcio:', req.body);
+        const { day, dayOfMonth, month, year } = req.body;
+
+        const htmlPath = path.resolve(__dirname, '../templates/retorsionConsorcioTemplate.html');
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+        htmlContent = htmlContent
+            .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
+            .replace(/{{day}}/g, day || '')
+            .replace(/{{month}}/g, month || '')
+            .replace(/{{year}}/g, year || '');
+
+        console.log('✅ Preview HTML generated successfully');
+        res.json({
+            success: true,
+            html: htmlContent,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error generating preview:', error);
+        res.status(500).json({
+            error: 'Error generating preview',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -317,10 +493,10 @@ router.post('/retorsion-consorcio-pdf', async (req, res) => {
             format: 'legal',
             printBackground: true,
             margin: {
-                top: '.5in',
-                right: '1in',
-                bottom: '0.3in',
-                left: '1in',
+                top: '0.5in',
+                right: '0.5in',
+                bottom: '0.5in',
+                left: '0.5in',
             },
         });
 
@@ -330,6 +506,41 @@ router.post('/retorsion-consorcio-pdf', async (req, res) => {
     } catch (error) {
         console.error('Error generating Retorsión Consorcio PDF:', error);
         res.status(500).send('Error generating PDF');
+    }
+});
+
+// Incapacidad - Pinellas Preview (devuelve HTML procesado)
+router.post('/incapacidad-pinellas-preview', async (req, res) => {
+    try {
+        console.log('🔍 Preview request for Incapacidad Pinellas:', req.body);
+        const { projectName, day, month, year } = req.body;
+
+        const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
+        const imageSrc = embedImage(imagePath);
+
+        const htmlPath = path.resolve(__dirname, '../templates/incapacidadPinellasTemplate.html');
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+        htmlContent = htmlContent
+            .replace(/{{projectName}}/g, projectName || '')
+            .replace(/{{day}}/g, day || '')
+            .replace(/{{month}}/g, month || '')
+            .replace(/{{year}}/g, year || '')
+            .replace(/{{imagePath}}/g, imageSrc);
+
+        console.log('✅ Preview HTML generated successfully');
+        res.json({
+            success: true,
+            html: htmlContent,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error generating preview:', error);
+        res.status(500).json({
+            error: 'Error generating preview',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -360,13 +571,13 @@ router.post('/incapacidad-pinellas-pdf', async (req, res) => {
         const pdfPath = path.resolve(__dirname, '../templates/incapacidad-pinellas.pdf');
         await page.pdf({
             path: pdfPath,
-            format: 'letter',
+            format: 'legal',
             printBackground: true,
             margin: {
-                top: '.5in',
-                right: '1in',
-                bottom: '0.3in',
-                left: '1in',
+                top: '0.5in',
+                right: '0.5in',
+                bottom: '0.5in',
+                left: '0.5in',
             },
         });
 
@@ -376,6 +587,37 @@ router.post('/incapacidad-pinellas-pdf', async (req, res) => {
     } catch (error) {
         console.error('Error generating Incapacidad Pinellas PDF:', error);
         res.status(500).send('Error generating PDF');
+    }
+});
+
+// Incapacidad - Consorcio Preview (devuelve HTML procesado)
+router.post('/incapacidad-consorcio-preview', async (req, res) => {
+    try {
+        console.log('🔍 Preview request for Incapacidad Consorcio:', req.body);
+        const { projectName, day, month, year } = req.body;
+
+        const htmlPath = path.resolve(__dirname, '../templates/incapacidadConsorcioTemplate.html');
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+        htmlContent = htmlContent
+            .replace(/{{projectName}}/g, projectName || '')
+            .replace(/{{day}}/g, day || '')
+            .replace(/{{month}}/g, month || '')
+            .replace(/{{year}}/g, year || '');
+
+        console.log('✅ Preview HTML generated successfully');
+        res.json({
+            success: true,
+            html: htmlContent,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error generating preview:', error);
+        res.status(500).json({
+            error: 'Error generating preview',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -402,13 +644,13 @@ router.post('/incapacidad-consorcio-pdf', async (req, res) => {
         const pdfPath = path.resolve(__dirname, '../templates/incapacidad-consorcio.pdf');
         await page.pdf({
             path: pdfPath,
-            format: 'letter',
+            format: 'legal',
             printBackground: true,
             margin: {
-                top: '.5in',
-                right: '1in',
-                bottom: '0.3in',
-                left: '1in',
+                top: '0.5in',
+                right: '0.5in',
+                bottom: '0.5in',
+                left: '0.5in',
             },
         });
 
@@ -418,6 +660,43 @@ router.post('/incapacidad-consorcio-pdf', async (req, res) => {
     } catch (error) {
         console.error('Error generating Incapacidad Consorcio PDF:', error);
         res.status(500).send('Error generating PDF');
+    }
+});
+
+// Integridad - Pinellas Preview (devuelve HTML procesado)
+router.post('/integridad-pinellas-preview', async (req, res) => {
+    try {
+        console.log('🔍 Preview request for Integridad Pinellas:', req.body);
+        const { projectName, codigoLic, day, dayOfMonth, month, year } = req.body;
+
+        const imagePath = path.resolve(__dirname, '../templates/LogoPinellas.png');
+        const imageSrc = embedImage(imagePath);
+
+        const htmlPath = path.resolve(__dirname, '../templates/integridadPinellasTemplate.html');
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+        htmlContent = htmlContent
+            .replace(/{{projectName}}/g, projectName || '')
+            .replace(/{{codigoLic}}/g, codigoLic || '')
+            .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
+            .replace(/{{day}}/g, day || '')
+            .replace(/{{month}}/g, month || '')
+            .replace(/{{year}}/g, year || '')
+            .replace(/{{imagePath}}/g, imageSrc);
+
+        console.log('✅ Preview HTML generated successfully');
+        res.json({
+            success: true,
+            html: htmlContent,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error generating preview:', error);
+        res.status(500).json({
+            error: 'Error generating preview',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -453,10 +732,10 @@ router.post('/integridad-pinellas-pdf', async (req, res) => {
             format: 'legal',
             printBackground: true,
             margin: {
-                top: '.5in',
-                right: '1in',
-                bottom: '0.3in',
-                left: '1in',
+                top: '0.5in',
+                right: '0.5in',
+                bottom: '0.5in',
+                left: '0.5in',
             },
         });
 
@@ -466,6 +745,39 @@ router.post('/integridad-pinellas-pdf', async (req, res) => {
     } catch (error) {
         console.error('Error generating Integridad Pinellas PDF:', error);
         res.status(500).send('Error generating PDF');
+    }
+});
+
+// Integridad - Consorcio Preview (devuelve HTML procesado)
+router.post('/integridad-consorcio-preview', async (req, res) => {
+    try {
+        console.log('🔍 Preview request for Integridad Consorcio:', req.body);
+        const { projectName, codigoLic, day, dayOfMonth, month, year } = req.body;
+
+        const htmlPath = path.resolve(__dirname, '../templates/integridadConsorcioTemplate.html');
+        let htmlContent = fs.readFileSync(htmlPath, 'utf8');
+
+        htmlContent = htmlContent
+            .replace(/{{projectName}}/g, projectName || '')
+            .replace(/{{codigoLic}}/g, codigoLic || '')
+            .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
+            .replace(/{{day}}/g, day || '')
+            .replace(/{{month}}/g, month || '')
+            .replace(/{{year}}/g, year || '');
+
+        console.log('✅ Preview HTML generated successfully');
+        res.json({
+            success: true,
+            html: htmlContent,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error generating preview:', error);
+        res.status(500).json({
+            error: 'Error generating preview',
+            message: error.message,
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
@@ -497,10 +809,10 @@ router.post('/integridad-consorcio-pdf', async (req, res) => {
             format: 'legal',
             printBackground: true,
             margin: {
-                top: '.5in',
-                right: '1in',
-                bottom: '0.3in',
-                left: '1in',
+                top: '0.5in',
+                right: '0.5in',
+                bottom: '0.5in',
+                left: '0.5in',
             },
         });
 

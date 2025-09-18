@@ -6,10 +6,42 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PACTO DE INTEGRIDAD</title>
   <style>
+    @page {
+      margin: 0;
+      size: legal;
+    }
+
     body {
       font-family: Arial, sans-serif;
-      font-size: 12pt;
-      color: #333;
+      font-size: 10pt;
+      line-height: 1.4;
+      color: #2c2c2c;
+      margin: 0;
+      padding: 0;
+    }
+
+    .page-header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 80px;
+      padding: 10px 0;
+      background: white;
+      z-index: 1000;
+    }
+
+    .page-footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      border-top: 1pt solid #223961;
+      font-size: 12px;
+      color: gray;
+      padding: 10px 0;
+      background: white;
+      text-align: left;
     }
     h1 {
       font-size: 12pt;
@@ -39,11 +71,37 @@
 
 
 
+
+    .content {
+      margin-top: 100px;
+      margin-bottom: 60px;
+    }
+
+    h1 {
+      font-size: 10pt;
+      font-weight: 600;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    p {
+      text-align: justify;
+      margin-bottom: 10px;
+    }
   </style>
 </head>
 
 <body>
-  <img src="{{imagePath}}" alt="Logo" width="150">
+  <div class="page-header">
+    <img src="{{imagePath}}" alt="Logo" width="150">
+  </div>
+
+  <div class="page-footer">
+    Urb. Los Angeles, Calle 63 A, D-12, Ciudad de Panamá<br>
+    <span style="padding-top: 3px;">Tel: 394-0199&nbsp;&nbsp;&nbsp;&nbsp;-&nbsp;&nbsp;&nbsp;&nbsp;e-mail: info@pinellaspanama.com</span>
+  </div>
+
+  <div class="content">
 </br></br></br>
   <h1>PACTO DE INTEGRIDAD</h1>
 
@@ -186,14 +244,7 @@
   </p>
 
 
-<div style="position: fixed; bottom: 20px; left: 0; width: 100%; border-top: 1pt solid #223961; text-align: left; font-size: 12px; font-family: Arial, sans-serif; color: gray; padding-top: 10px; padding-left: 10px; padding-bottom: 5px;">
-  Urb. Los Angeles, Calle 63 A, D-12, Ciudad de Panamá </br>
-  <div style="padding-top: 3px;">Tel: 394-0199&nbsp;&nbsp;&nbsp;&nbsp;-&nbsp;&nbsp;&nbsp;&nbsp;e-mail: info@pinellaspanama.com</div>
-</div>
-
-
-
-
+  </div>
 </body>
 
 </html>
