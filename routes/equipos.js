@@ -5,6 +5,62 @@ const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Obtener status de equipos (para la tabla de estado)
+router.get('/status', authenticateToken, async (req, res) => {
+  try {
+    console.log('=== EQUIPOS STATUS QUERY ===');
+    console.log('📊 Environment:', process.env.NODE_ENV);
+    console.log('🔍 User ID:', req.user?.id);
+
+    const statusQuery = `
+      SELECT
+        id,
+        codigo,
+        descripcion,
+        marca,
+        modelo,
+        ano,
+        estado,
+        owner,
+        proyecto as ubicacion,
+        updated_at as ultima_revision
+      FROM equipos
+      WHERE activo = true
+      ORDER BY
+        CASE
+          WHEN owner = 'Pinellas' THEN 0
+          ELSE 1
+        END,
+        descripcion ASC
+    `;
+
+    const result = await query(statusQuery, []);
+
+    console.log('✅ Equipos status encontrados:', result.rows.length);
+
+    // Mapear los datos para el frontend
+    const equiposConEstado = result.rows.map(equipo => ({
+      ...equipo,
+      estado: equipo.estado || 'operativo', // Estado por defecto si es null
+      ubicacion: equipo.ubicacion || 'No especificada'
+    }));
+
+    res.json({
+      success: true,
+      data: equiposConEstado,
+      total: equiposConEstado.length
+    });
+
+  } catch (error) {
+    console.error('❌ Error al obtener status de equipos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // Obtener todos los equipos
 router.get('/', authenticateToken, async (req, res) => {
   try {
