@@ -15,6 +15,8 @@ const oportunidadesRoutes = require('./routes/oportunidades');
 const adendasRoutes = require('./routes/adendas');
 const documentsRoutes = require('./routes/documents');
 const equiposRoutes = require('./routes/equipos');
+const asignacionesRoutes = require('./routes/asignaciones');
+const registroUsoRoutes = require('./routes/registro-uso');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -54,6 +56,8 @@ app.use('/api/oportunidades', oportunidadesRoutes);
 app.use('/api/adendas', adendasRoutes);
 app.use('/api/documents', documentsRoutes);
 app.use('/api/equipos', equiposRoutes);
+app.use('/api/asignaciones', asignacionesRoutes);
+app.use('/api/registro-uso', registroUsoRoutes);
 // Rutas de seguimiento de tuberías
 app.use('/api/seguimiento', require('./routes/seguimiento'));
 

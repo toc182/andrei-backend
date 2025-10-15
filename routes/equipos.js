@@ -439,6 +439,88 @@ router.put('/:id',
   }
 );
 
+// Actualizar status de equipo (solo campos operativos)
+router.put('/:id/status',
+  authenticateToken,
+  [
+    param('id').isInt().withMessage('ID debe ser un número entero'),
+    body('estado').optional().trim(),
+    body('proyecto').optional().trim(),
+    body('responsable').optional().trim(),
+    body('rata_mes').optional().isDecimal().withMessage('Rata mensual debe ser un número válido'),
+    body('observaciones_status').optional().trim()
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Datos de entrada inválidos',
+          errors: errors.array()
+        });
+      }
+
+      const { id } = req.params;
+      const {
+        estado,
+        proyecto,
+        responsable,
+        rata_mes,
+        observaciones_status
+      } = req.body;
+
+      // Verificar que el equipo existe
+      const existsQuery = 'SELECT id FROM equipos WHERE id = $1 AND activo = true';
+      const existsResult = await query(existsQuery, [id]);
+
+      if (existsResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Equipo no encontrado'
+        });
+      }
+
+      const updateQuery = `
+        UPDATE equipos SET
+          estado = $1,
+          proyecto = $2,
+          responsable = $3,
+          rata_mes = $4,
+          observaciones_status = $5,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $6
+      `;
+
+      const values = [
+        estado || null,
+        proyecto || null,
+        responsable || null,
+        rata_mes ? parseFloat(rata_mes) : null,
+        observaciones_status || null,
+        id
+      ];
+
+      await query(updateQuery, values);
+
+      console.log('✅ Status de equipo actualizado:', id);
+
+      res.json({
+        success: true,
+        message: 'Status del equipo actualizado exitosamente'
+      });
+
+    } catch (error) {
+      console.error('❌ Error al actualizar status del equipo:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error interno del servidor',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+);
+
 // Eliminar equipo (soft delete)
 router.delete('/:id',
   authenticateToken,

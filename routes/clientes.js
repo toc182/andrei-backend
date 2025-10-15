@@ -249,7 +249,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 
     // Verificar si el cliente tiene proyectos asociados
     const projectsCheck = await query(`
-      SELECT id FROM proyectos 
+      SELECT id FROM proyectos
       WHERE cliente_id = $1 AND activo = true
     `, [id]);
 
@@ -257,6 +257,19 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'No se puede eliminar el cliente porque tiene proyectos asociados'
+      });
+    }
+
+    // Verificar si el cliente tiene asignaciones de equipos
+    const asignacionesCheck = await query(`
+      SELECT id FROM asignaciones_equipos
+      WHERE cliente_id = $1
+    `, [id]);
+
+    if (asignacionesCheck.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede eliminar el cliente porque tiene asignaciones de equipos'
       });
     }
 
