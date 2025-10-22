@@ -70,7 +70,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 // Crear nuevo cliente
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const { nombre, abreviatura, contacto, telefono, email, direccion } = req.body;
+    const { nombre, abreviatura, contacto, telefono, email, direccion, tipo } = req.body;
 
     // Validar campos requeridos
     if (!nombre) {
@@ -80,9 +80,17 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
+    // Validar tipo si se proporciona
+    if (tipo && !['estado', 'privado'].includes(tipo)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El tipo debe ser "estado" o "privado"'
+      });
+    }
+
     // Verificar si ya existe un cliente con el mismo nombre
     const existingCliente = await query(`
-      SELECT id FROM clientes 
+      SELECT id FROM clientes
       WHERE nombre = $1 AND activo = true
     `, [nombre]);
 
@@ -95,12 +103,12 @@ router.post('/', authenticateToken, async (req, res) => {
 
     // Skip abreviatura validation (column may not exist in production)
 
-    // Crear el cliente (with abreviatura column)
+    // Crear el cliente (with abreviatura and tipo columns)
     const result = await query(`
-      INSERT INTO clientes (nombre, abreviatura, contacto, telefono, email, direccion)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO clientes (nombre, abreviatura, contacto, telefono, email, direccion, tipo)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *
-    `, [nombre, abreviatura || null, contacto || null, telefono || null, email || null, direccion || null]);
+    `, [nombre, abreviatura || null, contacto || null, telefono || null, email || null, direccion || null, tipo || 'privado']);
 
     res.status(201).json({
       success: true,
