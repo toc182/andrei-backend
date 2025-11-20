@@ -258,7 +258,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     // Verificar si el cliente tiene proyectos asociados
     const projectsCheck = await query(`
       SELECT id FROM proyectos
-      WHERE cliente_id = $1 AND activo = true
+      WHERE cliente_id = $1
     `, [id]);
 
     if (projectsCheck.rows.length > 0) {
@@ -297,7 +297,9 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     console.error('Error eliminando cliente:', error);
     res.status(500).json({
       success: false,
-      message: 'Error interno del servidor'
+      message: 'Error interno del servidor',
+      error: error.message,
+      details: error.toString()
     });
   }
 });
