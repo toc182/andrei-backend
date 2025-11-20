@@ -2,6 +2,26 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
+// Validación de variables de entorno críticas
+const requiredEnvVars = ['JWT_SECRET'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+  console.error('❌ ERROR: Missing required environment variables:');
+  missingEnvVars.forEach(varName => console.error(`   - ${varName}`));
+  console.error('\nPlease check your .env file and ensure all required variables are set.');
+  process.exit(1);
+}
+
+// Validar configuración de base de datos
+if (!process.env.DATABASE_URL && (!process.env.DB_HOST || !process.env.DB_NAME || !process.env.DB_USER)) {
+  console.error('❌ ERROR: Database configuration is incomplete.');
+  console.error('   Either set DATABASE_URL or all of: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD');
+  process.exit(1);
+}
+
+console.log('✅ Environment variables validated successfully');
+
 // Force Railway redeploy - 2025-09-11
 
 const { testConnection } = require('./database/config');
@@ -68,6 +88,39 @@ app.get('/api/health', (req, res) => {
     message: 'Servidor funcionando correctamente',
     timestamp: new Date().toISOString()
   });
+});
+
+// TEMPORAL: Endpoint para forzar migración 022 (columna activo en clientes)
+// TODO: Eliminar después de ejecutar en producción
+const { query } = require('./database/config');
+app.post('/api/admin/force-migration-022', async (req, res) => {
+  try {
+    console.log('🔧 Ejecutando migración 022 forzada...');
+
+    await query(`
+      -- Agregar columna activo (IF NOT EXISTS = seguro ejecutar múltiples veces)
+      ALTER TABLE clientes
+      ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT true NOT NULL;
+
+      -- Agregar índice
+      CREATE INDEX IF NOT EXISTS idx_clientes_activo ON clientes(activo);
+    `);
+
+    console.log('✅ Migración 022 ejecutada exitosamente');
+
+    res.json({
+      success: true,
+      message: 'Migración 022 ejecutada: columna activo agregada a tabla clientes'
+    });
+
+  } catch (error) {
+    console.error('❌ Error ejecutando migración 022:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error ejecutando migración',
+      error: error.message
+    });
+  }
 });
 
 // Ruta para manejar rutas no encontradas
