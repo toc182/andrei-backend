@@ -396,13 +396,22 @@ router.put('/:id', [
       });
     }
 
-    // Construir query dinámico
+    // Whitelist de campos permitidos para prevenir SQL injection
+    const allowedFields = [
+      'nombre', 'nombre_corto', 'cliente_id', 'fecha_inicio', 'fecha_fin_estimada',
+      'estado', 'contratista', 'ingeniero_residente', 'codigo_proyecto', 'contrato',
+      'acto_publico', 'monto_contrato_original', 'presupuesto_base', 'itbms',
+      'monto_total', 'datos_adicionales'
+    ];
+
+    // Construir query dinámico solo con campos permitidos
     const updateFields = [];
     const updateValues = [];
     let paramCounter = 1;
 
     Object.keys(updateData).forEach(key => {
-      if (updateData[key] !== undefined) {
+      // Solo procesar campos que están en la whitelist
+      if (updateData[key] !== undefined && allowedFields.includes(key)) {
         if (key === 'datos_adicionales') {
           updateFields.push(`${key} = $${paramCounter}`);
           updateValues.push(JSON.stringify(updateData[key]));
@@ -447,7 +456,9 @@ router.put('/:id', [
     } else {
       res.status(500).json({
         success: false,
-        message: 'Error interno del servidor'
+        message: 'Error interno del servidor',
+        error: error.message,
+        details: error.toString()
       });
     }
   }
