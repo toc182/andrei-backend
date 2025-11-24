@@ -228,21 +228,22 @@ router.post('/',
     body('modelo').trim().notEmpty().withMessage('Modelo es requerido'),
     body('ano').isInt({ min: 1900, max: 2030 }).withMessage('Año debe ser un número válido entre 1900 y 2030'),
     body('owner').isIn(['Pinellas', 'COCP']).withMessage('Owner debe ser Pinellas o COCP'),
-    body('codigo').optional().trim(),
-    body('motor').optional().trim(),
-    body('chasis').optional().trim(),
-    body('costo').optional().isDecimal().withMessage('Costo debe ser un número válido'),
-    body('valor_actual').optional().isDecimal().withMessage('Valor actual debe ser un número válido'),
-    body('rata_mes').optional().isDecimal().withMessage('Rata mensual debe ser un número válido'),
-    body('proyecto').optional().trim(),
-    body('responsable').optional().trim(),
-    body('estado').optional().trim(),
-    body('observaciones').optional().trim()
+    body('codigo').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('motor').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('chasis').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('costo').optional({ nullable: true, checkFalsy: true }).isDecimal().withMessage('Costo debe ser un número válido'),
+    body('valor_actual').optional({ nullable: true, checkFalsy: true }).isDecimal().withMessage('Valor actual debe ser un número válido'),
+    body('rata_mes').optional({ nullable: true, checkFalsy: true }).isDecimal().withMessage('Rata mensual debe ser un número válido'),
+    body('proyecto').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('responsable').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('estado').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('observaciones').optional({ nullable: true, checkFalsy: true }).trim()
   ],
   async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
+        console.log('❌ Validation errors (CREATE):', JSON.stringify(errors.array(), null, 2));
         return res.status(400).json({
           success: false,
           message: 'Datos de entrada inválidos',

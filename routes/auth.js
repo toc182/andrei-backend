@@ -4,11 +4,26 @@ const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const { query } = require('../database/config');
 const { authenticateToken } = require('../middleware/auth');
+const rateLimit = require('express-rate-limit');
 
 const router = express.Router();
 
+// Rate limiting para protección contra fuerza bruta
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 5, // límite de 5 intentos por IP
+  message: {
+    success: false,
+    message: 'Demasiados intentos de inicio de sesión. Por favor intenta de nuevo en 15 minutos.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Solo aplicar el límite cuando hay un error de autenticación
+  skipSuccessfulRequests: true
+});
+
 // Registro de usuario
-router.post('/register', [
+router.post('/register', authLimiter, [
   body('nombre').trim().isLength({ min: 2 }).withMessage('Nombre debe tener al menos 2 caracteres'),
   body('email').isEmail().withMessage('Email inválido'),
   body('password').isLength({ min: 6 }).withMessage('Password debe tener al menos 6 caracteres'),
@@ -63,7 +78,7 @@ router.post('/register', [
 });
 
 // Login
-router.post('/login', [
+router.post('/login', authLimiter, [
   body('email').isEmail().withMessage('Email inválido'),
   body('password').notEmpty().withMessage('Password requerido')
 ], async (req, res) => {
