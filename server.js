@@ -90,68 +90,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// TEMPORAL: Endpoints administrativos
-// TODO: Eliminar después de ejecutar en producción
-const { query } = require('./database/config');
-
-// Verificar si columna activo existe
-app.get('/api/admin/check-activo-column', async (req, res) => {
-  try {
-    const result = await query(`
-      SELECT column_name
-      FROM information_schema.columns
-      WHERE table_name = 'clientes'
-      AND column_name = 'activo'
-    `);
-
-    res.json({
-      success: true,
-      exists: result.rows.length > 0,
-      message: result.rows.length > 0
-        ? 'Columna activo existe'
-        : 'Columna activo NO existe'
-    });
-  } catch (error) {
-    console.error('Error verificando columna:', error);
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
-// Forzar migración 022 (columna activo en clientes)
-app.post('/api/admin/force-migration-022', async (req, res) => {
-  try {
-    console.log('🔧 Ejecutando migración 022 forzada...');
-
-    // Ejecutar statements por separado para evitar problemas con comentarios
-    await query(`
-      ALTER TABLE clientes
-      ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT true NOT NULL
-    `);
-
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_clientes_activo ON clientes(activo)
-    `);
-
-    console.log('✅ Migración 022 ejecutada exitosamente');
-
-    res.json({
-      success: true,
-      message: 'Migración 022 ejecutada: columna activo agregada a tabla clientes'
-    });
-
-  } catch (error) {
-    console.error('❌ Error ejecutando migración 022:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error ejecutando migración',
-      error: error.message
-    });
-  }
-});
-
 // Ruta para manejar rutas no encontradas
 app.use('*', (req, res) => {
   res.status(404).json({
