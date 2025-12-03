@@ -117,31 +117,31 @@ router.get('/projects/:projectId/budget', authenticateToken, [
 
     // Get project budget
     const budgetResult = await query(`
-      SELECT 
+      SELECT
         pb.*,
         p.nombre as proyecto_nombre,
         p.monto_contrato_original
       FROM project_budgets pb
-      LEFT JOIN proyectos p ON pb.proyecto_id = p.id
-      WHERE pb.proyecto_id = $1
+      LEFT JOIN proyectos p ON pb.project_id = p.id
+      WHERE pb.project_id = $1
     `, [projectId]);
 
     // Get budget by categories
     const categoriesResult = await query(`
-      SELECT 
+      SELECT
         bc.*,
         ec.nombre as categoria_nombre,
         ec.codigo as categoria_codigo,
         ec.color as categoria_color
       FROM budget_categories bc
       JOIN expense_categories ec ON bc.category_id = ec.id
-      WHERE bc.proyecto_id = $1
+      WHERE bc.project_budget_id IN (SELECT id FROM project_budgets WHERE project_id = $1)
       ORDER BY ec.orden, ec.nombre
     `, [projectId]);
 
     // Get expense summary by category
     const expensesResult = await query(`
-      SELECT 
+      SELECT
         pe.category_id,
         ec.nombre as categoria_nombre,
         ec.codigo as categoria_codigo,
@@ -149,7 +149,7 @@ router.get('/projects/:projectId/budget', authenticateToken, [
         COUNT(pe.id) as total_gastos
       FROM project_expenses pe
       JOIN expense_categories ec ON pe.category_id = ec.id
-      WHERE pe.proyecto_id = $1 AND pe.tipo_gasto = 'real'
+      WHERE pe.project_id = $1 AND pe.tipo_gasto = 'real'
       GROUP BY pe.category_id, ec.nombre, ec.codigo, ec.orden
       ORDER BY ec.orden, ec.nombre
     `, [projectId]);
@@ -239,41 +239,43 @@ router.post('/projects/:projectId/budget', requireManager, [
 
     try {
       // Upsert project budget
-      await query(`
+      const budgetResult = await query(`
         INSERT INTO project_budgets (
-          proyecto_id, monto_contrato_original, monto_contrato_actual, 
+          project_id, monto_contrato_original, monto_contrato_actual,
           contingencia_porcentaje, contingencia_monto, presupuesto_aprobado,
-          notas, created_by, updated_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-        ON CONFLICT (proyecto_id) 
-        DO UPDATE SET 
+          notas
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (project_id)
+        DO UPDATE SET
           monto_contrato_actual = $3,
           contingencia_porcentaje = $4,
           contingencia_monto = $5,
           presupuesto_aprobado = $6,
           notas = $7,
-          updated_by = $8,
           updated_at = CURRENT_TIMESTAMP
+        RETURNING id
       `, [
         projectId, monto_contrato_original, monto_contrato_actual,
         contingencia_porcentaje, contingencia_monto, presupuesto_aprobado,
-        notas, req.user.id
+        notas
       ]);
+
+      const budgetId = budgetResult.rows[0].id;
 
       // Update category budgets
       for (const category of categories) {
         await query(`
           INSERT INTO budget_categories (
-            proyecto_id, category_id, presupuesto_inicial, presupuesto_actual
+            project_budget_id, category_id, presupuesto_inicial, presupuesto_actual
           ) VALUES ($1, $2, $3, $4)
-          ON CONFLICT (proyecto_id, category_id)
-          DO UPDATE SET 
+          ON CONFLICT (project_budget_id, category_id)
+          DO UPDATE SET
             presupuesto_actual = $4,
             updated_at = CURRENT_TIMESTAMP
         `, [
-          projectId, 
-          category.category_id, 
-          category.presupuesto_inicial, 
+          budgetId,
+          category.category_id,
+          category.presupuesto_inicial,
           category.presupuesto_actual
         ]);
       }
@@ -328,7 +330,7 @@ router.get('/projects/:projectId/expenses', authenticateToken, [
     const { page = 1, limit = 20, categoria, fecha_desde, fecha_hasta, tipo_gasto, period } = req.query;
     const offset = (page - 1) * limit;
 
-    let whereClause = 'WHERE pe.proyecto_id = $1';
+    let whereClause = 'WHERE pe.project_id = $1';
     const queryParams = [projectId];
     let paramCounter = 2;
 
@@ -405,10 +407,11 @@ router.get('/projects/:projectId/expenses', authenticateToken, [
 
   } catch (error) {
     console.error('Error fetching project expenses:', error);
-    
+
     // If cost tracking tables don't exist, return empty expenses
     if (error.message.includes('does not exist')) {
       console.log('⚠️ Cost tracking tables not yet created, returning empty expenses');
+      const { page = 1, limit = 20 } = req.query;
       return res.json({
         success: true,
         expenses: [],
@@ -450,23 +453,20 @@ router.post('/projects/:projectId/expenses', authenticateToken, [
     }
 
     const { projectId } = req.params;
-    const { 
+    const {
       category_id, fecha, concepto, descripcion, monto, moneda = 'USD',
-      tipo_gasto = 'real', proveedor, numero_factura, numero_orden_compra,
-      centro_costo, observaciones
+      tipo_gasto = 'real'
     } = req.body;
 
     const result = await query(`
       INSERT INTO project_expenses (
-        proyecto_id, category_id, fecha, concepto, descripcion, monto, moneda,
-        tipo_gasto, proveedor, numero_factura, numero_orden_compra, centro_costo,
-        observaciones, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        project_id, category_id, fecha, concepto, descripcion, monto, moneda,
+        tipo_gasto, created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
     `, [
       projectId, category_id, fecha, concepto, descripcion, monto, moneda,
-      tipo_gasto, proveedor, numero_factura, numero_orden_compra, centro_costo,
-      observaciones, req.user.id
+      tipo_gasto, req.user.id
     ]);
 
     res.status(201).json({
@@ -495,19 +495,38 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
   try {
     const { projectId } = req.params;
 
-    // Get budget summary
+    // Get project info (for contract amount)
+    const projectResult = await query(`
+      SELECT
+        id,
+        nombre,
+        monto_contrato_actual,
+        monto_contrato_original
+      FROM proyectos
+      WHERE id = $1
+    `, [projectId]);
+
+    const project = projectResult.rows[0];
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Proyecto no encontrado'
+      });
+    }
+
+    // Get budget summary (optional)
     const budgetResult = await query(`
-      SELECT 
+      SELECT
         pb.*,
         p.nombre as proyecto_nombre
       FROM project_budgets pb
-      JOIN proyectos p ON pb.proyecto_id = p.id
-      WHERE pb.proyecto_id = $1
+      JOIN proyectos p ON pb.project_id = p.id
+      WHERE pb.project_id = $1
     `, [projectId]);
 
     // Get expenses by category
     const expensesByCategory = await query(`
-      SELECT 
+      SELECT
         ec.id,
         ec.nombre,
         ec.codigo,
@@ -516,33 +535,35 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
         COALESCE(SUM(pe.monto), 0) as gastado,
         COUNT(pe.id) as total_gastos
       FROM expense_categories ec
-      LEFT JOIN budget_categories bc ON ec.id = bc.category_id AND bc.proyecto_id = $1
-      LEFT JOIN project_expenses pe ON ec.id = pe.category_id AND pe.proyecto_id = $1 AND pe.tipo_gasto = 'real'
+      LEFT JOIN budget_categories bc ON ec.id = bc.category_id
+        AND bc.project_budget_id IN (SELECT id FROM project_budgets WHERE project_id = $1)
+      LEFT JOIN project_expenses pe ON ec.id = pe.category_id
+        AND pe.project_id = $1 AND pe.tipo_gasto = 'real'
       WHERE ec.activo = true
-      GROUP BY ec.id, ec.nombre, ec.codigo, ec.color, ec.orden, bc.presupuesto_actual
-      ORDER BY ec.orden, ec.nombre
+      GROUP BY ec.id, ec.nombre, ec.codigo, ec.color, bc.presupuesto_actual
+      ORDER BY ec.nombre
     `, [projectId]);
 
     // Get recent expenses
     const recentExpenses = await query(`
-      SELECT 
+      SELECT
         pe.*,
         ec.nombre as categoria_nombre,
         ec.color as categoria_color
       FROM project_expenses pe
       JOIN expense_categories ec ON pe.category_id = ec.id
-      WHERE pe.proyecto_id = $1
+      WHERE pe.project_id = $1
       ORDER BY pe.created_at DESC
       LIMIT 10
     `, [projectId]);
 
     // Get monthly spending trend
     const monthlyTrend = await query(`
-      SELECT 
+      SELECT
         DATE_TRUNC('month', fecha) as mes,
         SUM(monto) as total_mes
       FROM project_expenses
-      WHERE proyecto_id = $1 AND tipo_gasto = 'real'
+      WHERE project_id = $1 AND tipo_gasto = 'real'
         AND fecha >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '11 months')
       GROUP BY DATE_TRUNC('month', fecha)
       ORDER BY mes
@@ -557,17 +578,32 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
     const totalPresupuestado = categories.reduce((sum, cat) => sum + parseFloat(cat.presupuestado), 0);
     const totalGastado = categories.reduce((sum, cat) => sum + parseFloat(cat.gastado), 0);
 
+    // Use contract amount if no budget configured
+    const montoContrato = parseFloat(project.monto_contrato_actual || 0);
+    const presupuestoFinal = totalPresupuestado > 0 ? totalPresupuestado : montoContrato;
+
     res.json({
       success: true,
       dashboard: {
+        project: {
+          id: project.id,
+          nombre: project.nombre,
+          monto_contrato_actual: montoContrato
+        },
         budget: {
           ...budget,
+          presupuesto_aprobado: presupuestoFinal,
+          monto_contrato_actual: montoContrato,
           total_presupuestado: totalPresupuestado,
           total_gastado: totalGastado,
-          saldo_disponible: totalPresupuestado - totalGastado,
-          porcentaje_usado: totalPresupuestado > 0 ? (totalGastado / totalPresupuestado * 100) : 0
+          saldo_disponible: presupuestoFinal - totalGastado,
+          porcentaje_usado: presupuestoFinal > 0 ? (totalGastado / presupuestoFinal * 100) : 0,
+          tiene_presupuesto_configurado: budget !== null && totalPresupuestado > 0
         },
-        categories,
+        totalSpent: totalGastado,
+        totalAvailable: presupuestoFinal - totalGastado,
+        percentageUsed: presupuestoFinal > 0 ? (totalGastado / presupuestoFinal * 100) : 0,
+        categoryBreakdown: categories,
         recentExpenses: expenses,
         monthlyTrend: trend
       }
@@ -588,7 +624,10 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
             saldo_disponible: 0,
             porcentaje_usado: 0
           },
-          categories: [],
+          totalSpent: 0,
+          totalAvailable: 0,
+          percentageUsed: 0,
+          categoryBreakdown: [],
           recentExpenses: [],
           monthlyTrend: []
         }
