@@ -135,7 +135,7 @@ router.get('/projects/:projectId/budget', authenticateToken, [
         ec.color as categoria_color
       FROM budget_categories bc
       JOIN expense_categories ec ON bc.category_id = ec.id
-      WHERE bc.project_budget_id IN (SELECT id FROM project_budgets WHERE project_id = $1)
+      WHERE bc.project_id = $1
       ORDER BY ec.orden, ec.nombre
     `, [projectId]);
 
@@ -202,15 +202,14 @@ router.get('/projects/:projectId/budget', authenticateToken, [
 });
 
 // Create/Update project budget
-router.post('/projects/:projectId/budget', requireManager, [
+// Solo guarda distribución por categorías y notas
+// El monto del contrato ya está en proyectos.monto_contrato_original
+router.post('/projects/:projectId/budget', authenticateToken, requireManager, [
   param('projectId').isInt().withMessage('ID de proyecto inválido'),
-  body('monto_contrato_original').isDecimal().withMessage('Monto original debe ser un número'),
-  body('monto_contrato_actual').isDecimal().withMessage('Monto actual debe ser un número'),
-  body('contingencia_porcentaje').optional().isDecimal({ min: 0, max: 100 }).withMessage('Contingencia debe estar entre 0 y 100%'),
   body('categories').isArray().withMessage('Categorías debe ser un array'),
   body('categories.*.category_id').isInt().withMessage('ID de categoría inválido'),
-  body('categories.*.presupuesto_inicial').isDecimal().withMessage('Presupuesto inicial debe ser un número'),
-  body('categories.*.presupuesto_actual').isDecimal().withMessage('Presupuesto actual debe ser un número')
+  body('categories.*.presupuesto_inicial').isNumeric().withMessage('Presupuesto inicial debe ser un número'),
+  body('categories.*.presupuesto_actual').isNumeric().withMessage('Presupuesto actual debe ser un número')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -223,69 +222,56 @@ router.post('/projects/:projectId/budget', requireManager, [
     }
 
     const { projectId } = req.params;
-    const { 
-      monto_contrato_original, 
-      monto_contrato_actual, 
-      contingencia_porcentaje = 10,
+    const {
       notas,
-      categories = [] 
+      categories = []
     } = req.body;
-
-    const contingencia_monto = (parseFloat(monto_contrato_actual) * parseFloat(contingencia_porcentaje)) / 100;
-    const presupuesto_aprobado = parseFloat(monto_contrato_actual) + contingencia_monto;
 
     // Start transaction
     await query('BEGIN');
 
     try {
-      // Upsert project budget
-      const budgetResult = await query(`
+      // Marcar proyecto como que tiene presupuesto configurado
+      await query(`
+        UPDATE proyectos
+        SET
+          tiene_presupuesto = true,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+      `, [projectId]);
+
+      // Upsert project budget (only metadata - notas)
+      await query(`
         INSERT INTO project_budgets (
-          project_id, monto_contrato_original, monto_contrato_actual,
-          contingencia_porcentaje, contingencia_monto, presupuesto_aprobado,
-          notas
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          project_id, moneda, notas, created_by
+        ) VALUES ($1, $2, $3, $4)
         ON CONFLICT (project_id)
         DO UPDATE SET
-          monto_contrato_actual = $3,
-          contingencia_porcentaje = $4,
-          contingencia_monto = $5,
-          presupuesto_aprobado = $6,
-          notas = $7,
-          updated_at = CURRENT_TIMESTAMP
+          notas = $3,
+          updated_at = CURRENT_TIMESTAMP,
+          updated_by = $4
         RETURNING id
-      `, [
-        projectId, monto_contrato_original, monto_contrato_actual,
-        contingencia_porcentaje, contingencia_monto, presupuesto_aprobado,
-        notas
-      ]);
+      `, [projectId, 'PAB', notas || '', req.user.id]);
 
-      const budgetId = budgetResult.rows[0].id;
+      // Delete existing category budgets (to handle category removal)
+      await query(`
+        DELETE FROM budget_categories
+        WHERE project_id = $1
+      `, [projectId]);
 
-      // Update category budgets
+      // Insert category budgets
       for (const category of categories) {
         await query(`
           INSERT INTO budget_categories (
-            project_budget_id, category_id, presupuesto_inicial, presupuesto_actual
+            project_id, category_id, presupuesto_inicial, presupuesto_actual
           ) VALUES ($1, $2, $3, $4)
-          ON CONFLICT (project_budget_id, category_id)
-          DO UPDATE SET
-            presupuesto_actual = $4,
-            updated_at = CURRENT_TIMESTAMP
         `, [
-          budgetId,
+          projectId,
           category.category_id,
           category.presupuesto_inicial,
           category.presupuesto_actual
         ]);
       }
-
-      // Update project flag
-      await query(`
-        UPDATE proyectos 
-        SET tiene_presupuesto = true 
-        WHERE id = $1
-      `, [projectId]);
 
       await query('COMMIT');
 
@@ -484,6 +470,53 @@ router.post('/projects/:projectId/expenses', authenticateToken, [
   }
 });
 
+// Delete project expense
+router.delete('/projects/:projectId/expenses/:expenseId', authenticateToken, [
+  param('projectId').isInt().withMessage('ID de proyecto inválido'),
+  param('expenseId').isInt().withMessage('ID de gasto inválido')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Datos inválidos',
+        errors: errors.array()
+      });
+    }
+
+    const { projectId, expenseId } = req.params;
+
+    // Verify expense belongs to project
+    const expense = await query(`
+      SELECT id FROM project_expenses
+      WHERE id = $1 AND project_id = $2
+    `, [expenseId, projectId]);
+
+    if (expense.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Gasto no encontrado'
+      });
+    }
+
+    // Delete expense
+    await query('DELETE FROM project_expenses WHERE id = $1', [expenseId]);
+
+    res.json({
+      success: true,
+      message: 'Gasto eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error deleting project expense:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando gasto'
+    });
+  }
+});
+
 // ===============================
 // COST DASHBOARD ROUTES
 // ===============================
@@ -500,7 +533,6 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
       SELECT
         id,
         nombre,
-        monto_contrato_actual,
         monto_contrato_original
       FROM proyectos
       WHERE id = $1
@@ -536,7 +568,7 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
         COUNT(pe.id) as total_gastos
       FROM expense_categories ec
       LEFT JOIN budget_categories bc ON ec.id = bc.category_id
-        AND bc.project_budget_id IN (SELECT id FROM project_budgets WHERE project_id = $1)
+        AND bc.project_id = $1
       LEFT JOIN project_expenses pe ON ec.id = pe.category_id
         AND pe.project_id = $1 AND pe.tipo_gasto = 'real'
       WHERE ec.activo = true
@@ -579,7 +611,7 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
     const totalGastado = categories.reduce((sum, cat) => sum + parseFloat(cat.gastado), 0);
 
     // Use contract amount if no budget configured
-    const montoContrato = parseFloat(project.monto_contrato_actual || 0);
+    const montoContrato = parseFloat(project.monto_contrato_original || 0);
     const presupuestoFinal = totalPresupuestado > 0 ? totalPresupuestado : montoContrato;
 
     res.json({
@@ -588,12 +620,12 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
         project: {
           id: project.id,
           nombre: project.nombre,
-          monto_contrato_actual: montoContrato
+          monto_contrato_original: montoContrato
         },
         budget: {
           ...budget,
           presupuesto_aprobado: presupuestoFinal,
-          monto_contrato_actual: montoContrato,
+          monto_contrato_original: montoContrato,
           total_presupuestado: totalPresupuestado,
           total_gastado: totalGastado,
           saldo_disponible: presupuestoFinal - totalGastado,
