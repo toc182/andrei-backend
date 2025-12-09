@@ -96,6 +96,223 @@ router.post('/categories', requireManager, [
 });
 
 // ===============================
+// PROJECT EXPENSE CATEGORIES ROUTES
+// ===============================
+
+// Get project categories (with custom categories support)
+router.get('/projects/:projectId/categories', authenticateToken, [
+  param('projectId').isInt().withMessage('ID de proyecto inválido')
+], async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    // Check if project has custom category settings
+    const hasCustomSettings = await query(`
+      SELECT COUNT(*) as count FROM project_expense_categories WHERE project_id = $1
+    `, [projectId]);
+
+    if (parseInt(hasCustomSettings.rows[0].count) === 0) {
+      // Initialize with default categories
+      await query(`SELECT initialize_project_categories($1)`, [projectId]);
+    }
+
+    // Get active categories for this project
+    const result = await query(`
+      SELECT
+        pec.id,
+        pec.project_id,
+        pec.category_id,
+        COALESCE(pec.nombre, ec.nombre) as nombre,
+        COALESCE(pec.codigo, ec.codigo) as codigo,
+        COALESCE(pec.color, ec.color) as color,
+        pec.activo,
+        pec.orden,
+        CASE WHEN pec.category_id IS NOT NULL THEN false ELSE true END as is_custom
+      FROM project_expense_categories pec
+      LEFT JOIN expense_categories ec ON pec.category_id = ec.id
+      WHERE pec.project_id = $1 AND pec.activo = true
+      ORDER BY pec.orden, COALESCE(pec.nombre, ec.nombre)
+    `, [projectId]);
+
+    res.json({
+      success: true,
+      categories: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error fetching project categories:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cargando categorías del proyecto'
+    });
+  }
+});
+
+// Get available categories to add (removed ones + option to create new)
+router.get('/projects/:projectId/categories/available', authenticateToken, [
+  param('projectId').isInt().withMessage('ID de proyecto inválido')
+], async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    // Get inactive (removed) global categories for this project
+    const result = await query(`
+      SELECT
+        pec.id,
+        pec.category_id,
+        ec.nombre,
+        ec.codigo,
+        ec.color
+      FROM project_expense_categories pec
+      JOIN expense_categories ec ON pec.category_id = ec.id
+      WHERE pec.project_id = $1 AND pec.activo = false
+      ORDER BY ec.orden, ec.nombre
+    `, [projectId]);
+
+    res.json({
+      success: true,
+      availableCategories: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error fetching available categories:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cargando categorías disponibles'
+    });
+  }
+});
+
+// Remove category from project (set activo = false)
+router.delete('/projects/:projectId/categories/:categoryId', authenticateToken, requireManager, [
+  param('projectId').isInt().withMessage('ID de proyecto inválido'),
+  param('categoryId').isInt().withMessage('ID de categoría inválido')
+], async (req, res) => {
+  try {
+    const { projectId, categoryId } = req.params;
+
+    // Check if category has expenses
+    const expenseCheck = await query(`
+      SELECT COUNT(*) as count FROM project_expenses
+      WHERE project_id = $1 AND category_id = (
+        SELECT COALESCE(category_id, $2) FROM project_expense_categories WHERE id = $2
+      )
+    `, [projectId, categoryId]);
+
+    if (parseInt(expenseCheck.rows[0].count) > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede eliminar una categoría con gastos registrados'
+      });
+    }
+
+    // Set category as inactive
+    await query(`
+      UPDATE project_expense_categories
+      SET activo = false, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND project_id = $2
+    `, [categoryId, projectId]);
+
+    res.json({
+      success: true,
+      message: 'Categoría removida exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error removing category:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error removiendo categoría'
+    });
+  }
+});
+
+// Re-activate a removed category
+router.post('/projects/:projectId/categories/:categoryId/activate', authenticateToken, requireManager, [
+  param('projectId').isInt().withMessage('ID de proyecto inválido'),
+  param('categoryId').isInt().withMessage('ID de categoría inválido')
+], async (req, res) => {
+  try {
+    const { projectId, categoryId } = req.params;
+
+    await query(`
+      UPDATE project_expense_categories
+      SET activo = true, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND project_id = $2
+    `, [categoryId, projectId]);
+
+    res.json({
+      success: true,
+      message: 'Categoría reactivada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error activating category:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error reactivando categoría'
+    });
+  }
+});
+
+// Create custom category for project
+router.post('/projects/:projectId/categories', authenticateToken, requireManager, [
+  param('projectId').isInt().withMessage('ID de proyecto inválido'),
+  body('nombre').trim().isLength({ min: 2 }).withMessage('Nombre debe tener al menos 2 caracteres'),
+  body('codigo').trim().isLength({ min: 2, max: 10 }).withMessage('Código debe tener entre 2 y 10 caracteres'),
+  body('color').optional().matches(/^#[0-9A-F]{6}$/i).withMessage('Color debe ser un código hex válido')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Datos inválidos',
+        errors: errors.array()
+      });
+    }
+
+    const { projectId } = req.params;
+    const { nombre, codigo, color = '#808080' } = req.body;
+
+    // Get max order
+    const maxOrder = await query(`
+      SELECT COALESCE(MAX(orden), 0) + 1 as next_orden
+      FROM project_expense_categories WHERE project_id = $1
+    `, [projectId]);
+
+    const result = await query(`
+      INSERT INTO project_expense_categories (
+        project_id, category_id, nombre, codigo, color, activo, orden
+      ) VALUES ($1, NULL, $2, $3, $4, true, $5)
+      RETURNING *
+    `, [projectId, nombre, codigo, color, maxOrder.rows[0].next_orden]);
+
+    res.status(201).json({
+      success: true,
+      message: 'Categoría creada exitosamente',
+      category: {
+        ...result.rows[0],
+        is_custom: true
+      }
+    });
+
+  } catch (error) {
+    console.error('Error creating custom category:', error);
+    if (error.code === '23505') {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya existe una categoría con ese código en este proyecto'
+      });
+    }
+    res.status(500).json({
+      success: false,
+      message: 'Error creando categoría'
+    });
+  }
+});
+
+// ===============================
 // PROJECT BUDGET ROUTES
 // ===============================
 
@@ -126,17 +343,18 @@ router.get('/projects/:projectId/budget', authenticateToken, [
       WHERE pb.project_id = $1
     `, [projectId]);
 
-    // Get budget by categories
+    // Get budget by categories (using project_expense_categories)
     const categoriesResult = await query(`
       SELECT
         bc.*,
-        ec.nombre as categoria_nombre,
-        ec.codigo as categoria_codigo,
-        ec.color as categoria_color
+        pec.nombre as categoria_nombre,
+        pec.codigo as categoria_codigo,
+        pec.color as categoria_color,
+        pec.id as project_category_id
       FROM budget_categories bc
-      JOIN expense_categories ec ON bc.category_id = ec.id
-      WHERE bc.project_id = $1
-      ORDER BY ec.orden, ec.nombre
+      JOIN project_expense_categories pec ON bc.project_category_id = pec.id
+      WHERE bc.project_id = $1 AND pec.activo = true
+      ORDER BY pec.nombre
     `, [projectId]);
 
     // Get expense summary by category
@@ -207,7 +425,7 @@ router.get('/projects/:projectId/budget', authenticateToken, [
 router.post('/projects/:projectId/budget', authenticateToken, requireManager, [
   param('projectId').isInt().withMessage('ID de proyecto inválido'),
   body('categories').isArray().withMessage('Categorías debe ser un array'),
-  body('categories.*.category_id').isInt().withMessage('ID de categoría inválido'),
+  body('categories.*.project_category_id').isInt().withMessage('ID de categoría inválido'),
   body('categories.*.presupuesto_inicial').isNumeric().withMessage('Presupuesto inicial debe ser un número'),
   body('categories.*.presupuesto_actual').isNumeric().withMessage('Presupuesto actual debe ser un número')
 ], async (req, res) => {
@@ -259,15 +477,15 @@ router.post('/projects/:projectId/budget', authenticateToken, requireManager, [
         WHERE project_id = $1
       `, [projectId]);
 
-      // Insert category budgets
+      // Insert category budgets using project_category_id
       for (const category of categories) {
         await query(`
           INSERT INTO budget_categories (
-            project_id, category_id, presupuesto_inicial, presupuesto_actual
+            project_id, project_category_id, presupuesto_inicial, presupuesto_actual
           ) VALUES ($1, $2, $3, $4)
         `, [
           projectId,
-          category.category_id,
+          category.project_category_id,
           category.presupuesto_inicial,
           category.presupuesto_actual
         ]);
