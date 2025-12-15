@@ -774,34 +774,52 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
       WHERE pb.project_id = $1
     `, [projectId]);
 
-    // Get expenses by category
+    // Get expenses by category (using project_expense_categories as the source)
     const expensesByCategory = await query(`
       SELECT
-        ec.id,
-        ec.nombre,
-        ec.codigo,
-        ec.color,
-        COALESCE(bc.presupuesto_actual, 0) as presupuestado,
+        pec.id as project_category_id,
+        COALESCE(pec.nombre, ec.nombre) as nombre,
+        COALESCE(pec.codigo, ec.codigo) as codigo,
+        COALESCE(pec.color, ec.color) as color,
+        COALESCE(bc.presupuesto_actual, 0) as presupuesto_actual,
         COALESCE(SUM(pe.monto), 0) as gastado,
         COUNT(pe.id) as total_gastos
-      FROM expense_categories ec
-      LEFT JOIN budget_categories bc ON ec.id = bc.category_id
+      FROM project_expense_categories pec
+      LEFT JOIN expense_categories ec ON pec.category_id = ec.id
+      LEFT JOIN budget_categories bc ON pec.id = bc.project_category_id
         AND bc.project_id = $1
-      LEFT JOIN project_expenses pe ON ec.id = pe.category_id
+      LEFT JOIN project_expenses pe ON pec.category_id = pe.category_id
         AND pe.project_id = $1 AND pe.tipo_gasto = 'real'
-      WHERE ec.activo = true
-      GROUP BY ec.id, ec.nombre, ec.codigo, ec.color, bc.presupuesto_actual
-      ORDER BY ec.nombre
+      WHERE pec.project_id = $1 AND pec.activo = true
+      GROUP BY pec.id, pec.nombre, pec.codigo, pec.color, ec.nombre, ec.codigo, ec.color, bc.presupuesto_actual
+      ORDER BY COALESCE(pec.nombre, ec.nombre)
     `, [projectId]);
+
+    // Calculate disponible and porcentaje_usado for each category
+    const categoriesWithCalculations = expensesByCategory.rows.map(cat => {
+      const presupuesto = parseFloat(cat.presupuesto_actual) || 0;
+      const gastado = parseFloat(cat.gastado) || 0;
+      const disponible = presupuesto - gastado;
+      const porcentaje_usado = presupuesto > 0 ? (gastado / presupuesto) * 100 : 0;
+      return {
+        ...cat,
+        presupuesto_actual: presupuesto,
+        gastado: gastado,
+        disponible: disponible,
+        porcentaje_usado: porcentaje_usado
+      };
+    });
 
     // Get recent expenses
     const recentExpenses = await query(`
       SELECT
         pe.*,
-        ec.nombre as categoria_nombre,
-        ec.color as categoria_color
+        COALESCE(pec.nombre, ec.nombre) as categoria_nombre,
+        COALESCE(pec.color, ec.color) as categoria_color
       FROM project_expenses pe
-      JOIN expense_categories ec ON pe.category_id = ec.id
+      LEFT JOIN expense_categories ec ON pe.category_id = ec.id
+      LEFT JOIN project_expense_categories pec ON pec.category_id = pe.category_id
+        AND pec.project_id = pe.project_id
       WHERE pe.project_id = $1
       ORDER BY pe.created_at DESC
       LIMIT 10
@@ -820,13 +838,13 @@ router.get('/projects/:projectId/dashboard', authenticateToken, [
     `, [projectId]);
 
     const budget = budgetResult.rows[0] || null;
-    const categories = expensesByCategory.rows;
+    const categories = categoriesWithCalculations;
     const expenses = recentExpenses.rows;
     const trend = monthlyTrend.rows;
 
     // Calculate totals
-    const totalPresupuestado = categories.reduce((sum, cat) => sum + parseFloat(cat.presupuestado), 0);
-    const totalGastado = categories.reduce((sum, cat) => sum + parseFloat(cat.gastado), 0);
+    const totalPresupuestado = categories.reduce((sum, cat) => sum + (cat.presupuesto_actual || 0), 0);
+    const totalGastado = categories.reduce((sum, cat) => sum + (cat.gastado || 0), 0);
 
     // Use contract amount if no budget configured
     const montoContrato = parseFloat(project.monto_contrato_original || 0);

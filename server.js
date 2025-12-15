@@ -52,7 +52,7 @@ app.use(cors({
     'http://localhost:5176'
   ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -80,6 +80,12 @@ app.use('/api/asignaciones', asignacionesRoutes);
 app.use('/api/registro-uso', registroUsoRoutes);
 // Rutas de seguimiento de tuberías
 app.use('/api/seguimiento', require('./routes/seguimiento'));
+// Rutas de requisiciones
+app.use('/api/requisiciones', require('./routes/requisiciones'));
+// Rutas de miembros de proyecto
+app.use('/api/project-members', require('./routes/projectMembers'));
+// Rutas de contactos externos
+app.use('/api/external-contacts', require('./routes/externalContacts'));
 
 // Ruta de prueba
 app.get('/api/health', (req, res) => {
