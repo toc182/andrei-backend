@@ -86,6 +86,8 @@ app.use('/api/requisiciones', require('./routes/requisiciones'));
 app.use('/api/project-members', require('./routes/projectMembers'));
 // Rutas de contactos externos
 app.use('/api/external-contacts', require('./routes/externalContacts'));
+// Rutas de todos de proyecto
+app.use('/api/project-todos', require('./routes/projectTodos'));
 
 // Ruta de prueba
 app.get('/api/health', (req, res) => {
