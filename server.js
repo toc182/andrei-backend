@@ -88,6 +88,12 @@ app.use('/api/project-members', require('./routes/projectMembers'));
 app.use('/api/external-contacts', require('./routes/externalContacts'));
 // Rutas de todos de proyecto
 app.use('/api/project-todos', require('./routes/projectTodos'));
+// Rutas de bitacora de proyecto
+app.use('/api/project-bitacora', require('./routes/projectBitacora'));
+
+// Servir archivos estáticos de uploads
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Ruta de prueba
 app.get('/api/health', (req, res) => {
