@@ -96,7 +96,7 @@ router.post('/login', authLimiter, [
   body('email').isEmail().withMessage('Email inválido'),
   body('password').notEmpty().withMessage('Password requerido')
 ], asyncHandler(async (req: Request<object, object, LoginBody>, res: Response): Promise<void> => {
-  console.log('🔐 Login attempt for:', req.body.email);
+  console.log('🔐 Login attempt received');
 
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -112,7 +112,7 @@ router.post('/login', authLimiter, [
   const { email, password } = req.body;
 
   // Buscar usuario
-  console.log('🔍 Looking for user:', email);
+  console.log('🔍 Looking for user...');
   const result = await query<UserRow>(
     'SELECT id, nombre, email, password, rol FROM users WHERE email = $1',
     [email]

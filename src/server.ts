@@ -57,11 +57,7 @@ const PORT = process.env.PORT || 5000;
 app.use(cors({
   origin: [
     'https://andrei-frontend.vercel.app',
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:5175',
-    'http://localhost:5176'
+    'http://localhost:5173'
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

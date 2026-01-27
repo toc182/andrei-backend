@@ -138,7 +138,7 @@ router.post('/acuerdo-consorcio-preview', authenticateToken, async (req: Request
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
   }
 });
 
@@ -192,7 +192,7 @@ router.post('/acuerdo-consorcio-pdf', authenticateToken, documentLimiter, async 
       }
     }
 
-    res.status(500).json({ error: 'Error generating PDF', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating PDF', message: 'Error interno al generar documento', timestamp: new Date().toISOString() });
   }
 });
 
@@ -220,7 +220,7 @@ router.post('/adhesion-pinellas-preview', authenticateToken, async (req: Request
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
   }
 });
 
@@ -287,7 +287,7 @@ router.post('/adhesion-consorcio-preview', authenticateToken, async (req: Reques
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
   }
 });
 
@@ -364,7 +364,7 @@ router.post('/retorsion-pinellas-preview', authenticateToken, async (req: Reques
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
   }
 });
 
@@ -432,7 +432,7 @@ router.post('/retorsion-consorcio-preview', authenticateToken, async (req: Reque
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
   }
 });
 
@@ -499,7 +499,7 @@ router.post('/incapacidad-pinellas-preview', authenticateToken, async (req: Requ
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
   }
 });
 
@@ -566,7 +566,7 @@ router.post('/incapacidad-consorcio-preview', authenticateToken, async (req: Req
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
   }
 });
 
@@ -635,7 +635,7 @@ router.post('/integridad-pinellas-preview', authenticateToken, async (req: Reque
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
   }
 });
 
@@ -706,7 +706,7 @@ router.post('/integridad-consorcio-preview', authenticateToken, async (req: Requ
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
   }
 });
 
