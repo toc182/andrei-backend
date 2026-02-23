@@ -60,6 +60,7 @@ interface QueryParams {
   limit?: string;
   estado?: string;
   search?: string;
+  tipo_origen?: string;
 }
 
 interface StatsRow {
@@ -76,12 +77,18 @@ router.get('/', authenticateToken, asyncHandler(async (req: Request<object, obje
   console.log('📊 Environment:', process.env.NODE_ENV);
   console.log('🔍 User ID:', req.user?.id);
 
-  const { page = '1', limit = '10', estado, search } = req.query;
+  const { page = '1', limit = '10', estado, search, tipo_origen } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   let whereClause = 'WHERE 1=1';
   const queryParams: unknown[] = [];
   let paramCounter = 1;
+
+  if (tipo_origen) {
+    whereClause += ` AND p.tipo_origen = $${paramCounter}`;
+    queryParams.push(tipo_origen);
+    paramCounter++;
+  }
 
   if (estado) {
     whereClause += ` AND p.estado = $${paramCounter}`;

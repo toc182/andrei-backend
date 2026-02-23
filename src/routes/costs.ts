@@ -231,7 +231,7 @@ router.post('/projects/:projectId/categories', authenticateToken, requireManager
   }
 
   const { projectId } = req.params;
-  const { nombre, codigo, color = '#808080' } = req.body;
+  const { nombre, codigo, color = '#e74c3c' } = req.body;
 
   const maxOrder = await query<{ next_orden: number }>(`
     SELECT COALESCE(MAX(orden), 0) + 1 as next_orden FROM project_expense_categories WHERE project_id = $1

@@ -88,6 +88,7 @@ export function requireRole(allowedRoles: UserRole[]) {
 export const requireAdmin = requireRole(['admin']);
 
 /**
- * Middleware para verificar si es admin o project manager
+ * Middleware para verificar si es admin o usuario (ambos pueden gestionar)
  */
-export const requireManager = requireRole(['admin', 'project_manager']);
+export const requireManager = requireRole(['admin', 'usuario']);
+

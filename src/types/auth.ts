@@ -3,7 +3,7 @@ import { Request, Response, NextFunction } from 'express';
 /**
  * Roles disponibles en el sistema
  */
-export type UserRole = 'admin' | 'project_manager' | 'supervisor' | 'operario';
+export type UserRole = 'admin' | 'usuario';
 
 /**
  * Usuario autenticado (inyectado en req.user)

@@ -9,7 +9,9 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "migrate": "tsx src/database/migrate.ts",
-    "postdeploy": "tsx src/scripts/post-deploy.ts"
+    "postdeploy": "tsx src/scripts/post-deploy.ts",
+    "lint": "eslint src/",
+    "format": "prettier --write src/"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -24,6 +26,7 @@
     "puppeteer": "^24.20.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.2",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -31,7 +34,12 @@
     "@types/multer": "^2.0.0",
     "@types/node": "^25.0.3",
     "@types/pg": "^8.16.0",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.3.0",
+    "prettier": "^3.8.1",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0"
   }
 }

@@ -49,6 +49,8 @@ import projectMembersRoutes from './routes/projectMembers.js';
 import externalContactsRoutes from './routes/externalContacts.js';
 import projectTodosRoutes from './routes/projectTodos.js';
 import projectBitacoraRoutes from './routes/projectBitacora.js';
+import usersRoutes from './routes/users.js';
+import solicitudesPagoRoutes from './routes/solicitudesPago.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -92,6 +94,8 @@ app.use('/api/project-members', projectMembersRoutes);
 app.use('/api/external-contacts', externalContactsRoutes);
 app.use('/api/project-todos', projectTodosRoutes);
 app.use('/api/project-bitacora', projectBitacoraRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/solicitudes-pago', solicitudesPagoRoutes);
 
 // Servir archivos estáticos de uploads
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
