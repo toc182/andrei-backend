@@ -80,6 +80,28 @@ router.delete('/adjuntos/:adjuntoId', [
   res.json({ success: true, message: 'Adjunto eliminado' });
 }));
 
+// --- GET /:id/adjuntos/urls — Batch signed URLs for all adjuntos ---
+router.get('/:id/adjuntos/urls', [
+  param('id').isInt()
+], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const { id } = req.params;
+
+  const result = await query<{ id: number; r2_key: string; tipo_mime: string }>(
+    'SELECT id, r2_key, tipo_mime FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1',
+    [id]
+  );
+
+  const adjuntosWithUrls = await Promise.all(
+    result.rows.map(async (row) => ({
+      id: row.id,
+      url: await getFileSignedUrl(row.r2_key),
+      tipo_mime: row.tipo_mime,
+    }))
+  );
+
+  res.json({ success: true, adjuntos: adjuntosWithUrls });
+}));
+
 // --- GET /:id/adjuntos — List adjuntos for a solicitud ---
 router.get('/:id/adjuntos', [
   param('id').isInt()
