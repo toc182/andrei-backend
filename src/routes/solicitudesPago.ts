@@ -243,6 +243,33 @@ async function generateNumero(projectId: number): Promise<string> {
   return `${prefijo}-${String(nextNum).padStart(3, '0')}`;
 }
 
+// --- GET /pending-approval-count — Contar solicitudes pendientes de aprobación del usuario actual ---
+router.get('/pending-approval-count', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+
+  const result = await query<{ total: number; proyecto_id: number }>(`
+    SELECT sp.proyecto_id, COUNT(*)::int as total
+    FROM solicitudes_pago sp
+    JOIN project_approval_settings pas ON pas.proyecto_id = sp.proyecto_id
+      AND pas.user_id = $1 AND pas.activo = true
+    WHERE sp.estado = 'pendiente'
+      AND pas.orden = (
+        SELECT COUNT(*) + 1
+        FROM solicitud_aprobaciones sa
+        WHERE sa.solicitud_pago_id = sp.id AND sa.accion = 'aprobado'
+      )
+    GROUP BY sp.proyecto_id
+  `, [userId]);
+
+  const total = result.rows.reduce((sum, r) => sum + r.total, 0);
+
+  res.json({
+    success: true,
+    total,
+    por_proyecto: result.rows
+  });
+}));
+
 // --- GET / — Listar todas (global) ---
 router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const { estado, proyecto_id } = req.query;
@@ -261,6 +288,23 @@ router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> 
     paramCount++;
     whereClause += ` AND sp.proyecto_id = $${paramCount}`;
     params.push(proyecto_id);
+  }
+
+  if (req.query.pending_my_approval === 'true') {
+    const userId = req.user!.id;
+    paramCount++;
+    whereClause += ` AND sp.estado = 'pendiente'
+      AND EXISTS (
+        SELECT 1 FROM project_approval_settings pas
+        WHERE pas.proyecto_id = sp.proyecto_id
+          AND pas.user_id = $${paramCount} AND pas.activo = true
+          AND pas.orden = (
+            SELECT COUNT(*) + 1
+            FROM solicitud_aprobaciones sa
+            WHERE sa.solicitud_pago_id = sp.id AND sa.accion = 'aprobado'
+          )
+      )`;
+    params.push(userId);
   }
 
   const result = await query<SolicitudRow>(`
@@ -286,10 +330,29 @@ router.get('/project/:projectId', asyncHandler(async (req: Request<{ projectId: 
 
   let whereClause = 'WHERE sp.proyecto_id = $1';
   const params: unknown[] = [projectId];
+  let paramCount = 1;
 
   if (estado && estado !== 'all') {
-    whereClause += ' AND sp.estado = $2';
+    paramCount++;
+    whereClause += ` AND sp.estado = $${paramCount}`;
     params.push(estado);
+  }
+
+  if (req.query.pending_my_approval === 'true') {
+    const userId = req.user!.id;
+    paramCount++;
+    whereClause += ` AND sp.estado = 'pendiente'
+      AND EXISTS (
+        SELECT 1 FROM project_approval_settings pas
+        WHERE pas.proyecto_id = sp.proyecto_id
+          AND pas.user_id = $${paramCount} AND pas.activo = true
+          AND pas.orden = (
+            SELECT COUNT(*) + 1
+            FROM solicitud_aprobaciones sa
+            WHERE sa.solicitud_pago_id = sp.id AND sa.accion = 'aprobado'
+          )
+      )`;
+    params.push(userId);
   }
 
   const result = await query<SolicitudRow>(`
