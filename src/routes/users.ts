@@ -4,6 +4,7 @@ import { body, validationResult } from 'express-validator';
 import { query } from '../database/config.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 import type { UserRole } from '../types/auth.js';
 
 const router = Router();
@@ -155,6 +156,11 @@ router.put('/:id', [
     values
   );
 
+  await registrarAudit(req.user!.id, 'editar', 'usuario', parseInt(id), {
+    nombre: result.rows[0].nombre,
+    campos_modificados: Object.keys(req.body).filter(k => ['nombre', 'email', 'rol'].includes(k))
+  });
+
   res.json({
     success: true,
     message: 'Usuario actualizado exitosamente',
@@ -189,6 +195,9 @@ router.delete('/:id', asyncHandler(async (req: Request<{ id: string }>, res: Res
   }
 
   const user = result.rows[0];
+  const accion = user.activo ? 'activar' : 'desactivar';
+  await registrarAudit(req.user!.id, accion, 'usuario', parseInt(id), { nombre: user.nombre });
+
   res.json({
     success: true,
     message: user.activo ? 'Usuario activado' : 'Usuario desactivado',

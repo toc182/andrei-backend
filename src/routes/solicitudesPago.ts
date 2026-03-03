@@ -3,8 +3,140 @@ import { body, param, validationResult } from 'express-validator';
 import { query } from '../database/config.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { deleteFile, downloadFile } from '../services/storage.js';
+import { generateSolicitudPDF } from '../services/pdfGenerator.js';
+import { registrarAudit } from '../services/auditLog.js';
+import { PDFDocument } from 'pdf-lib';
 
 const router = Router();
+
+// --- GET /:id/pdf — Generar PDF (ANTES del middleware global de auth) ---
+// Token se inyecta desde query param en server.ts para soportar window.open
+router.get('/:id/pdf', [
+  param('id').isInt()
+], authenticateToken, asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const { id } = req.params;
+
+  const solicitud = await query<SolicitudRow>(`
+    SELECT sp.*,
+      COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
+      u1.nombre as preparado_nombre,
+      u2.nombre as solicitado_nombre
+    FROM solicitudes_pago sp
+    LEFT JOIN proyectos p ON sp.proyecto_id = p.id
+    LEFT JOIN users u1 ON sp.preparado_por = u1.id
+    LEFT JOIN users u2 ON sp.solicitado_por = u2.id
+    WHERE sp.id = $1
+  `, [id]);
+
+  if (solicitud.rows.length === 0) {
+    res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    return;
+  }
+
+  const items = await query<ItemRow>(
+    'SELECT * FROM solicitud_pago_items WHERE solicitud_pago_id = $1 ORDER BY orden, id', [id]
+  );
+
+  const ajustes = await query<AjusteRow>(
+    'SELECT * FROM solicitud_pago_ajustes WHERE solicitud_pago_id = $1 ORDER BY orden, id', [id]
+  );
+
+  const aprobaciones = await query<{ usuario_nombre: string; accion: string; fecha: string }>(`
+    SELECT sa.accion, sa.fecha, u.nombre as usuario_nombre
+    FROM solicitud_aprobaciones sa
+    JOIN users u ON sa.user_id = u.id
+    WHERE sa.solicitud_pago_id = $1
+    ORDER BY sa.orden
+  `, [id]);
+
+  const sol = solicitud.rows[0];
+  const solicitudBuffer = await generateSolicitudPDF({
+    solicitud: {
+      numero: sol.numero,
+      fecha: sol.fecha,
+      proveedor: sol.proveedor,
+      proyecto_nombre: sol.proyecto_nombre || '',
+      preparado_nombre: sol.preparado_nombre || '',
+      solicitado_nombre: sol.solicitado_nombre || null,
+      observaciones: sol.observaciones,
+      urgente: sol.urgente,
+      subtotal: sol.subtotal,
+      descuentos: sol.descuentos,
+      impuestos: sol.impuestos,
+      monto_total: sol.monto_total,
+      beneficiario: sol.beneficiario,
+      banco: sol.banco,
+      tipo_cuenta: sol.tipo_cuenta,
+      numero_cuenta: sol.numero_cuenta
+    },
+    items: items.rows,
+    ajustes: ajustes.rows,
+    aprobaciones: aprobaciones.rows
+  });
+
+  // Obtener adjuntos
+  const adjuntos = await query<{ r2_key: string; tipo_mime: string; nombre_original: string }>(
+    'SELECT r2_key, tipo_mime, nombre_original FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 ORDER BY created_at',
+    [id]
+  );
+
+  let finalBuffer: Buffer;
+
+  if (adjuntos.rows.length === 0) {
+    finalBuffer = solicitudBuffer;
+  } else {
+    const mergedPdf = await PDFDocument.load(solicitudBuffer);
+
+    for (const adjunto of adjuntos.rows) {
+      try {
+        const fileBuffer = await downloadFile(adjunto.r2_key);
+
+        if (adjunto.tipo_mime === 'application/pdf') {
+          const attachedPdf = await PDFDocument.load(fileBuffer);
+          const pages = await mergedPdf.copyPages(attachedPdf, attachedPdf.getPageIndices());
+          for (const page of pages) {
+            mergedPdf.addPage(page);
+          }
+        } else if (adjunto.tipo_mime === 'image/jpeg' || adjunto.tipo_mime === 'image/png') {
+          const img = adjunto.tipo_mime === 'image/jpeg'
+            ? await mergedPdf.embedJpg(fileBuffer)
+            : await mergedPdf.embedPng(fileBuffer);
+
+          // Letter size with 40pt margins
+          const pageW = 612;
+          const pageH = 792;
+          const margin = 40;
+          const maxW = pageW - margin * 2;
+          const maxH = pageH - margin * 2;
+
+          const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+          const drawW = img.width * scale;
+          const drawH = img.height * scale;
+
+          const page = mergedPdf.addPage([pageW, pageH]);
+          page.drawImage(img, {
+            x: (pageW - drawW) / 2,
+            y: (pageH - drawH) / 2,
+            width: drawW,
+            height: drawH,
+          });
+        }
+      } catch (err) {
+        console.error(`Error procesando adjunto ${adjunto.nombre_original}:`, err);
+      }
+    }
+
+    const mergedBytes = await mergedPdf.save();
+    finalBuffer = Buffer.from(mergedBytes);
+  }
+
+  res.set({
+    'Content-Type': 'application/pdf',
+    'Content-Disposition': `inline; filename="SP-${sol.numero}.pdf"`
+  });
+  res.send(finalBuffer);
+}));
 
 // Todas las rutas requieren autenticación
 router.use(authenticateToken);
@@ -30,6 +162,7 @@ interface SolicitudRow {
   banco: string | null;
   tipo_cuenta: string | null;
   numero_cuenta: string | null;
+  urgente: boolean;
   created_at: Date;
   updated_at: Date;
   proyecto_nombre?: string;
@@ -71,6 +204,7 @@ interface CreateBody {
   banco?: string;
   tipo_cuenta?: string;
   numero_cuenta?: string;
+  urgente?: boolean;
   items: Array<{
     cantidad: number;
     unidad?: string;
@@ -89,10 +223,9 @@ interface CreateBody {
 // --- Helpers ---
 
 const TRANSICIONES: Record<string, string[]> = {
-  'borrador': ['pendiente', 'rechazada'],
-  'pendiente': ['aprobada', 'rechazada'],
-  'aprobada': ['pagada', 'rechazada'],
-  'rechazada': ['borrador'],
+  'pendiente': ['rechazada'],
+  'aprobada': ['pagada'],
+  'rechazada': ['pendiente'],
   'pagada': []
 };
 
@@ -132,7 +265,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> 
 
   const result = await query<SolicitudRow>(`
     SELECT sp.*,
-      p.nombre as proyecto_nombre,
+      COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre
     FROM solicitudes_pago sp
@@ -250,11 +383,42 @@ router.get('/:id', [
     'SELECT * FROM solicitud_pago_ajustes WHERE solicitud_pago_id = $1 ORDER BY orden, id', [id]
   );
 
+  // Aprobaciones de esta solicitud
+  const aprobaciones = await query(`
+    SELECT sa.*, u.nombre as usuario_nombre
+    FROM solicitud_aprobaciones sa
+    JOIN users u ON sa.user_id = u.id
+    WHERE sa.solicitud_pago_id = $1
+    ORDER BY sa.orden
+  `, [id]);
+
+  // Adjuntos
+  const adjuntos = await query(`
+    SELECT a.*, u.nombre as subido_por_nombre
+    FROM solicitud_pago_adjuntos a
+    LEFT JOIN users u ON a.subido_por = u.id
+    WHERE a.solicitud_pago_id = $1
+    ORDER BY a.created_at DESC
+  `, [id]);
+
+  // Aprobadores configurados del proyecto
+  const proyectoId = solicitud.rows[0].proyecto_id;
+  const aprobadoresProyecto = await query(`
+    SELECT pas.user_id, pas.orden, u.nombre, u.email
+    FROM project_approval_settings pas
+    JOIN users u ON pas.user_id = u.id
+    WHERE pas.proyecto_id = $1 AND pas.activo = true
+    ORDER BY pas.orden
+  `, [proyectoId]);
+
   res.json({
     success: true,
     solicitud: solicitud.rows[0],
     items: items.rows,
-    ajustes: ajustes.rows
+    ajustes: ajustes.rows,
+    adjuntos: adjuntos.rows,
+    aprobaciones: aprobaciones.rows,
+    aprobadores_proyecto: aprobadoresProyecto.rows
   });
 }));
 
@@ -273,8 +437,18 @@ router.post('/', [
   const {
     proyecto_id, fecha, proveedor, solicitado_por, requisicion_id,
     observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta,
-    items, ajustes = []
+    urgente, items, ajustes = []
   } = req.body;
+
+  // Verificar que el proyecto tiene aprobadores configurados
+  const approvers = await query(
+    'SELECT id FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true',
+    [proyecto_id]
+  );
+  if (approvers.rows.length === 0) {
+    res.status(400).json({ success: false, message: 'Configure aprobadores en la sección de Miembros antes de crear solicitudes' });
+    return;
+  }
 
   // Generar número automático
   let numero: string;
@@ -319,15 +493,15 @@ router.post('/', [
     INSERT INTO solicitudes_pago (
       proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
       requisicion_id, subtotal, descuentos, impuestos, monto_total,
-      estado, observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'borrador', $12, $13, $14, $15, $16)
+      estado, observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta, urgente
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pendiente', $12, $13, $14, $15, $16, $17)
     RETURNING *
   `, [
     proyecto_id, numero, fecha || new Date().toISOString().split('T')[0],
     proveedor, req.user!.id, solicitado_por || null,
     requisicion_id || null, subtotal, totalDescuentos, totalImpuestos, montoTotal,
     observaciones || null, beneficiario || null, banco || null,
-    tipo_cuenta || null, numero_cuenta || null
+    tipo_cuenta || null, numero_cuenta || null, urgente || false
   ]);
 
   const solicitudId = result.rows[0].id;
@@ -375,15 +549,15 @@ router.put('/:id', [
     res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
     return;
   }
-  if (!['borrador', 'pendiente'].includes(existing.rows[0].estado)) {
-    res.status(400).json({ success: false, message: 'Solo se pueden editar solicitudes en borrador o pendiente' });
+  if (!['pendiente'].includes(existing.rows[0].estado)) {
+    res.status(400).json({ success: false, message: 'Solo se pueden editar solicitudes en estado pendiente' });
     return;
   }
 
   const {
     fecha, proveedor, solicitado_por, requisicion_id,
     observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta,
-    items, ajustes = []
+    urgente, items, ajustes = []
   } = req.body;
 
   // Recalcular totales
@@ -411,14 +585,14 @@ router.put('/:id', [
       fecha = $1, proveedor = $2, solicitado_por = $3, requisicion_id = $4,
       subtotal = $5, descuentos = $6, impuestos = $7, monto_total = $8,
       observaciones = $9, beneficiario = $10, banco = $11, tipo_cuenta = $12,
-      numero_cuenta = $13, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $14 RETURNING *
+      numero_cuenta = $13, urgente = $14, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $15 RETURNING *
   `, [
     fecha || new Date().toISOString().split('T')[0], proveedor,
     solicitado_por || null, requisicion_id || null,
     subtotal, totalDescuentos, totalImpuestos, montoTotal,
     observaciones || null, beneficiario || null, banco || null,
-    tipo_cuenta || null, numero_cuenta || null, id
+    tipo_cuenta || null, numero_cuenta || null, urgente || false, id
   ]);
 
   // Reemplazar items
@@ -445,7 +619,7 @@ router.put('/:id', [
 // --- PATCH /:id/estado — Cambiar estado ---
 router.patch('/:id/estado', [
   param('id').isInt(),
-  body('estado').isIn(['borrador', 'pendiente', 'aprobada', 'rechazada', 'pagada']).withMessage('Estado inválido')
+  body('estado').isIn(['pendiente', 'rechazada', 'pagada']).withMessage('Estado inválido')
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -473,6 +647,11 @@ router.patch('/:id/estado', [
     return;
   }
 
+  // Si se reenvía (rechazada → pendiente), limpiar aprobaciones anteriores
+  if (estadoActual === 'rechazada' && estado === 'pendiente') {
+    await query('DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1', [id]);
+  }
+
   const result = await query<SolicitudRow>(
     'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
     [estado, id]
@@ -481,23 +660,157 @@ router.patch('/:id/estado', [
   res.json({ success: true, message: `Estado cambiado a ${estado}`, solicitud: result.rows[0] });
 }));
 
-// --- DELETE /:id — Eliminar (solo borrador) ---
+// --- POST /:id/aprobar — Aprobar solicitud ---
+router.post('/:id/aprobar', [
+  param('id').isInt()
+], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const userId = req.user!.id;
+
+  // Obtener la solicitud
+  const solicitud = await query<SolicitudRow>('SELECT * FROM solicitudes_pago WHERE id = $1', [id]);
+  if (solicitud.rows.length === 0) {
+    res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    return;
+  }
+
+  if (solicitud.rows[0].estado !== 'pendiente') {
+    res.status(400).json({ success: false, message: 'Solo se pueden aprobar solicitudes en estado pendiente' });
+    return;
+  }
+
+  // Obtener aprobadores del proyecto
+  const aprobadores = await query<{ user_id: number; orden: number }>(
+    'SELECT user_id, orden FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
+    [solicitud.rows[0].proyecto_id]
+  );
+
+  // Obtener aprobaciones existentes
+  const aprobaciones = await query<{ user_id: number; orden: number }>(
+    'SELECT user_id, orden FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1 ORDER BY orden',
+    [id]
+  );
+
+  // Determinar cuál es el turno actual
+  const aprobacionesHechas = aprobaciones.rows.length;
+  const siguienteAprobador = aprobadores.rows[aprobacionesHechas];
+
+  if (!siguienteAprobador || siguienteAprobador.user_id !== userId) {
+    res.status(403).json({ success: false, message: 'No es tu turno de aprobar esta solicitud' });
+    return;
+  }
+
+  // Registrar aprobación
+  await query(`
+    INSERT INTO solicitud_aprobaciones (solicitud_pago_id, user_id, orden, accion)
+    VALUES ($1, $2, $3, 'aprobado')
+  `, [id, userId, siguienteAprobador.orden]);
+
+  // Si es el último aprobador, cambiar estado a aprobada
+  if (aprobacionesHechas + 1 >= aprobadores.rows.length) {
+    await query(
+      'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      ['aprobada', id]
+    );
+  }
+
+  res.json({ success: true, message: 'Solicitud aprobada' });
+}));
+
+// --- POST /:id/rechazar — Rechazar solicitud ---
+router.post('/:id/rechazar', [
+  param('id').isInt(),
+  body('comentario').trim().notEmpty().withMessage('El comentario es obligatorio al rechazar')
+], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    res.status(400).json({ success: false, message: 'El comentario es obligatorio al rechazar', errors: errors.array() });
+    return;
+  }
+
+  const { id } = req.params;
+  const { comentario } = req.body;
+  const userId = req.user!.id;
+
+  // Obtener la solicitud
+  const solicitud = await query<SolicitudRow>('SELECT * FROM solicitudes_pago WHERE id = $1', [id]);
+  if (solicitud.rows.length === 0) {
+    res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    return;
+  }
+
+  if (solicitud.rows[0].estado !== 'pendiente') {
+    res.status(400).json({ success: false, message: 'Solo se pueden rechazar solicitudes en estado pendiente' });
+    return;
+  }
+
+  // Obtener aprobadores del proyecto
+  const aprobadores = await query<{ user_id: number; orden: number }>(
+    'SELECT user_id, orden FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
+    [solicitud.rows[0].proyecto_id]
+  );
+
+  // Obtener aprobaciones existentes
+  const aprobaciones = await query<{ user_id: number; orden: number }>(
+    'SELECT user_id, orden FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1 ORDER BY orden',
+    [id]
+  );
+
+  // Determinar cuál es el turno actual
+  const aprobacionesHechas = aprobaciones.rows.length;
+  const siguienteAprobador = aprobadores.rows[aprobacionesHechas];
+
+  if (!siguienteAprobador || siguienteAprobador.user_id !== userId) {
+    res.status(403).json({ success: false, message: 'No es tu turno de aprobar/rechazar esta solicitud' });
+    return;
+  }
+
+  // Registrar rechazo
+  await query(`
+    INSERT INTO solicitud_aprobaciones (solicitud_pago_id, user_id, orden, accion, comentario)
+    VALUES ($1, $2, $3, 'rechazado', $4)
+  `, [id, userId, siguienteAprobador.orden, comentario]);
+
+  // Cambiar estado a rechazada
+  await query(
+    'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+    ['rechazada', id]
+  );
+
+  res.json({ success: true, message: 'Solicitud rechazada' });
+}));
+
+// --- DELETE /:id — Eliminar (solo pendiente) ---
 router.delete('/:id', [
   param('id').isInt()
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const { id } = req.params;
 
-  const existing = await query<SolicitudRow>('SELECT id, estado FROM solicitudes_pago WHERE id = $1', [id]);
+  const existing = await query<SolicitudRow>('SELECT id, numero, estado FROM solicitudes_pago WHERE id = $1', [id]);
   if (existing.rows.length === 0) {
     res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
     return;
   }
-  if (existing.rows[0].estado !== 'borrador') {
-    res.status(400).json({ success: false, message: 'Solo se pueden eliminar solicitudes en borrador' });
+  if (existing.rows[0].estado !== 'pendiente') {
+    res.status(400).json({ success: false, message: 'Solo se pueden eliminar solicitudes en estado pendiente' });
     return;
   }
 
+  // Delete R2 files before deleting from DB (ON DELETE CASCADE only removes DB rows)
+  const adjuntosToDelete = await query<{ r2_key: string }>(
+    'SELECT r2_key FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1', [id]
+  );
+  for (const adj of adjuntosToDelete.rows) {
+    try {
+      await deleteFile(adj.r2_key);
+    } catch (err) {
+      console.error('Error deleting R2 file:', adj.r2_key, err);
+    }
+  }
+
+  const { numero } = existing.rows[0];
   await query('DELETE FROM solicitudes_pago WHERE id = $1', [id]);
+  await registrarAudit(req.user!.id, 'eliminar', 'solicitud_pago', parseInt(id), { numero });
 
   res.json({ success: true, message: 'Solicitud eliminada' });
 }));

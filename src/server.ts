@@ -51,6 +51,8 @@ import projectTodosRoutes from './routes/projectTodos.js';
 import projectBitacoraRoutes from './routes/projectBitacora.js';
 import usersRoutes from './routes/users.js';
 import solicitudesPagoRoutes from './routes/solicitudesPago.js';
+import solicitudesPagoAdjuntosRoutes from './routes/solicitudesPagoAdjuntos.js';
+import approvalSettingsRoutes from './routes/approvalSettings.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -95,7 +97,16 @@ app.use('/api/external-contacts', externalContactsRoutes);
 app.use('/api/project-todos', projectTodosRoutes);
 app.use('/api/project-bitacora', projectBitacoraRoutes);
 app.use('/api/users', usersRoutes);
+// Inyectar token de query param para el endpoint PDF (window.open no envía headers)
+app.use('/api/solicitudes-pago/:id/pdf', (req, res, next) => {
+  if (!req.headers['authorization'] && req.query.token) {
+    req.headers['authorization'] = `Bearer ${req.query.token}`;
+  }
+  next();
+});
+app.use('/api/solicitudes-pago', solicitudesPagoAdjuntosRoutes);
 app.use('/api/solicitudes-pago', solicitudesPagoRoutes);
+app.use('/api/approval-settings', approvalSettingsRoutes);
 
 // Servir archivos estáticos de uploads
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));

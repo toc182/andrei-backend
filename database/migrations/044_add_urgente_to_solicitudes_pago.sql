@@ -1,0 +1,1 @@
+ALTER TABLE solicitudes_pago ADD COLUMN IF NOT EXISTS urgente BOOLEAN DEFAULT false;

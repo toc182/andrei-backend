@@ -3,6 +3,7 @@ import { body, validationResult, param } from 'express-validator';
 import { query } from '../database/config.js';
 import { authenticateToken, requireManager } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
 
@@ -339,6 +340,11 @@ router.put('/:id', [
     UPDATE proyectos SET ${updateFields.join(', ')} WHERE id = $${paramCounter} RETURNING *
   `, updateValues);
 
+  await registrarAudit(req.user!.id, 'editar', 'proyecto', parseInt(id), {
+    nombre: result.rows[0].nombre,
+    campos_modificados: Object.keys(updateData).filter(k => allowedFields.includes(k))
+  });
+
   res.json({ success: true, message: 'Proyecto actualizado exitosamente', proyecto: result.rows[0] });
 }, {
   duplicateMessage: 'El código de proyecto ya existe'
@@ -358,7 +364,7 @@ router.delete('/:id', [
 
   const { id } = req.params;
 
-  const projectResult = await query<{ id: number }>('SELECT * FROM proyectos WHERE id = $1', [id]);
+  const projectResult = await query<{ id: number; nombre: string }>('SELECT id, nombre FROM proyectos WHERE id = $1', [id]);
   if (projectResult.rows.length === 0) {
     res.status(404).json({ success: false, message: 'Proyecto no encontrado' });
     return;
@@ -369,7 +375,9 @@ router.delete('/:id', [
     return;
   }
 
+  const { nombre } = projectResult.rows[0];
   await query('DELETE FROM proyectos WHERE id = $1', [id]);
+  await registrarAudit(req.user!.id, 'eliminar', 'proyecto', parseInt(id), { nombre });
 
   res.json({ success: true, message: 'Proyecto eliminado exitosamente' });
 }));
