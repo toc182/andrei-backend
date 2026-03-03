@@ -7,6 +7,7 @@ import { deleteFile, downloadFile } from '../services/storage.js';
 import { generateSolicitudPDF } from '../services/pdfGenerator.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { PDFDocument } from 'pdf-lib';
+import bcrypt from 'bcryptjs';
 
 const router = Router();
 
@@ -290,6 +291,9 @@ router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> 
     params.push(proyecto_id);
   }
 
+  let revisadaJoin = '';
+  let revisadaSelect = '';
+
   if (req.query.pending_my_approval === 'true') {
     const userId = req.user!.id;
     paramCount++;
@@ -305,6 +309,11 @@ router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> 
           )
       )`;
     params.push(userId);
+
+    paramCount++;
+    revisadaJoin = `LEFT JOIN solicitud_revisiones sr ON sr.solicitud_pago_id = sp.id AND sr.user_id = $${paramCount}`;
+    revisadaSelect = ', CASE WHEN sr.id IS NOT NULL THEN true ELSE false END as revisada';
+    params.push(req.user!.id);
   }
 
   const result = await query<SolicitudRow>(`
@@ -312,10 +321,12 @@ router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> 
       COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre
+      ${revisadaSelect}
     FROM solicitudes_pago sp
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
+    ${revisadaJoin}
     ${whereClause}
     ORDER BY sp.created_at DESC
   `, params);
@@ -338,6 +349,9 @@ router.get('/project/:projectId', asyncHandler(async (req: Request<{ projectId: 
     params.push(estado);
   }
 
+  let revisadaJoin = '';
+  let revisadaSelect = '';
+
   if (req.query.pending_my_approval === 'true') {
     const userId = req.user!.id;
     paramCount++;
@@ -353,6 +367,11 @@ router.get('/project/:projectId', asyncHandler(async (req: Request<{ projectId: 
           )
       )`;
     params.push(userId);
+
+    paramCount++;
+    revisadaJoin = `LEFT JOIN solicitud_revisiones sr ON sr.solicitud_pago_id = sp.id AND sr.user_id = $${paramCount}`;
+    revisadaSelect = ', CASE WHEN sr.id IS NOT NULL THEN true ELSE false END as revisada';
+    params.push(req.user!.id);
   }
 
   const result = await query<SolicitudRow>(`
@@ -360,10 +379,12 @@ router.get('/project/:projectId', asyncHandler(async (req: Request<{ projectId: 
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
       r.numero as requisicion_numero
+      ${revisadaSelect}
     FROM solicitudes_pago sp
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
     LEFT JOIN requisiciones r ON sp.requisicion_id = r.id
+    ${revisadaJoin}
     ${whereClause}
     ORDER BY sp.created_at DESC
   `, params);
@@ -723,6 +744,112 @@ router.patch('/:id/estado', [
   res.json({ success: true, message: `Estado cambiado a ${estado}`, solicitud: result.rows[0] });
 }));
 
+// --- POST /aprobar-masivo — Aprobación masiva con verificación de contraseña ---
+router.post('/aprobar-masivo', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const { ids, password } = req.body;
+  const userId = req.user!.id;
+
+  if (!Array.isArray(ids) || ids.length === 0) {
+    res.status(400).json({ success: false, message: 'Se requiere un array de IDs' });
+    return;
+  }
+
+  if (!password) {
+    res.status(400).json({ success: false, message: 'Se requiere la contraseña' });
+    return;
+  }
+
+  // Verificar contraseña
+  const userResult = await query<{ password: string }>('SELECT password FROM users WHERE id = $1', [userId]);
+  if (userResult.rows.length === 0) {
+    res.status(401).json({ success: false, message: 'Usuario no encontrado' });
+    return;
+  }
+
+  const isValidPassword = await bcrypt.compare(password, userResult.rows[0].password);
+  if (!isValidPassword) {
+    res.status(401).json({ success: false, message: 'Contraseña incorrecta' });
+    return;
+  }
+
+  const resultados: { id: number; aprobada: boolean; error?: string }[] = [];
+
+  for (const solicitudId of ids) {
+    try {
+      const solicitud = await query<SolicitudRow>('SELECT * FROM solicitudes_pago WHERE id = $1', [solicitudId]);
+      if (solicitud.rows.length === 0) {
+        resultados.push({ id: solicitudId, aprobada: false, error: 'No encontrada' });
+        continue;
+      }
+
+      if (solicitud.rows[0].estado !== 'pendiente') {
+        resultados.push({ id: solicitudId, aprobada: false, error: 'No está pendiente' });
+        continue;
+      }
+
+      // Verificar revisada
+      const revision = await query(
+        'SELECT id FROM solicitud_revisiones WHERE solicitud_pago_id = $1 AND user_id = $2',
+        [solicitudId, userId]
+      );
+      if (revision.rows.length === 0) {
+        resultados.push({ id: solicitudId, aprobada: false, error: 'No está revisada' });
+        continue;
+      }
+
+      // Verificar turno
+      const aprobadores = await query<{ user_id: number; orden: number }>(
+        'SELECT user_id, orden FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
+        [solicitud.rows[0].proyecto_id]
+      );
+      const aprobaciones = await query<{ user_id: number }>(
+        'SELECT user_id FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1 ORDER BY orden',
+        [solicitudId]
+      );
+      const aprobacionesHechas = aprobaciones.rows.length;
+      const siguienteAprobador = aprobadores.rows[aprobacionesHechas];
+
+      if (!siguienteAprobador || siguienteAprobador.user_id !== userId) {
+        resultados.push({ id: solicitudId, aprobada: false, error: 'No es tu turno' });
+        continue;
+      }
+
+      // Aprobar
+      await query(
+        'INSERT INTO solicitud_aprobaciones (solicitud_pago_id, user_id, orden, accion) VALUES ($1, $2, $3, \'aprobado\')',
+        [solicitudId, userId, siguienteAprobador.orden]
+      );
+
+      if (aprobacionesHechas + 1 >= aprobadores.rows.length) {
+        await query(
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+          ['aprobada', solicitudId]
+        );
+      }
+
+      // Limpiar revisión
+      await query(
+        'DELETE FROM solicitud_revisiones WHERE solicitud_pago_id = $1 AND user_id = $2',
+        [solicitudId, userId]
+      );
+
+      resultados.push({ id: solicitudId, aprobada: true });
+    } catch (err) {
+      console.error(`Error aprobando solicitud ${solicitudId}:`, err);
+      resultados.push({ id: solicitudId, aprobada: false, error: 'Error interno' });
+    }
+  }
+
+  const aprobadas = resultados.filter(r => r.aprobada).length;
+  res.json({
+    success: true,
+    message: `${aprobadas} de ${ids.length} solicitudes aprobadas`,
+    aprobadas,
+    total: ids.length,
+    resultados
+  });
+}));
+
 // --- POST /:id/aprobar — Aprobar solicitud ---
 router.post('/:id/aprobar', [
   param('id').isInt()
@@ -841,6 +968,62 @@ router.post('/:id/rechazar', [
   );
 
   res.json({ success: true, message: 'Solicitud rechazada' });
+}));
+
+// --- POST /:id/revisar — Marcar como revisada ---
+router.post('/:id/revisar', [
+  param('id').isInt()
+], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const userId = req.user!.id;
+
+  const solicitud = await query<SolicitudRow>('SELECT * FROM solicitudes_pago WHERE id = $1', [id]);
+  if (solicitud.rows.length === 0) {
+    res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    return;
+  }
+
+  if (solicitud.rows[0].estado !== 'pendiente') {
+    res.status(400).json({ success: false, message: 'Solo se pueden revisar solicitudes pendientes' });
+    return;
+  }
+
+  // Verificar turno
+  const aprobadores = await query<{ user_id: number; orden: number }>(
+    'SELECT user_id, orden FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
+    [solicitud.rows[0].proyecto_id]
+  );
+  const aprobaciones = await query<{ user_id: number }>(
+    'SELECT user_id FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1 ORDER BY orden',
+    [id]
+  );
+  const siguienteAprobador = aprobadores.rows[aprobaciones.rows.length];
+  if (!siguienteAprobador || siguienteAprobador.user_id !== userId) {
+    res.status(403).json({ success: false, message: 'No es tu turno de revisar esta solicitud' });
+    return;
+  }
+
+  await query(
+    'INSERT INTO solicitud_revisiones (solicitud_pago_id, user_id) VALUES ($1, $2) ON CONFLICT (solicitud_pago_id, user_id) DO NOTHING',
+    [id, userId]
+  );
+
+  res.json({ success: true, message: 'Solicitud marcada como revisada' });
+}));
+
+// --- DELETE /:id/revisar — Desmarcar revisión ---
+router.delete('/:id/revisar', [
+  param('id').isInt()
+], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const userId = req.user!.id;
+
+  await query(
+    'DELETE FROM solicitud_revisiones WHERE solicitud_pago_id = $1 AND user_id = $2',
+    [id, userId]
+  );
+
+  res.json({ success: true, message: 'Revisión desmarcada' });
 }));
 
 // --- DELETE /:id — Eliminar (solo pendiente) ---
