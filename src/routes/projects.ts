@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult, param } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken, requireManager } from '../middleware/auth.js';
+import { authenticateToken, requireManager, checkPermission, checkProjectAccess } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
 
@@ -84,6 +84,13 @@ router.get('/', authenticateToken, asyncHandler(async (req: Request<object, obje
   let whereClause = 'WHERE 1=1';
   const queryParams: unknown[] = [];
   let paramCounter = 1;
+
+  // Filtrar por acceso a proyectos si es usuario sin acceso_global
+  if (req.user?.rol === 'usuario' && !req.user?.permissions?.acceso_global) {
+    whereClause += ` AND p.id IN (SELECT proyecto_id FROM user_project_access WHERE user_id = $${paramCounter})`;
+    queryParams.push(req.user.id);
+    paramCounter++;
+  }
 
   if (tipo_origen) {
     whereClause += ` AND p.tipo_origen = $${paramCounter}`;
@@ -172,7 +179,8 @@ router.get('/', authenticateToken, asyncHandler(async (req: Request<object, obje
 // Obtener proyecto específico
 router.get('/:id', [
   param('id').isInt().withMessage('ID debe ser un número'),
-  authenticateToken
+  authenticateToken,
+  checkProjectAccess('id')
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -225,7 +233,7 @@ router.post('/', [
   body('monto_total').optional({ nullable: true }).isNumeric(),
   body('datos_adicionales').optional().isObject(),
   authenticateToken,
-  requireManager
+  checkPermission('proyectos_crear')
 ], asyncHandler(async (req: Request<object, object, CreateProjectBody>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -287,7 +295,8 @@ router.put('/:id', [
   body('nombre').optional().trim().isLength({ min: 2 }),
   body('estado').optional().isIn(['planificacion', 'en_curso', 'pausado', 'completado', 'cancelado']),
   authenticateToken,
-  requireManager
+  checkPermission('proyectos_editar'),
+  checkProjectAccess('id')
 ], asyncHandler(async (req: Request<{ id: string }, object, Partial<CreateProjectBody>>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -354,7 +363,7 @@ router.put('/:id', [
 router.delete('/:id', [
   param('id').isInt().withMessage('ID debe ser un número'),
   authenticateToken,
-  requireManager
+  checkPermission('proyectos_eliminar')
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {

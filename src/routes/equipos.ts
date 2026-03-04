@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult, param } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const router = Router();
@@ -66,7 +66,7 @@ interface QueryParams {
 }
 
 // Obtener status de equipos
-router.get('/status', authenticateToken, asyncHandler(async (req: Request, res: Response): Promise<void> => {
+router.get('/status', authenticateToken, checkPermission('equipos_ver'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
   console.log('=== EQUIPOS STATUS QUERY ===');
   console.log('📊 Environment:', process.env.NODE_ENV);
   console.log('🔍 User ID:', req.user?.id);
@@ -97,7 +97,7 @@ router.get('/status', authenticateToken, asyncHandler(async (req: Request, res: 
 }));
 
 // Obtener todos los equipos
-router.get('/', authenticateToken, asyncHandler(async (req: Request<object, object, object, QueryParams>, res: Response): Promise<void> => {
+router.get('/', authenticateToken, checkPermission('equipos_ver'), asyncHandler(async (req: Request<object, object, object, QueryParams>, res: Response): Promise<void> => {
   console.log('=== EQUIPOS QUERY ===');
   const { owner, search, estado } = req.query;
 
@@ -149,7 +149,7 @@ router.get('/', authenticateToken, asyncHandler(async (req: Request<object, obje
 }));
 
 // Obtener un equipo por ID
-router.get('/:id', authenticateToken, [
+router.get('/:id', authenticateToken, checkPermission('equipos_ver'), [
   param('id').isInt().withMessage('ID debe ser un número entero')
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const errors = validationResult(req);
@@ -177,7 +177,7 @@ router.get('/:id', authenticateToken, [
 }));
 
 // Crear nuevo equipo
-router.post('/', authenticateToken, [
+router.post('/', authenticateToken, checkPermission('equipos_agregar'), [
   body('descripcion').trim().notEmpty().withMessage('Descripción es requerida'),
   body('marca').trim().notEmpty().withMessage('Marca es requerida'),
   body('modelo').trim().notEmpty().withMessage('Modelo es requerido'),
@@ -223,7 +223,7 @@ router.post('/', authenticateToken, [
 }));
 
 // Actualizar equipo
-router.put('/:id', authenticateToken, [
+router.put('/:id', authenticateToken, checkPermission('equipos_editar'), [
   param('id').isInt().withMessage('ID debe ser un número entero'),
   body('descripcion').trim().notEmpty().withMessage('Descripción es requerida'),
   body('marca').trim().notEmpty().withMessage('Marca es requerida'),
@@ -268,7 +268,7 @@ router.put('/:id', authenticateToken, [
 }));
 
 // Actualizar status de equipo
-router.put('/:id/status', authenticateToken, [
+router.put('/:id/status', authenticateToken, checkPermission('equipos_editar'), [
   param('id').isInt().withMessage('ID debe ser un número entero'),
   body('rata_mes').optional().isDecimal().withMessage('Rata mensual debe ser un número válido')
 ], asyncHandler(async (req: Request<{ id: string }, object, UpdateStatusBody>, res: Response): Promise<void> => {
@@ -303,7 +303,7 @@ router.put('/:id/status', authenticateToken, [
 }));
 
 // Eliminar equipo (soft delete)
-router.delete('/:id', authenticateToken, [
+router.delete('/:id', authenticateToken, checkPermission('equipos_eliminar'), [
   param('id').isInt().withMessage('ID debe ser un número entero')
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const errors = validationResult(req);

@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult, param } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const router = Router();
@@ -59,7 +59,7 @@ interface UpdateAsignacionBody extends Partial<CreateAsignacionBody> {
 }
 
 // Obtener todas las asignaciones
-router.get('/', authenticateToken, asyncHandler(async (req: Request, res: Response): Promise<void> => {
+router.get('/', authenticateToken, checkPermission('equipos_asignacion'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
   console.log('=== ASIGNACIONES QUERY ===');
   console.log('📊 Environment:', process.env.NODE_ENV);
   console.log('🔍 User ID:', req.user?.id);
@@ -96,7 +96,7 @@ router.post('/', [
   body('proyecto_id').isInt().withMessage('ID de proyecto requerido'),
   body('fecha_inicio').isISO8601().withMessage('Fecha de inicio requerida'),
   body('tipo_uso').isIn(['propio', 'alquiler']).withMessage('Tipo de uso inválido')
-], authenticateToken, asyncHandler(async (req: Request<object, object, CreateAsignacionBody>, res: Response): Promise<void> => {
+], authenticateToken, checkPermission('equipos_asignacion'), asyncHandler(async (req: Request<object, object, CreateAsignacionBody>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     res.status(400).json({
@@ -173,7 +173,7 @@ router.put('/:id', [
   body('equipo_id').optional().isInt().withMessage('ID de equipo inválido'),
   body('cliente_id').optional().isInt().withMessage('ID de cliente inválido'),
   body('proyecto_id').optional().isInt().withMessage('ID de proyecto inválido')
-], authenticateToken, asyncHandler(async (req: Request<{ id: string }, object, UpdateAsignacionBody>, res: Response): Promise<void> => {
+], authenticateToken, checkPermission('equipos_editar_asignacion'), asyncHandler(async (req: Request<{ id: string }, object, UpdateAsignacionBody>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     res.status(400).json({
@@ -281,7 +281,7 @@ router.put('/:id', [
 // Eliminar asignación
 router.delete('/:id', [
   param('id').isInt().withMessage('ID debe ser un número')
-], authenticateToken, asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+], authenticateToken, checkPermission('equipos_asignacion'), asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const { id } = req.params;
 
   const result = await query('DELETE FROM asignaciones_equipos WHERE id = $1', [id]);

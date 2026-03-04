@@ -335,6 +335,14 @@ router.put('/:id', authenticateToken, [
     return;
   }
 
+  // Verificar permisos: admin/co-admin pasan; usuario con requisiciones_editar_todas pasa; sino verificar propiedad
+  if (req.user?.rol === 'usuario' && !req.user?.permissions?.requisiciones_editar_todas) {
+    if (existing.rows[0].solicitante_id !== req.user.id) {
+      res.status(403).json({ success: false, message: 'Solo puedes editar tus propias requisiciones' });
+      return;
+    }
+  }
+
   let subtotalGeneral = existing.rows[0].subtotal;
   let itbmsGeneral = existing.rows[0].itbms;
   let montoTotal = existing.rows[0].monto_total;
@@ -527,6 +535,14 @@ router.delete('/:id', authenticateToken, requireManager, [
   if (!['pendiente', 'rechazada'].includes(existing.rows[0].estado)) {
     res.status(400).json({ success: false, message: 'Solo se pueden eliminar requisiciones pendientes o rechazadas' });
     return;
+  }
+
+  // Verificar permisos: admin/co-admin pasan; usuario con requisiciones_editar_todas pasa; sino verificar propiedad
+  if (req.user?.rol === 'usuario' && !req.user?.permissions?.requisiciones_editar_todas) {
+    if (existing.rows[0].solicitante_id !== req.user.id) {
+      res.status(403).json({ success: false, message: 'Solo puedes eliminar tus propias requisiciones' });
+      return;
+    }
   }
 
   await query('DELETE FROM requisiciones WHERE id = $1', [id]);

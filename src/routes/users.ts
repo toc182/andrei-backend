@@ -52,7 +52,7 @@ router.post('/', [
   body('nombre').trim().isLength({ min: 2 }).withMessage('Nombre debe tener al menos 2 caracteres'),
   body('email').isEmail().withMessage('Email inválido'),
   body('password').isLength({ min: 6 }).withMessage('Password debe tener al menos 6 caracteres'),
-  body('rol').optional().isIn(['admin', 'usuario']).withMessage('Rol inválido')
+  body('rol').optional().isIn(['admin', 'co-admin', 'usuario']).withMessage('Rol inválido')
 ], asyncHandler(async (req: Request<object, object, CreateUserBody>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -83,6 +83,11 @@ router.post('/', [
     [nombre, email, hashedPassword, rol]
   );
 
+  // Auto-crear row en user_permissions para usuario y co-admin
+  if (rol === 'usuario' || rol === 'co-admin') {
+    await query('INSERT INTO user_permissions (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [result.rows[0].id]);
+  }
+
   res.status(201).json({
     success: true,
     message: 'Usuario creado exitosamente',
@@ -94,7 +99,7 @@ router.post('/', [
 router.put('/:id', [
   body('nombre').optional().trim().isLength({ min: 2 }).withMessage('Nombre debe tener al menos 2 caracteres'),
   body('email').optional().isEmail().withMessage('Email inválido'),
-  body('rol').optional().isIn(['admin', 'usuario']).withMessage('Rol inválido')
+  body('rol').optional().isIn(['admin', 'co-admin', 'usuario']).withMessage('Rol inválido')
 ], asyncHandler(async (req: Request<{ id: string }, object, UpdateUserBody>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -110,7 +115,16 @@ router.put('/:id', [
   const { nombre, email, rol } = req.body;
 
   // Verificar que el usuario existe
-  const existing = await query<UserRow>('SELECT id FROM users WHERE id = $1', [id]);
+  const existing = await query<UserRow>('SELECT id, rol FROM users WHERE id = $1', [id]);
+
+  // Co-admin no puede modificar usuarios admin
+  if (existing.rows.length > 0 && existing.rows[0].rol === 'admin' && req.user?.rol === 'co-admin') {
+    res.status(403).json({
+      success: false,
+      message: 'No puedes modificar usuarios administradores'
+    });
+    return;
+  }
   if (existing.rows.length === 0) {
     res.status(404).json({
       success: false,
@@ -172,13 +186,25 @@ router.put('/:id', [
 router.delete('/:id', asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const { id } = req.params;
 
-  // No permitir que admin se desactive a sí mismo
+  // No permitir que se desactive a sí mismo
   if (req.user && req.user.id === parseInt(id)) {
     res.status(400).json({
       success: false,
       message: 'No puedes desactivar tu propia cuenta'
     });
     return;
+  }
+
+  // Co-admin no puede desactivar admin
+  if (req.user?.rol === 'co-admin') {
+    const target = await query<{ rol: string }>('SELECT rol FROM users WHERE id = $1', [id]);
+    if (target.rows.length > 0 && target.rows[0].rol === 'admin') {
+      res.status(403).json({
+        success: false,
+        message: 'No puedes desactivar usuarios administradores'
+      });
+      return;
+    }
   }
 
   const result = await query<UserRow>(

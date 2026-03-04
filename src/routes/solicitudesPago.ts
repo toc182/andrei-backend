@@ -628,7 +628,7 @@ router.put('/:id', [
   const { id } = req.params;
 
   // Verificar que existe y está en estado editable
-  const existing = await query<SolicitudRow>('SELECT id, estado FROM solicitudes_pago WHERE id = $1', [id]);
+  const existing = await query<SolicitudRow & { preparado_por: number }>('SELECT id, estado, preparado_por FROM solicitudes_pago WHERE id = $1', [id]);
   if (existing.rows.length === 0) {
     res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
     return;
@@ -636,6 +636,14 @@ router.put('/:id', [
   if (!['pendiente'].includes(existing.rows[0].estado)) {
     res.status(400).json({ success: false, message: 'Solo se pueden editar solicitudes en estado pendiente' });
     return;
+  }
+
+  // Verificar permisos: admin/co-admin pasan; usuario con solicitudes_editar_todas pasa; sino verificar propiedad
+  if (req.user?.rol === 'usuario' && !req.user?.permissions?.solicitudes_editar_todas) {
+    if (existing.rows[0].preparado_por !== req.user.id) {
+      res.status(403).json({ success: false, message: 'Solo puedes editar tus propias solicitudes' });
+      return;
+    }
   }
 
   const {
@@ -856,6 +864,23 @@ router.post('/:id/aprobar', [
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const { id } = req.params;
   const userId = req.user!.id;
+  const { password } = req.body;
+
+  // Verificar contraseña
+  if (!password) {
+    res.status(400).json({ success: false, message: 'Se requiere contraseña para aprobar' });
+    return;
+  }
+  const userResult = await query<{ password: string }>('SELECT password FROM users WHERE id = $1', [userId]);
+  if (userResult.rows.length === 0) {
+    res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    return;
+  }
+  const isValidPassword = await bcrypt.compare(password, userResult.rows[0].password);
+  if (!isValidPassword) {
+    res.status(401).json({ success: false, message: 'Contraseña incorrecta' });
+    return;
+  }
 
   // Obtener la solicitud
   const solicitud = await query<SolicitudRow>('SELECT * FROM solicitudes_pago WHERE id = $1', [id]);
@@ -1032,7 +1057,7 @@ router.delete('/:id', [
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const { id } = req.params;
 
-  const existing = await query<SolicitudRow>('SELECT id, numero, estado FROM solicitudes_pago WHERE id = $1', [id]);
+  const existing = await query<SolicitudRow & { preparado_por: number }>('SELECT id, numero, estado, preparado_por FROM solicitudes_pago WHERE id = $1', [id]);
   if (existing.rows.length === 0) {
     res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
     return;
@@ -1040,6 +1065,14 @@ router.delete('/:id', [
   if (existing.rows[0].estado !== 'pendiente') {
     res.status(400).json({ success: false, message: 'Solo se pueden eliminar solicitudes en estado pendiente' });
     return;
+  }
+
+  // Verificar permisos: admin/co-admin pasan; usuario con solicitudes_editar_todas pasa; sino verificar propiedad
+  if (req.user?.rol === 'usuario' && !req.user?.permissions?.solicitudes_editar_todas) {
+    if (existing.rows[0].preparado_por !== req.user.id) {
+      res.status(403).json({ success: false, message: 'Solo puedes eliminar tus propias solicitudes' });
+      return;
+    }
   }
 
   // Delete R2 files before deleting from DB (ON DELETE CASCADE only removes DB rows)

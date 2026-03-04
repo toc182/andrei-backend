@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { param, validationResult } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import type { Client } from '../types/models.js';
 
@@ -76,7 +76,7 @@ router.get('/:id', [
 }));
 
 // Crear nuevo cliente
-router.post('/', authenticateToken, asyncHandler(async (req: Request<object, object, CreateClientBody>, res: Response): Promise<void> => {
+router.post('/', authenticateToken, checkPermission('clientes_agregar'), asyncHandler(async (req: Request<object, object, CreateClientBody>, res: Response): Promise<void> => {
   const { nombre, abreviatura, contacto, telefono, email, direccion, tipo } = req.body;
 
   // Validar campos requeridos
@@ -132,7 +132,7 @@ router.post('/', authenticateToken, asyncHandler(async (req: Request<object, obj
 }));
 
 // Actualizar cliente
-router.put('/:id', authenticateToken, asyncHandler(async (req: Request<{ id: string }, object, CreateClientBody>, res: Response): Promise<void> => {
+router.put('/:id', authenticateToken, checkPermission('clientes_editar'), asyncHandler(async (req: Request<{ id: string }, object, CreateClientBody>, res: Response): Promise<void> => {
   const { id } = req.params;
   const { nombre, abreviatura, contacto, telefono, email, direccion } = req.body;
 
@@ -211,7 +211,7 @@ router.put('/:id', authenticateToken, asyncHandler(async (req: Request<{ id: str
 }));
 
 // Eliminar cliente (soft delete)
-router.delete('/:id', authenticateToken, asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+router.delete('/:id', authenticateToken, checkPermission('clientes_eliminar'), asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const { id } = req.params;
 
   // Verificar que el cliente existe

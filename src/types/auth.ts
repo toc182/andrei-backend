@@ -3,7 +3,31 @@ import { Request, Response, NextFunction } from 'express';
 /**
  * Roles disponibles en el sistema
  */
-export type UserRole = 'admin' | 'usuario';
+export type UserRole = 'admin' | 'co-admin' | 'usuario';
+
+/**
+ * Permisos individuales del usuario
+ */
+export interface UserPermissions {
+  acceso_global: boolean;
+  proyectos_crear: boolean;
+  proyectos_editar: boolean;
+  proyectos_eliminar: boolean;
+  clientes_agregar: boolean;
+  clientes_editar: boolean;
+  clientes_eliminar: boolean;
+  solicitudes_editar_todas: boolean;
+  requisiciones_editar_todas: boolean;
+  equipos_ver: boolean;
+  equipos_agregar: boolean;
+  equipos_editar: boolean;
+  equipos_eliminar: boolean;
+  equipos_asignacion: boolean;
+  equipos_uso: boolean;
+  equipos_editar_asignacion: boolean;
+  documentos_acceso: boolean;
+  oportunidades_ver: boolean;
+}
 
 /**
  * Usuario autenticado (inyectado en req.user)
@@ -13,6 +37,7 @@ export interface AuthUser {
   nombre: string;
   email: string;
   rol: UserRole;
+  permissions?: UserPermissions;
 }
 
 /**

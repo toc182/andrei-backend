@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const router = Router();
@@ -30,7 +30,7 @@ router.post('/', [
   body('fecha_inicio').isISO8601().withMessage('Fecha de inicio requerida'),
   body('fecha_fin').isISO8601().withMessage('Fecha de fin requerida'),
   body('cantidad').isNumeric().withMessage('Cantidad debe ser numérica')
-], authenticateToken, asyncHandler(async (req: Request<object, object, CreateRegistroBody>, res: Response): Promise<void> => {
+], authenticateToken, checkPermission('equipos_uso'), asyncHandler(async (req: Request<object, object, CreateRegistroBody>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     res.status(400).json({
@@ -96,7 +96,7 @@ router.post('/', [
 }));
 
 // Obtener registros de uso por asignación
-router.get('/asignacion/:asignacion_id', authenticateToken, asyncHandler(async (req: Request<{ asignacion_id: string }>, res: Response): Promise<void> => {
+router.get('/asignacion/:asignacion_id', authenticateToken, checkPermission('equipos_uso'), asyncHandler(async (req: Request<{ asignacion_id: string }>, res: Response): Promise<void> => {
   const { asignacion_id } = req.params;
 
   const result = await query<RegistroUsoRow>(`

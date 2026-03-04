@@ -147,7 +147,10 @@ export const asyncHandler = (
       console.error('Error en endpoint:', error);
       res.status(500).json({
         success: false,
-        message: 'Error interno del servidor'
+        message: 'Error interno del servidor',
+        ...(process.env.NODE_ENV !== 'production' && {
+          debug: { error: dbError.message, stack: dbError.stack, code: dbError.code }
+        })
       });
     }
   };

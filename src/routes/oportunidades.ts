@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken, requireManager } from '../middleware/auth.js';
+import { authenticateToken, requireManager, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const router = Router();
@@ -63,7 +63,7 @@ interface QueryParams {
 }
 
 // Obtener todas las oportunidades
-router.get('/', authenticateToken, asyncHandler(async (req: Request<object, object, object, QueryParams>, res: Response): Promise<void> => {
+router.get('/', authenticateToken, checkPermission('oportunidades_ver'), asyncHandler(async (req: Request<object, object, object, QueryParams>, res: Response): Promise<void> => {
   const { estado, assigned_to, page = '1', limit = '10' } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 

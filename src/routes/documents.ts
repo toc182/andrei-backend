@@ -5,12 +5,15 @@ import rateLimit from 'express-rate-limit';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, checkPermission } from '../middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const router = Router();
+
+// Todas las rutas de documentos requieren permiso documentos_acceso
+router.use(authenticateToken, checkPermission('documentos_acceso'));
 
 // Rate limiting para proteger contra abuso de generación de PDFs
 const documentLimiter = rateLimit({

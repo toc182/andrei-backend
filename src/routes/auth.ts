@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { query } from '../database/config.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import type { UserRole, JWTPayload } from '../types/auth.js';
+import type { UserRole, JWTPayload, UserPermissions } from '../types/auth.js';
 
 const router = Router();
 
@@ -48,7 +48,7 @@ router.post('/register', authLimiter, [
   body('nombre').trim().isLength({ min: 2 }).withMessage('Nombre debe tener al menos 2 caracteres'),
   body('email').isEmail().withMessage('Email inválido'),
   body('password').isLength({ min: 6 }).withMessage('Password debe tener al menos 6 caracteres'),
-  body('rol').optional().isIn(['admin', 'usuario']).withMessage('Rol inválido')
+  body('rol').optional().isIn(['admin', 'co-admin', 'usuario']).withMessage('Rol inválido')
 ], asyncHandler(async (req: Request<object, object, RegisterBody>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -153,11 +153,29 @@ router.post('/login', authLimiter, [
   // Remover password del objeto de respuesta
   const { password: _, ...userWithoutPassword } = user;
 
+  // Si es usuario, incluir permisos
+  let permissions: UserPermissions | undefined;
+  if (user.rol === 'usuario') {
+    const permsResult = await query<UserPermissions>(
+      `SELECT acceso_global, proyectos_crear, proyectos_editar, proyectos_eliminar,
+              clientes_agregar, clientes_editar, clientes_eliminar,
+              solicitudes_editar_todas, requisiciones_editar_todas,
+              equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
+              equipos_asignacion, equipos_uso, equipos_editar_asignacion,
+              documentos_acceso, oportunidades_ver
+       FROM user_permissions WHERE user_id = $1`,
+      [user.id]
+    );
+    if (permsResult.rows.length > 0) {
+      permissions = permsResult.rows[0];
+    }
+  }
+
   res.json({
     success: true,
     message: 'Login exitoso',
     token,
-    user: userWithoutPassword
+    user: { ...userWithoutPassword, permissions }
   });
 }));
 

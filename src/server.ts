@@ -53,6 +53,7 @@ import usersRoutes from './routes/users.js';
 import solicitudesPagoRoutes from './routes/solicitudesPago.js';
 import solicitudesPagoAdjuntosRoutes from './routes/solicitudesPagoAdjuntos.js';
 import approvalSettingsRoutes from './routes/approvalSettings.js';
+import permissionsRoutes from './routes/permissions.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -107,6 +108,7 @@ app.use('/api/solicitudes-pago/:id/pdf', (req, res, next) => {
 app.use('/api/solicitudes-pago', solicitudesPagoAdjuntosRoutes);
 app.use('/api/solicitudes-pago', solicitudesPagoRoutes);
 app.use('/api/approval-settings', approvalSettingsRoutes);
+app.use('/api/permissions', permissionsRoutes);
 
 // Servir archivos estáticos de uploads
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
