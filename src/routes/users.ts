@@ -79,7 +79,7 @@ router.post('/', [
   const hashedPassword = await bcrypt.hash(password, 10);
 
   const result = await query<UserRow>(
-    'INSERT INTO users (nombre, email, password, rol) VALUES ($1, $2, $3, $4) RETURNING id, nombre, email, rol, activo, created_at, updated_at',
+    'INSERT INTO users (nombre, email, password, rol, debe_cambiar_password) VALUES ($1, $2, $3, $4, true) RETURNING id, nombre, email, rol, activo, created_at, updated_at',
     [nombre, email, hashedPassword, rol]
   );
 

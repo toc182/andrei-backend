@@ -39,6 +39,7 @@ export interface AuthUser {
   email: string;
   rol: UserRole;
   permissions?: UserPermissions;
+  debe_cambiar_password?: boolean;
 }
 
 /**

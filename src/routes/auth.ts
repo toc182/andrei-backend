@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { query } from '../database/config.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 import type { UserRole, JWTPayload, UserPermissions } from '../types/auth.js';
 
 const router = Router();
@@ -16,6 +17,7 @@ interface UserRow {
   email: string;
   password: string;
   rol: UserRole;
+  debe_cambiar_password: boolean;
 }
 
 interface RegisterBody {
@@ -114,7 +116,7 @@ router.post('/login', authLimiter, [
   // Buscar usuario
   console.log('🔍 Looking for user...');
   const result = await query<UserRow>(
-    'SELECT id, nombre, email, password, rol FROM users WHERE email = $1',
+    'SELECT id, nombre, email, password, rol, debe_cambiar_password FROM users WHERE email = $1',
     [email]
   );
 
@@ -162,7 +164,7 @@ router.post('/login', authLimiter, [
               solicitudes_editar_todas, requisiciones_editar_todas,
               equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
               equipos_asignacion, equipos_uso, equipos_editar_asignacion,
-              documentos_acceso, oportunidades_ver
+              documentos_acceso, oportunidades_ver, registrar_pago
        FROM user_permissions WHERE user_id = $1`,
       [user.id]
     );
@@ -175,7 +177,7 @@ router.post('/login', authLimiter, [
     success: true,
     message: 'Login exitoso',
     token,
-    user: { ...userWithoutPassword, permissions }
+    user: { ...userWithoutPassword, permissions, debe_cambiar_password: user.debe_cambiar_password }
   });
 }));
 
@@ -184,6 +186,58 @@ router.get('/profile', authenticateToken, asyncHandler(async (req: Request, res:
   res.json({
     success: true,
     user: req.user
+  });
+}));
+
+// Cambiar contraseña
+router.post('/change-password', authenticateToken, asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const { password_actual, password_nueva } = req.body;
+  const userId = req.user!.id;
+
+  if (!password_nueva || password_nueva.length < 6) {
+    res.status(400).json({
+      success: false,
+      message: 'La nueva contraseña debe tener al menos 6 caracteres'
+    });
+    return;
+  }
+
+  // Si debe_cambiar_password es true, no exigir password actual
+  if (!req.user!.debe_cambiar_password) {
+    if (!password_actual) {
+      res.status(400).json({
+        success: false,
+        message: 'Contraseña actual requerida'
+      });
+      return;
+    }
+
+    const userResult = await query<{ password: string }>(
+      'SELECT password FROM users WHERE id = $1',
+      [userId]
+    );
+
+    const isValid = await bcrypt.compare(password_actual, userResult.rows[0].password);
+    if (!isValid) {
+      res.status(401).json({
+        success: false,
+        message: 'Contraseña actual incorrecta'
+      });
+      return;
+    }
+  }
+
+  const hashedPassword = await bcrypt.hash(password_nueva, 10);
+  await query(
+    'UPDATE users SET password = $1, debe_cambiar_password = false, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+    [hashedPassword, userId]
+  );
+
+  await registrarAudit(userId, 'cambiar_password', 'user', userId, {});
+
+  res.json({
+    success: true,
+    message: 'Contraseña actualizada exitosamente'
   });
 }));
 

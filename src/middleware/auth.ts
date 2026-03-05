@@ -8,6 +8,7 @@ interface UserRow {
   nombre: string;
   email: string;
   rol: UserRole;
+  debe_cambiar_password: boolean;
 }
 
 // Whitelist de permisos válidos para evitar SQL injection
@@ -44,7 +45,7 @@ export async function authenticateToken(
 
     // Verificar que el usuario existe y está activo
     const result = await query<UserRow>(
-      'SELECT id, nombre, email, rol FROM users WHERE id = $1 AND activo = true',
+      'SELECT id, nombre, email, rol, debe_cambiar_password FROM users WHERE id = $1 AND activo = true',
       [decoded.userId]
     );
 
