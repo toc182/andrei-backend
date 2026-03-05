@@ -53,6 +53,10 @@ interface PDFInput {
   items: ItemData[];
   ajustes: AjusteData[];
   aprobaciones: AprobacionData[];
+  comprobante?: {
+    fecha_pago: string;
+    registrado_por_nombre: string;
+  };
 }
 
 // --- Colors ---
@@ -368,6 +372,25 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
         apY += 13;
       }
       y += apBoxH + 6;
+    }
+
+    // ==========================================
+    // 8. COMPROBANTE DE PAGO
+    // ==========================================
+    if (data.comprobante) {
+      if (y + 40 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+
+      const PAYMENT_BG = '#eff6ff';
+      const cpBoxH = 32;
+
+      doc.roundedRect(tableX, y, pageWidth, cpBoxH, 2).fill(PAYMENT_BG);
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#1e40af');
+      doc.text('Comprobante de Pago', tableX + 8, y + 5, { width: pageWidth - 16, lineBreak: false });
+
+      doc.font('Helvetica').fontSize(7.5).fillColor('#1e40af');
+      doc.text(`Fecha de pago: ${formatDate(data.comprobante.fecha_pago)}  —  Registrado por: ${data.comprobante.registrado_por_nombre}`, tableX + 8, y + 18, { width: pageWidth - 16, lineBreak: false });
+
+      y += cpBoxH + 6;
     }
 
     doc.end();

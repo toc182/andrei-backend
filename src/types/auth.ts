@@ -27,6 +27,7 @@ export interface UserPermissions {
   equipos_editar_asignacion: boolean;
   documentos_acceso: boolean;
   oportunidades_ver: boolean;
+  registrar_pago: boolean;
 }
 
 /**

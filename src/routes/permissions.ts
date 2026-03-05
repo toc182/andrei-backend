@@ -33,6 +33,7 @@ interface UserWithPermissions {
   equipos_editar_asignacion: boolean | null;
   documentos_acceso: boolean | null;
   oportunidades_ver: boolean | null;
+  registrar_pago: boolean | null;
 }
 
 // GET /users — lista usuarios (excluye admin) con sus permisos
@@ -44,7 +45,7 @@ router.get('/users', asyncHandler(async (_req: Request, res: Response): Promise<
             up.solicitudes_editar_todas, up.requisiciones_editar_todas,
             up.equipos_ver, up.equipos_agregar, up.equipos_editar, up.equipos_eliminar,
             up.equipos_asignacion, up.equipos_uso, up.equipos_editar_asignacion,
-            up.documentos_acceso, up.oportunidades_ver
+            up.documentos_acceso, up.oportunidades_ver, up.registrar_pago
      FROM users u
      LEFT JOIN user_permissions up ON up.user_id = u.id
      WHERE u.rol != 'admin'
@@ -66,7 +67,7 @@ router.get('/:userId', asyncHandler(async (req: Request<{ userId: string }>, res
             solicitudes_editar_todas, requisiciones_editar_todas,
             equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
             equipos_asignacion, equipos_uso, equipos_editar_asignacion,
-            documentos_acceso, oportunidades_ver
+            documentos_acceso, oportunidades_ver, registrar_pago
      FROM user_permissions WHERE user_id = $1`,
     [userId]
   );
@@ -93,8 +94,8 @@ router.put('/:userId', asyncHandler(async (req: Request<{ userId: string }>, res
        solicitudes_editar_todas, requisiciones_editar_todas,
        equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
        equipos_asignacion, equipos_uso, equipos_editar_asignacion,
-       documentos_acceso, oportunidades_ver, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, CURRENT_TIMESTAMP)
+       documentos_acceso, oportunidades_ver, registrar_pago, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, CURRENT_TIMESTAMP)
      ON CONFLICT (user_id) DO UPDATE SET
        acceso_global = EXCLUDED.acceso_global,
        proyectos_crear = EXCLUDED.proyectos_crear,
@@ -114,6 +115,7 @@ router.put('/:userId', asyncHandler(async (req: Request<{ userId: string }>, res
        equipos_editar_asignacion = EXCLUDED.equipos_editar_asignacion,
        documentos_acceso = EXCLUDED.documentos_acceso,
        oportunidades_ver = EXCLUDED.oportunidades_ver,
+       registrar_pago = EXCLUDED.registrar_pago,
        updated_at = CURRENT_TIMESTAMP`,
     [
       userId,
@@ -134,7 +136,8 @@ router.put('/:userId', asyncHandler(async (req: Request<{ userId: string }>, res
       permissions.equipos_uso ?? false,
       permissions.equipos_editar_asignacion ?? false,
       permissions.documentos_acceso ?? false,
-      permissions.oportunidades_ver ?? false
+      permissions.oportunidades_ver ?? false,
+      permissions.registrar_pago ?? false
     ]
   );
 

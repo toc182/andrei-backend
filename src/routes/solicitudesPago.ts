@@ -1,9 +1,11 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { body, param, validationResult } from 'express-validator';
+import multer from 'multer';
+import crypto from 'crypto';
 import { query } from '../database/config.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { deleteFile, downloadFile } from '../services/storage.js';
+import { deleteFile, downloadFile, uploadFile } from '../services/storage.js';
 import { generateSolicitudPDF } from '../services/pdfGenerator.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { PDFDocument } from 'pdf-lib';
@@ -52,6 +54,21 @@ router.get('/:id/pdf', [
   `, [id]);
 
   const sol = solicitud.rows[0];
+
+  // Comprobante de pago (si está pagada)
+  let pdfComprobante: { fecha_pago: string; registrado_por_nombre: string } | undefined;
+  if (sol.estado === 'pagada') {
+    const compResult = await query<{ fecha_pago: string; registrado_por_nombre: string }>(`
+      SELECT cp.fecha_pago, u.nombre as registrado_por_nombre
+      FROM comprobantes_pago cp
+      LEFT JOIN users u ON cp.registrado_por = u.id
+      WHERE cp.solicitud_pago_id = $1
+    `, [id]);
+    if (compResult.rows.length > 0) {
+      pdfComprobante = compResult.rows[0];
+    }
+  }
+
   const solicitudBuffer = await generateSolicitudPDF({
     solicitud: {
       numero: sol.numero,
@@ -73,12 +90,13 @@ router.get('/:id/pdf', [
     },
     items: items.rows,
     ajustes: ajustes.rows,
-    aprobaciones: aprobaciones.rows
+    aprobaciones: aprobaciones.rows,
+    comprobante: pdfComprobante
   });
 
-  // Obtener adjuntos
+  // Obtener adjuntos (solo normales, no comprobantes)
   const adjuntos = await query<{ r2_key: string; tipo_mime: string; nombre_original: string }>(
-    'SELECT r2_key, tipo_mime, nombre_original FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 ORDER BY created_at',
+    'SELECT r2_key, tipo_mime, nombre_original FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 AND (tipo_adjunto = \'adjunto\' OR tipo_adjunto IS NULL) ORDER BY created_at',
     [id]
   );
 
@@ -476,12 +494,12 @@ router.get('/:id', [
     ORDER BY sa.orden
   `, [id]);
 
-  // Adjuntos
+  // Adjuntos (solo normales, no comprobantes)
   const adjuntos = await query(`
     SELECT a.*, u.nombre as subido_por_nombre
     FROM solicitud_pago_adjuntos a
     LEFT JOIN users u ON a.subido_por = u.id
-    WHERE a.solicitud_pago_id = $1
+    WHERE a.solicitud_pago_id = $1 AND (a.tipo_adjunto = 'adjunto' OR a.tipo_adjunto IS NULL)
     ORDER BY a.created_at DESC
   `, [id]);
 
@@ -495,6 +513,32 @@ router.get('/:id', [
     ORDER BY pas.orden
   `, [proyectoId]);
 
+  // Comprobante de pago (si está pagada)
+  let comprobante = null;
+  if (solicitud.rows[0].estado === 'pagada') {
+    const compResult = await query<{ fecha_pago: string; registrado_por_nombre: string }>(`
+      SELECT cp.fecha_pago, u.nombre as registrado_por_nombre
+      FROM comprobantes_pago cp
+      LEFT JOIN users u ON cp.registrado_por = u.id
+      WHERE cp.solicitud_pago_id = $1
+    `, [id]);
+
+    if (compResult.rows.length > 0) {
+      const compAdjuntos = await query(`
+        SELECT a.*, u.nombre as subido_por_nombre
+        FROM solicitud_pago_adjuntos a
+        LEFT JOIN users u ON a.subido_por = u.id
+        WHERE a.solicitud_pago_id = $1 AND a.tipo_adjunto = 'comprobante'
+        ORDER BY a.created_at DESC
+      `, [id]);
+
+      comprobante = {
+        ...compResult.rows[0],
+        adjuntos: compAdjuntos.rows
+      };
+    }
+  }
+
   res.json({
     success: true,
     solicitud: solicitud.rows[0],
@@ -502,7 +546,8 @@ router.get('/:id', [
     ajustes: ajustes.rows,
     adjuntos: adjuntos.rows,
     aprobaciones: aprobaciones.rows,
-    aprobadores_proyecto: aprobadoresProyecto.rows
+    aprobadores_proyecto: aprobadoresProyecto.rows,
+    comprobante
   });
 }));
 
@@ -750,6 +795,111 @@ router.patch('/:id/estado', [
   );
 
   res.json({ success: true, message: `Estado cambiado a ${estado}`, solicitud: result.rows[0] });
+}));
+
+// --- Multer config for comprobante upload ---
+const comprobanteUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Tipo de archivo no permitido. Solo PDF, JPG y PNG.'));
+    }
+  },
+});
+
+function sanitizeFilename(name: string): string {
+  return name
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/_+/g, '_');
+}
+
+// --- POST /:id/registrar-pago — Registrar pago con comprobante ---
+router.post('/:id/registrar-pago', [
+  param('id').isInt()
+], checkPermission('registrar_pago'), (req: Request, res: Response, next: NextFunction) => {
+  comprobanteUpload.array('archivos', 5)(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        res.status(400).json({ success: false, message: 'El archivo excede el limite de 10MB' });
+        return;
+      }
+      res.status(400).json({ success: false, message: err.message });
+      return;
+    }
+    if (err) {
+      res.status(400).json({ success: false, message: err.message });
+      return;
+    }
+    next();
+  });
+}, asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { fecha_pago } = req.body;
+  const files = req.files as Express.Multer.File[];
+  const userId = req.user!.id;
+
+  if (!fecha_pago) {
+    res.status(400).json({ success: false, message: 'La fecha de pago es obligatoria' });
+    return;
+  }
+
+  if (!files || files.length === 0) {
+    res.status(400).json({ success: false, message: 'Debe adjuntar al menos un comprobante' });
+    return;
+  }
+
+  // Verificar que la solicitud existe y está aprobada
+  const solicitud = await query<SolicitudRow>('SELECT id, numero, estado FROM solicitudes_pago WHERE id = $1', [id]);
+  if (solicitud.rows.length === 0) {
+    res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    return;
+  }
+  if (solicitud.rows[0].estado !== 'aprobada') {
+    res.status(400).json({ success: false, message: 'Solo se puede registrar pago de solicitudes aprobadas' });
+    return;
+  }
+
+  // Crear comprobante
+  await query(
+    'INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por) VALUES ($1, $2, $3)',
+    [id, fecha_pago, userId]
+  );
+
+  // Upload archivos a R2 y registrar en adjuntos
+  const archivosInfo: string[] = [];
+  for (const file of files) {
+    const uuid = crypto.randomUUID();
+    const safeName = sanitizeFilename(file.originalname);
+    const r2Key = `solicitudes-pago/${id}/comprobantes/${uuid}_${safeName}`;
+
+    await uploadFile(r2Key, file.buffer, file.mimetype);
+
+    await query(`
+      INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
+      VALUES ($1, $2, $3, $4, $5, $6, 'comprobante')
+    `, [id, file.originalname, r2Key, file.mimetype, file.size, userId]);
+
+    archivosInfo.push(file.originalname);
+  }
+
+  // Cambiar estado a pagada
+  await query(
+    'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+    ['pagada', id]
+  );
+
+  await registrarAudit(userId, 'registrar_pago', 'solicitud_pago', parseInt(id), {
+    numero: solicitud.rows[0].numero,
+    fecha_pago,
+    archivos: archivosInfo
+  });
+
+  res.json({ success: true, message: 'Pago registrado exitosamente' });
 }));
 
 // --- POST /aprobar-masivo — Aprobación masiva con verificación de contraseña ---
