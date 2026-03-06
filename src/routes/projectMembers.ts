@@ -91,7 +91,7 @@ router.get('/users', authenticateToken, asyncHandler(async (_req: Request, res: 
   const result = await query<UserRow>(`
     SELECT id, nombre, email, rol
     FROM users
-    WHERE activo = true
+    WHERE activo = true AND (tipo_usuario = 'interno' OR tipo_usuario IS NULL)
     ORDER BY nombre
   `);
 

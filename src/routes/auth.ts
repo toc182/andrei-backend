@@ -17,6 +17,7 @@ interface UserRow {
   email: string;
   password: string;
   rol: UserRole;
+  tipo_usuario: string;
   debe_cambiar_password: boolean;
 }
 
@@ -116,7 +117,7 @@ router.post('/login', authLimiter, [
   // Buscar usuario
   console.log('🔍 Looking for user...');
   const result = await query<UserRow>(
-    'SELECT id, nombre, email, password, rol, debe_cambiar_password FROM users WHERE email = $1',
+    'SELECT id, nombre, email, password, rol, tipo_usuario, debe_cambiar_password FROM users WHERE email = $1',
     [email]
   );
 
@@ -132,6 +133,15 @@ router.post('/login', authLimiter, [
   }
 
   const user = result.rows[0];
+
+  // Bloquear login de usuarios externos
+  if (user.tipo_usuario === 'externo') {
+    res.status(403).json({
+      success: false,
+      message: 'Los usuarios externos no pueden iniciar sesión'
+    });
+    return;
+  }
 
   // Verificar password
   const isValidPassword = await bcrypt.compare(password, user.password);

@@ -5,15 +5,16 @@ import { query } from '../database/config.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
-import type { UserRole } from '../types/auth.js';
+import type { UserRole, UserType } from '../types/auth.js';
 
 const router = Router();
 
 interface UserRow {
   id: number;
   nombre: string;
-  email: string;
+  email: string | null;
   rol: UserRole;
+  tipo_usuario: UserType;
   activo: boolean;
   created_at: Date;
   updated_at: Date;
@@ -21,9 +22,10 @@ interface UserRow {
 
 interface CreateUserBody {
   nombre: string;
-  email: string;
-  password: string;
+  email?: string;
+  password?: string;
   rol?: UserRole;
+  tipo_usuario?: UserType;
 }
 
 interface UpdateUserBody {
@@ -35,11 +37,21 @@ interface UpdateUserBody {
 // Todas las rutas requieren autenticación + admin
 router.use(authenticateToken, requireAdmin);
 
-// GET / — Listar todos los usuarios
-router.get('/', asyncHandler(async (_req: Request, res: Response): Promise<void> => {
-  const result = await query<UserRow>(
-    'SELECT id, nombre, email, rol, activo, created_at, updated_at FROM users ORDER BY id'
-  );
+// GET / — Listar usuarios (filtro opcional: ?tipo=interno|externo)
+router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const tipo = req.query.tipo as string | undefined;
+
+  let sql = 'SELECT id, nombre, email, rol, tipo_usuario, activo, created_at, updated_at FROM users';
+  const params: string[] = [];
+
+  if (tipo === 'interno' || tipo === 'externo') {
+    sql += ' WHERE tipo_usuario = $1';
+    params.push(tipo);
+  }
+
+  sql += ' ORDER BY tipo_usuario, nombre';
+
+  const result = await query<UserRow>(sql, params);
 
   res.json({
     success: true,
@@ -47,11 +59,13 @@ router.get('/', asyncHandler(async (_req: Request, res: Response): Promise<void>
   });
 }));
 
-// POST / — Crear usuario
+// POST / — Crear usuario (interno o externo)
 router.post('/', [
   body('nombre').trim().isLength({ min: 2 }).withMessage('Nombre debe tener al menos 2 caracteres'),
-  body('email').isEmail().withMessage('Email inválido'),
-  body('password').isLength({ min: 6 }).withMessage('Password debe tener al menos 6 caracteres'),
+  body('tipo_usuario').optional().isIn(['interno', 'externo']).withMessage('Tipo inválido'),
+  // Email y password solo obligatorios para internos (se valida manualmente)
+  body('email').optional().isEmail().withMessage('Email inválido'),
+  body('password').optional().isLength({ min: 6 }).withMessage('Password debe tener al menos 6 caracteres'),
   body('rol').optional().isIn(['admin', 'co-admin', 'usuario']).withMessage('Rol inválido')
 ], asyncHandler(async (req: Request<object, object, CreateUserBody>, res: Response): Promise<void> => {
   const errors = validationResult(req);
@@ -64,7 +78,36 @@ router.post('/', [
     return;
   }
 
-  const { nombre, email, password, rol = 'usuario' } = req.body;
+  const { nombre, tipo_usuario = 'interno' } = req.body;
+
+  if (tipo_usuario === 'externo') {
+    // Usuario externo: solo nombre, sin email/password/permisos
+    const result = await query<UserRow>(
+      `INSERT INTO users (nombre, tipo_usuario, debe_cambiar_password)
+       VALUES ($1, 'externo', false)
+       RETURNING id, nombre, email, rol, tipo_usuario, activo, created_at, updated_at`,
+      [nombre]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Usuario externo creado exitosamente',
+      user: result.rows[0]
+    });
+    return;
+  }
+
+  // Usuario interno: flujo original
+  const { email, password, rol = 'usuario' } = req.body;
+
+  if (!email) {
+    res.status(400).json({ success: false, message: 'Email es requerido para usuarios internos' });
+    return;
+  }
+  if (!password || password.length < 6) {
+    res.status(400).json({ success: false, message: 'Password debe tener al menos 6 caracteres' });
+    return;
+  }
 
   // Verificar email duplicado
   const existing = await query<{ id: number }>('SELECT id FROM users WHERE email = $1', [email]);
@@ -79,7 +122,9 @@ router.post('/', [
   const hashedPassword = await bcrypt.hash(password, 10);
 
   const result = await query<UserRow>(
-    'INSERT INTO users (nombre, email, password, rol, debe_cambiar_password) VALUES ($1, $2, $3, $4, true) RETURNING id, nombre, email, rol, activo, created_at, updated_at',
+    `INSERT INTO users (nombre, email, password, rol, tipo_usuario, debe_cambiar_password)
+     VALUES ($1, $2, $3, $4, 'interno', true)
+     RETURNING id, nombre, email, rol, tipo_usuario, activo, created_at, updated_at`,
     [nombre, email, hashedPassword, rol]
   );
 
@@ -115,7 +160,18 @@ router.put('/:id', [
   const { nombre, email, rol } = req.body;
 
   // Verificar que el usuario existe
-  const existing = await query<UserRow>('SELECT id, rol FROM users WHERE id = $1', [id]);
+  const existing = await query<UserRow>('SELECT id, rol, tipo_usuario FROM users WHERE id = $1', [id]);
+
+  // Si es externo, solo permitir editar nombre
+  if (existing.rows.length > 0 && existing.rows[0].tipo_usuario === 'externo') {
+    if (email || rol) {
+      res.status(400).json({
+        success: false,
+        message: 'Los usuarios externos solo pueden editar el nombre'
+      });
+      return;
+    }
+  }
 
   // Co-admin no puede modificar usuarios admin
   if (existing.rows.length > 0 && existing.rows[0].rol === 'admin' && req.user?.rol === 'co-admin') {
@@ -166,7 +222,7 @@ router.put('/:id', [
   values.push(id);
 
   const result = await query<UserRow>(
-    `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramIndex} RETURNING id, nombre, email, rol, activo, created_at, updated_at`,
+    `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramIndex} RETURNING id, nombre, email, rol, tipo_usuario, activo, created_at, updated_at`,
     values
   );
 

@@ -4,6 +4,7 @@ import { Request, Response, NextFunction } from 'express';
  * Roles disponibles en el sistema
  */
 export type UserRole = 'admin' | 'co-admin' | 'usuario';
+export type UserType = 'interno' | 'externo';
 
 /**
  * Permisos individuales del usuario
@@ -38,6 +39,7 @@ export interface AuthUser {
   nombre: string;
   email: string;
   rol: UserRole;
+  tipo_usuario?: UserType;
   permissions?: UserPermissions;
   debe_cambiar_password?: boolean;
 }
