@@ -57,6 +57,11 @@ interface PDFInput {
     fecha_pago: string;
     registrado_por_nombre: string;
   };
+  factura?: {
+    fecha_factura: string;
+    numero_factura?: string;
+    registrado_por_nombre: string;
+  };
 }
 
 // --- Colors ---
@@ -391,6 +396,31 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       doc.text(`Fecha de pago: ${formatDate(data.comprobante.fecha_pago)}  —  Registrado por: ${data.comprobante.registrado_por_nombre}`, tableX + 8, y + 18, { width: pageWidth - 16, lineBreak: false });
 
       y += cpBoxH + 6;
+    }
+
+    // ==========================================
+    // 9. FACTURA
+    // ==========================================
+    if (data.factura) {
+      if (y + 40 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+
+      const FACTURA_BG = '#f0fdf4';
+      let factText = `Fecha de factura: ${formatDate(data.factura.fecha_factura)}`;
+      if (data.factura.numero_factura) {
+        factText += `  —  Nro: ${data.factura.numero_factura}`;
+      }
+      factText += `  —  Registrado por: ${data.factura.registrado_por_nombre}`;
+
+      const factBoxH = 32;
+
+      doc.roundedRect(tableX, y, pageWidth, factBoxH, 2).fill(FACTURA_BG);
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#166534');
+      doc.text('Factura', tableX + 8, y + 5, { width: pageWidth - 16, lineBreak: false });
+
+      doc.font('Helvetica').fontSize(7.5).fillColor('#166534');
+      doc.text(factText, tableX + 8, y + 18, { width: pageWidth - 16, lineBreak: false });
+
+      y += factBoxH + 6;
     }
 
     doc.end();

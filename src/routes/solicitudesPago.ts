@@ -55,9 +55,9 @@ router.get('/:id/pdf', [
 
   const sol = solicitud.rows[0];
 
-  // Comprobante de pago (si está pagada)
+  // Comprobante de pago (si está pagada o facturada)
   let pdfComprobante: { fecha_pago: string; registrado_por_nombre: string } | undefined;
-  if (sol.estado === 'pagada') {
+  if (sol.estado === 'pagada' || sol.estado === 'facturada') {
     const compResult = await query<{ fecha_pago: string; registrado_por_nombre: string }>(`
       SELECT cp.fecha_pago, u.nombre as registrado_por_nombre
       FROM comprobantes_pago cp
@@ -66,6 +66,24 @@ router.get('/:id/pdf', [
     `, [id]);
     if (compResult.rows.length > 0) {
       pdfComprobante = compResult.rows[0];
+    }
+  }
+
+  // Factura (si está facturada)
+  let pdfFactura: { fecha_factura: string; numero_factura?: string; registrado_por_nombre: string } | undefined;
+  if (sol.estado === 'facturada') {
+    const factResult = await query<{ fecha_factura: string; numero_factura: string | null; registrado_por_nombre: string }>(`
+      SELECT fs.fecha_factura, fs.numero_factura, u.nombre as registrado_por_nombre
+      FROM facturas_solicitud fs
+      LEFT JOIN users u ON fs.registrado_por = u.id
+      WHERE fs.solicitud_pago_id = $1
+    `, [id]);
+    if (factResult.rows.length > 0) {
+      pdfFactura = {
+        fecha_factura: factResult.rows[0].fecha_factura,
+        numero_factura: factResult.rows[0].numero_factura || undefined,
+        registrado_por_nombre: factResult.rows[0].registrado_por_nombre
+      };
     }
   }
 
@@ -91,7 +109,8 @@ router.get('/:id/pdf', [
     items: items.rows,
     ajustes: ajustes.rows,
     aprobaciones: aprobaciones.rows,
-    comprobante: pdfComprobante
+    comprobante: pdfComprobante,
+    factura: pdfFactura
   });
 
   // Obtener adjuntos (solo normales, no comprobantes)
@@ -245,7 +264,8 @@ const TRANSICIONES: Record<string, string[]> = {
   'pendiente': ['rechazada'],
   'aprobada': ['pagada'],
   'rechazada': ['pendiente'],
-  'pagada': []
+  'pagada': ['facturada'],
+  'facturada': []
 };
 
 async function generateNumero(projectId: number): Promise<string> {
@@ -513,9 +533,9 @@ router.get('/:id', [
     ORDER BY pas.orden
   `, [proyectoId]);
 
-  // Comprobante de pago (si está pagada)
+  // Comprobante de pago (si está pagada o facturada)
   let comprobante = null;
-  if (solicitud.rows[0].estado === 'pagada') {
+  if (solicitud.rows[0].estado === 'pagada' || solicitud.rows[0].estado === 'facturada') {
     const compResult = await query<{ fecha_pago: string; registrado_por_nombre: string }>(`
       SELECT cp.fecha_pago, u.nombre as registrado_por_nombre
       FROM comprobantes_pago cp
@@ -539,6 +559,32 @@ router.get('/:id', [
     }
   }
 
+  // Factura (si está facturada)
+  let factura = null;
+  if (solicitud.rows[0].estado === 'facturada') {
+    const factResult = await query<{ fecha_factura: string; numero_factura: string | null; registrado_por_nombre: string }>(`
+      SELECT fs.fecha_factura, fs.numero_factura, u.nombre as registrado_por_nombre
+      FROM facturas_solicitud fs
+      LEFT JOIN users u ON fs.registrado_por = u.id
+      WHERE fs.solicitud_pago_id = $1
+    `, [id]);
+
+    if (factResult.rows.length > 0) {
+      const factAdjuntos = await query(`
+        SELECT a.*, u.nombre as subido_por_nombre
+        FROM solicitud_pago_adjuntos a
+        LEFT JOIN users u ON a.subido_por = u.id
+        WHERE a.solicitud_pago_id = $1 AND a.tipo_adjunto = 'factura'
+        ORDER BY a.created_at DESC
+      `, [id]);
+
+      factura = {
+        ...factResult.rows[0],
+        adjuntos: factAdjuntos.rows
+      };
+    }
+  }
+
   res.json({
     success: true,
     solicitud: solicitud.rows[0],
@@ -547,7 +593,8 @@ router.get('/:id', [
     adjuntos: adjuntos.rows,
     aprobaciones: aprobaciones.rows,
     aprobadores_proyecto: aprobadoresProyecto.rows,
-    comprobante
+    comprobante,
+    factura
   });
 }));
 
@@ -900,6 +947,91 @@ router.post('/:id/registrar-pago', [
   });
 
   res.json({ success: true, message: 'Pago registrado exitosamente' });
+}));
+
+// --- POST /:id/registrar-factura — Registrar factura de proveedor ---
+router.post('/:id/registrar-factura', [
+  param('id').isInt()
+], checkPermission('registrar_pago'), (req: Request, res: Response, next: NextFunction) => {
+  comprobanteUpload.array('archivos', 5)(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        res.status(400).json({ success: false, message: 'El archivo excede el limite de 10MB' });
+        return;
+      }
+      res.status(400).json({ success: false, message: err.message });
+      return;
+    }
+    if (err) {
+      res.status(400).json({ success: false, message: err.message });
+      return;
+    }
+    next();
+  });
+}, asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { fecha_factura, numero_factura } = req.body;
+  const files = req.files as Express.Multer.File[];
+  const userId = req.user!.id;
+
+  if (!fecha_factura) {
+    res.status(400).json({ success: false, message: 'La fecha de factura es obligatoria' });
+    return;
+  }
+
+  if (!files || files.length === 0) {
+    res.status(400).json({ success: false, message: 'Debe adjuntar al menos un archivo de factura' });
+    return;
+  }
+
+  // Verificar que la solicitud existe y está pagada
+  const solicitud = await query<SolicitudRow>('SELECT id, numero, estado FROM solicitudes_pago WHERE id = $1', [id]);
+  if (solicitud.rows.length === 0) {
+    res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    return;
+  }
+  if (solicitud.rows[0].estado !== 'pagada') {
+    res.status(400).json({ success: false, message: 'Solo se puede registrar factura de solicitudes pagadas' });
+    return;
+  }
+
+  // Crear registro de factura
+  await query(
+    'INSERT INTO facturas_solicitud (solicitud_pago_id, fecha_factura, numero_factura, registrado_por) VALUES ($1, $2, $3, $4)',
+    [id, fecha_factura, numero_factura || null, userId]
+  );
+
+  // Upload archivos a R2 y registrar en adjuntos
+  const archivosInfo: string[] = [];
+  for (const file of files) {
+    const uuid = crypto.randomUUID();
+    const safeName = sanitizeFilename(file.originalname);
+    const r2Key = `solicitudes-pago/${id}/facturas/${uuid}_${safeName}`;
+
+    await uploadFile(r2Key, file.buffer, file.mimetype);
+
+    await query(`
+      INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
+      VALUES ($1, $2, $3, $4, $5, $6, 'factura')
+    `, [id, file.originalname, r2Key, file.mimetype, file.size, userId]);
+
+    archivosInfo.push(file.originalname);
+  }
+
+  // Cambiar estado a facturada
+  await query(
+    'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+    ['facturada', id]
+  );
+
+  await registrarAudit(userId, 'registrar_factura', 'solicitud_pago', parseInt(id), {
+    numero: solicitud.rows[0].numero,
+    fecha_factura,
+    numero_factura: numero_factura || null,
+    archivos: archivosInfo
+  });
+
+  res.json({ success: true, message: 'Factura registrada exitosamente' });
 }));
 
 // --- POST /aprobar-masivo — Aprobación masiva con verificación de contraseña ---
