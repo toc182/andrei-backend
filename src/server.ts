@@ -43,7 +43,7 @@ import documentsRoutes from './routes/documents.js';
 import equiposRoutes from './routes/equipos.js';
 import asignacionesRoutes from './routes/asignaciones.js';
 import registroUsoRoutes from './routes/registro-uso.js';
-import seguimientoRoutes from './routes/seguimiento.js';
+
 import requisicionesRoutes from './routes/requisiciones.js';
 import projectMembersRoutes from './routes/projectMembers.js';
 import externalContactsRoutes from './routes/externalContacts.js';
@@ -92,7 +92,7 @@ app.use('/api/documents', documentsRoutes);
 app.use('/api/equipos', equiposRoutes);
 app.use('/api/asignaciones', asignacionesRoutes);
 app.use('/api/registro-uso', registroUsoRoutes);
-app.use('/api/seguimiento', seguimientoRoutes);
+
 app.use('/api/requisiciones', requisicionesRoutes);
 app.use('/api/project-members', projectMembersRoutes);
 app.use('/api/external-contacts', externalContactsRoutes);
