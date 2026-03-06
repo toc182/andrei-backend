@@ -158,25 +158,32 @@ router.post('/:id/adjuntos', [
     return;
   }
 
-  const adjuntos = [];
+  // Subir todos los archivos a R2 primero
+  const uploadedFiles: Array<{ originalname: string; r2Key: string; mimetype: string; size: number }> = [];
 
   for (const file of files) {
     const uuid = crypto.randomUUID();
     const safeName = sanitizeFilename(file.originalname);
     const r2Key = `solicitudes-pago/${id}/${uuid}_${safeName}`;
-
     await uploadFile(r2Key, file.buffer, file.mimetype);
-
-    const result = await query(`
-      INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING *
-    `, [id, file.originalname, r2Key, file.mimetype, file.size, req.user!.id]);
-
-    adjuntos.push(result.rows[0]);
+    uploadedFiles.push({ originalname: file.originalname, r2Key, mimetype: file.mimetype, size: file.size });
   }
 
-  res.status(201).json({ success: true, adjuntos });
+  // Insertar todos los registros en una sola query
+  const values = uploadedFiles.map((_, i) => {
+    const b = i * 6;
+    return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6})`;
+  }).join(', ');
+  const params: unknown[] = uploadedFiles.flatMap(f => [
+    id, f.originalname, f.r2Key, f.mimetype, f.size, req.user!.id
+  ]);
+  const result = await query(`
+    INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por)
+    VALUES ${values}
+    RETURNING *
+  `, params);
+
+  res.status(201).json({ success: true, adjuntos: result.rows });
 }));
 
 export default router;

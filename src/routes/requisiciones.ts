@@ -296,13 +296,22 @@ router.post('/', authenticateToken, [
 
   const requisicionId = result.rows[0].id;
 
-  for (const item of itemsCalculados) {
+  // Insertar todos los items en una sola query
+  if (itemsCalculados.length > 0) {
+    const values = itemsCalculados.map((_, i) => {
+      const b = i * 11;
+      return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6}, $${b+7}, $${b+8}, $${b+9}, $${b+10}, $${b+11})`;
+    }).join(', ');
+    const params: unknown[] = itemsCalculados.flatMap(item => [
+      requisicionId, item.descripcion, item.cantidad, item.unidad || 'unidad', item.precio_unitario,
+      item.subtotal, item.aplica_itbms, item.itbms, item.total, item.categoria_id || null, item.notas || null
+    ]);
     await query(`
       INSERT INTO requisicion_items (
         requisicion_id, descripcion, cantidad, unidad, precio_unitario,
         subtotal, aplica_itbms, itbms, total, categoria_id, notas
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-    `, [requisicionId, item.descripcion, item.cantidad, item.unidad || 'unidad', item.precio_unitario, item.subtotal, item.aplica_itbms, item.itbms, item.total, item.categoria_id || null, item.notas || null]);
+      ) VALUES ${values}
+    `, params);
   }
 
   await query(`
@@ -353,7 +362,7 @@ router.put('/:id', authenticateToken, [
     subtotalGeneral = 0;
     itbmsGeneral = 0;
 
-    for (const item of items) {
+    const itemsCalculados = items.map(item => {
       const cantidad = parseFloat(String(item.cantidad));
       const precioUnitario = parseFloat(String(item.precio_unitario));
       const subtotal = cantidad * precioUnitario;
@@ -364,13 +373,24 @@ router.put('/:id', authenticateToken, [
       subtotalGeneral += subtotal;
       itbmsGeneral += itbms;
 
-      await query(`
-        INSERT INTO requisicion_items (
-          requisicion_id, descripcion, cantidad, unidad, precio_unitario,
-          subtotal, aplica_itbms, itbms, total, categoria_id, notas
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      `, [id, item.descripcion, cantidad, item.unidad || 'unidad', precioUnitario, subtotal, aplicaItbms, itbms, total, item.categoria_id || null, item.notas || null]);
-    }
+      return { ...item, cantidad, precio_unitario: precioUnitario, subtotal, aplica_itbms: aplicaItbms, itbms, total };
+    });
+
+    // Insertar todos los items en una sola query
+    const values = itemsCalculados.map((_, i) => {
+      const b = i * 11;
+      return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6}, $${b+7}, $${b+8}, $${b+9}, $${b+10}, $${b+11})`;
+    }).join(', ');
+    const itemParams: unknown[] = itemsCalculados.flatMap(item => [
+      id, item.descripcion, item.cantidad, item.unidad || 'unidad', item.precio_unitario,
+      item.subtotal, item.aplica_itbms, item.itbms, item.total, item.categoria_id || null, item.notas || null
+    ]);
+    await query(`
+      INSERT INTO requisicion_items (
+        requisicion_id, descripcion, cantidad, unidad, precio_unitario,
+        subtotal, aplica_itbms, itbms, total, categoria_id, notas
+      ) VALUES ${values}
+    `, itemParams);
 
     montoTotal = subtotalGeneral + itbmsGeneral;
   }

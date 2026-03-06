@@ -66,12 +66,14 @@ router.put('/project/:projectId', [
   // Eliminar aprobadores actuales
   await query('DELETE FROM project_approval_settings WHERE proyecto_id = $1', [projectId]);
 
-  // Insertar nuevos
-  for (const approver of approvers) {
+  // Insertar nuevos en una sola query
+  if (approvers.length > 0) {
+    const values = approvers.map((_, i) => `($1, $${i * 2 + 2}, $${i * 2 + 3}, true)`).join(', ');
+    const params: unknown[] = [projectId, ...approvers.flatMap(a => [a.user_id, a.orden])];
     await query(`
       INSERT INTO project_approval_settings (proyecto_id, user_id, orden, activo)
-      VALUES ($1, $2, $3, true)
-    `, [projectId, approver.user_id, approver.orden]);
+      VALUES ${values}
+    `, params);
   }
 
   // Retornar la lista actualizada
