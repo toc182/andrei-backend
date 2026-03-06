@@ -141,7 +141,7 @@ router.post('/acuerdo-consorcio-preview', authenticateToken, async (req: Request
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar vista previa' });
   }
 });
 
@@ -195,7 +195,7 @@ router.post('/acuerdo-consorcio-pdf', authenticateToken, documentLimiter, async 
       }
     }
 
-    res.status(500).json({ error: 'Error generating PDF', message: 'Error interno al generar documento', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar documento' });
   }
 });
 
@@ -223,7 +223,7 @@ router.post('/adhesion-pinellas-preview', authenticateToken, async (req: Request
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar vista previa' });
   }
 });
 
@@ -267,7 +267,7 @@ router.post('/adhesion-pinellas-pdf', authenticateToken, documentLimiter, async 
   } catch (error) {
     console.error('Error generating Adhesión Pinellas PDF:', error);
     if (browser) await browser.close().catch(() => {});
-    res.status(500).send('Error generating PDF');
+    res.status(500).json({ success: false, message: 'Error interno al generar documento' });
   }
 });
 
@@ -290,7 +290,7 @@ router.post('/adhesion-consorcio-preview', authenticateToken, async (req: Reques
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar vista previa' });
   }
 });
 
@@ -328,7 +328,7 @@ router.post('/adhesion-consorcio-pdf', authenticateToken, documentLimiter, async
   } catch (error) {
     console.error('Error generating Adhesión Consorcio PDF:', error);
     if (browser) await browser.close().catch(() => {});
-    res.status(500).send('Error generating PDF');
+    res.status(500).json({ success: false, message: 'Error interno al generar documento' });
   }
 });
 
@@ -367,7 +367,7 @@ router.post('/retorsion-pinellas-preview', authenticateToken, async (req: Reques
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar vista previa' });
   }
 });
 
@@ -411,7 +411,7 @@ router.post('/retorsion-pinellas-pdf', authenticateToken, documentLimiter, async
   } catch (error) {
     console.error('Error generating Retorsión Pinellas PDF:', error);
     if (browser) await browser.close().catch(() => {});
-    res.status(500).send('Error generating PDF');
+    res.status(500).json({ success: false, message: 'Error interno al generar documento' });
   }
 });
 
@@ -435,7 +435,7 @@ router.post('/retorsion-consorcio-preview', authenticateToken, async (req: Reque
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar vista previa' });
   }
 });
 
@@ -474,7 +474,7 @@ router.post('/retorsion-consorcio-pdf', authenticateToken, documentLimiter, asyn
   } catch (error) {
     console.error('Error generating Retorsión Consorcio PDF:', error);
     if (browser) await browser.close().catch(() => {});
-    res.status(500).send('Error generating PDF');
+    res.status(500).json({ success: false, message: 'Error interno al generar documento' });
   }
 });
 
@@ -502,7 +502,7 @@ router.post('/incapacidad-pinellas-preview', authenticateToken, async (req: Requ
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar vista previa' });
   }
 });
 
@@ -545,7 +545,7 @@ router.post('/incapacidad-pinellas-pdf', authenticateToken, documentLimiter, asy
   } catch (error) {
     console.error('Error generating Incapacidad Pinellas PDF:', error);
     if (browser) await browser.close().catch(() => {});
-    res.status(500).send('Error generating PDF');
+    res.status(500).json({ success: false, message: 'Error interno al generar documento' });
   }
 });
 
@@ -569,7 +569,7 @@ router.post('/incapacidad-consorcio-preview', authenticateToken, async (req: Req
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar vista previa' });
   }
 });
 
@@ -608,7 +608,7 @@ router.post('/incapacidad-consorcio-pdf', authenticateToken, documentLimiter, as
   } catch (error) {
     console.error('Error generating Incapacidad Consorcio PDF:', error);
     if (browser) await browser.close().catch(() => {});
-    res.status(500).send('Error generating PDF');
+    res.status(500).json({ success: false, message: 'Error interno al generar documento' });
   }
 });
 
@@ -638,7 +638,7 @@ router.post('/integridad-pinellas-preview', authenticateToken, async (req: Reque
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar vista previa' });
   }
 });
 
@@ -683,7 +683,7 @@ router.post('/integridad-pinellas-pdf', authenticateToken, documentLimiter, asyn
   } catch (error) {
     console.error('Error generating Integridad Pinellas PDF:', error);
     if (browser) await browser.close().catch(() => {});
-    res.status(500).send('Error generating PDF');
+    res.status(500).json({ success: false, message: 'Error interno al generar documento' });
   }
 });
 
@@ -709,7 +709,7 @@ router.post('/integridad-consorcio-preview', authenticateToken, async (req: Requ
   } catch (error) {
     const err = error as Error;
     console.error('❌ Error generating preview:', error);
-    res.status(500).json({ error: 'Error generating preview', message: 'Error interno al generar vista previa', timestamp: new Date().toISOString() });
+    res.status(500).json({ success: false, message: 'Error interno al generar vista previa' });
   }
 });
 
@@ -750,7 +750,7 @@ router.post('/integridad-consorcio-pdf', authenticateToken, documentLimiter, asy
   } catch (error) {
     console.error('Error generating Integridad Consorcio PDF:', error);
     if (browser) await browser.close().catch(() => {});
-    res.status(500).send('Error generating PDF');
+    res.status(500).json({ success: false, message: 'Error interno al generar documento' });
   }
 });
 

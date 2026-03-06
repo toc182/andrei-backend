@@ -99,11 +99,8 @@ router.post('/login', authLimiter, [
   body('email').isEmail().withMessage('Email inválido'),
   body('password').notEmpty().withMessage('Password requerido')
 ], asyncHandler(async (req: Request<object, object, LoginBody>, res: Response): Promise<void> => {
-  console.log('🔐 Login attempt received');
-
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    console.log('❌ Validation errors:', errors.array());
     res.status(400).json({
       success: false,
       message: 'Datos inválidos',
@@ -114,17 +111,12 @@ router.post('/login', authLimiter, [
 
   const { email, password } = req.body;
 
-  // Buscar usuario
-  console.log('🔍 Looking for user...');
   const result = await query<UserRow>(
     'SELECT id, nombre, email, password, rol, tipo_usuario, debe_cambiar_password FROM users WHERE email = $1',
     [email]
   );
 
-  console.log('👥 Users found:', result.rows.length);
-
   if (result.rows.length === 0) {
-    console.log('❌ User not found');
     res.status(401).json({
       success: false,
       message: 'Credenciales inválidas'

@@ -70,13 +70,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Debug temporal - updated
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  console.log('🌐 Request from:', req.headers.origin);
-  console.log('🔧 Method:', req.method);
-  next();
-});
-
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
