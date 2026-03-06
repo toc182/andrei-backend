@@ -3,6 +3,7 @@ import { body, validationResult } from 'express-validator';
 import { query } from '../database/config.js';
 import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
 
@@ -66,7 +67,9 @@ router.post('/', [
         RETURNING *
       `, [cantidad, observaciones || null, existingRecord.rows[0].id]);
 
-      console.log('✅ Registro de uso actualizado:', result.rows[0].id);
+      await registrarAudit(req.user!.id, 'editar', 'registro_uso', result.rows[0].id, {
+        asignacion_id, fecha_inicio, cantidad
+      });
 
       res.json({
         success: true,
@@ -86,7 +89,9 @@ router.post('/', [
     ) RETURNING *
   `, [asignacion_id, fecha_inicio, fecha_fin, cantidad, observaciones || null]);
 
-  console.log('✅ Registro de uso creado:', result.rows[0].id);
+  await registrarAudit(req.user!.id, 'crear', 'registro_uso', result.rows[0].id, {
+    asignacion_id, fecha_inicio, fecha_fin, cantidad
+  });
 
   res.json({
     success: true,
@@ -104,8 +109,6 @@ router.get('/asignacion/:asignacion_id', authenticateToken, checkPermission('equ
     WHERE asignacion_id = $1
     ORDER BY fecha_inicio DESC
   `, [asignacion_id]);
-
-  console.log('✅ Registros de uso encontrados:', result.rows.length);
 
   res.json({
     success: true,

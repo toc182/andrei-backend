@@ -3,6 +3,7 @@ import { body, validationResult, param } from 'express-validator';
 import { query } from '../database/config.js';
 import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
 
@@ -66,11 +67,7 @@ interface QueryParams {
 }
 
 // Obtener status de equipos
-router.get('/status', authenticateToken, checkPermission('equipos_ver'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  console.log('=== EQUIPOS STATUS QUERY ===');
-  console.log('📊 Environment:', process.env.NODE_ENV);
-  console.log('🔍 User ID:', req.user?.id);
-
+router.get('/status', authenticateToken, checkPermission('equipos_ver'), asyncHandler(async (_req: Request, res: Response): Promise<void> => {
   const result = await query<EquipoRow>(`
     SELECT id, codigo, descripcion, marca, modelo, ano, estado, owner,
            proyecto as ubicacion, updated_at as ultima_revision
@@ -80,8 +77,6 @@ router.get('/status', authenticateToken, checkPermission('equipos_ver'), asyncHa
       CASE WHEN owner = 'Pinellas' THEN 0 ELSE 1 END,
       descripcion ASC
   `);
-
-  console.log('✅ Equipos status encontrados:', result.rows.length);
 
   const equiposConEstado = result.rows.map(equipo => ({
     ...equipo,
@@ -98,7 +93,6 @@ router.get('/status', authenticateToken, checkPermission('equipos_ver'), asyncHa
 
 // Obtener todos los equipos
 router.get('/', authenticateToken, checkPermission('equipos_ver'), asyncHandler(async (req: Request<object, object, object, QueryParams>, res: Response): Promise<void> => {
-  console.log('=== EQUIPOS QUERY ===');
   const { owner, search, estado } = req.query;
 
   let whereClause = 'WHERE activo = true';
@@ -138,8 +132,6 @@ router.get('/', authenticateToken, checkPermission('equipos_ver'), asyncHandler(
       CASE WHEN owner = 'Pinellas' THEN 0 ELSE 1 END,
       descripcion ASC
   `, queryParams);
-
-  console.log('✅ Equipos encontrados:', result.rows.length);
 
   res.json({
     success: true,
@@ -189,7 +181,6 @@ router.post('/', authenticateToken, checkPermission('equipos_agregar'), [
 ], asyncHandler(async (req: Request<object, object, CreateEquipoBody>, res: Response): Promise<void> => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    console.log('❌ Validation errors (CREATE):', JSON.stringify(errors.array(), null, 2));
     res.status(400).json({ success: false, message: 'Datos de entrada inválidos', errors: errors.array() });
     return;
   }
@@ -213,7 +204,9 @@ router.post('/', authenticateToken, checkPermission('equipos_agregar'), [
     estado || null, observaciones || null, owner
   ]);
 
-  console.log('✅ Equipo creado con ID:', result.rows[0].id);
+  await registrarAudit(req.user!.id, 'crear', 'equipo', result.rows[0].id, {
+    descripcion, marca, modelo, owner
+  });
 
   res.status(201).json({
     success: true,
@@ -262,7 +255,9 @@ router.put('/:id', authenticateToken, checkPermission('equipos_editar'), [
     estado || null, observaciones || null, owner, id
   ]);
 
-  console.log('✅ Equipo actualizado:', id);
+  await registrarAudit(req.user!.id, 'editar', 'equipo', parseInt(id), {
+    descripcion, marca, modelo, owner
+  });
 
   res.json({ success: true, message: 'Equipo actualizado exitosamente' });
 }));
@@ -297,7 +292,9 @@ router.put('/:id/status', authenticateToken, checkPermission('equipos_editar'), 
     rata_mes ? parseFloat(String(rata_mes)) : null, observaciones_status || null, id
   ]);
 
-  console.log('✅ Status de equipo actualizado:', id);
+  await registrarAudit(req.user!.id, 'editar_status', 'equipo', parseInt(id), {
+    estado, proyecto, responsable
+  });
 
   res.json({ success: true, message: 'Status del equipo actualizado exitosamente' });
 }));
@@ -320,9 +317,12 @@ router.delete('/:id', authenticateToken, checkPermission('equipos_eliminar'), [
     return;
   }
 
+  const equipoData = await query<{ descripcion: string; owner: string }>('SELECT descripcion, owner FROM equipos WHERE id = $1', [id]);
   await query('UPDATE equipos SET activo = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [id]);
 
-  console.log('✅ Equipo eliminado (soft delete):', id);
+  await registrarAudit(req.user!.id, 'eliminar', 'equipo', parseInt(id), {
+    descripcion: equipoData.rows[0]?.descripcion, owner: equipoData.rows[0]?.owner
+  });
 
   res.json({ success: true, message: 'Equipo eliminado exitosamente' });
 }));

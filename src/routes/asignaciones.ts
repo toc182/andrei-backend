@@ -3,6 +3,7 @@ import { body, validationResult, param } from 'express-validator';
 import { query } from '../database/config.js';
 import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
 
@@ -59,11 +60,7 @@ interface UpdateAsignacionBody extends Partial<CreateAsignacionBody> {
 }
 
 // Obtener todas las asignaciones
-router.get('/', authenticateToken, checkPermission('equipos_asignacion'), asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  console.log('=== ASIGNACIONES QUERY ===');
-  console.log('📊 Environment:', process.env.NODE_ENV);
-  console.log('🔍 User ID:', req.user?.id);
-
+router.get('/', authenticateToken, checkPermission('equipos_asignacion'), asyncHandler(async (_req: Request, res: Response): Promise<void> => {
   const result = await query<AsignacionRow>(`
     SELECT
       a.*,
@@ -78,8 +75,6 @@ router.get('/', authenticateToken, checkPermission('equipos_asignacion'), asyncH
     LEFT JOIN proyectos p ON a.proyecto_id = p.id
     ORDER BY a.created_at DESC
   `);
-
-  console.log('✅ Asignaciones encontradas:', result.rows.length);
 
   res.json({
     success: true,
@@ -158,7 +153,9 @@ router.post('/', [
     cleanedData.observaciones
   ]);
 
-  console.log('✅ Asignación creada:', result.rows[0].id);
+  await registrarAudit(req.user!.id, 'crear', 'asignacion_equipo', result.rows[0].id, {
+    equipo_id, proyecto_id, tipo_uso
+  });
 
   res.json({
     success: true,
@@ -269,7 +266,9 @@ router.put('/:id', [
     RETURNING *
   `, values);
 
-  console.log('✅ Asignación actualizada:', id);
+  await registrarAudit(req.user!.id, 'editar', 'asignacion_equipo', parseInt(id), {
+    equipo_id: oldData.equipo_id, proyecto_id: oldData.proyecto_id
+  });
 
   res.json({
     success: true,
@@ -284,6 +283,10 @@ router.delete('/:id', [
 ], authenticateToken, checkPermission('equipos_asignacion'), asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const { id } = req.params;
 
+  const asigData = await query<{ equipo_id: number; proyecto_id: number }>(
+    'SELECT equipo_id, proyecto_id FROM asignaciones_equipos WHERE id = $1', [id]
+  );
+
   const result = await query('DELETE FROM asignaciones_equipos WHERE id = $1', [id]);
 
   if (result.rowCount === 0) {
@@ -294,7 +297,9 @@ router.delete('/:id', [
     return;
   }
 
-  console.log('✅ Asignación eliminada:', id);
+  await registrarAudit(req.user!.id, 'eliminar', 'asignacion_equipo', parseInt(id), {
+    equipo_id: asigData.rows[0]?.equipo_id, proyecto_id: asigData.rows[0]?.proyecto_id
+  });
 
   res.json({
     success: true,
