@@ -74,10 +74,6 @@ interface StatsRow {
 
 // Obtener todos los proyectos
 router.get('/', authenticateToken, asyncHandler(async (req: Request<object, object, object, QueryParams>, res: Response): Promise<void> => {
-  console.log('=== PROJECTS QUERY ===');
-  console.log('📊 Environment:', process.env.NODE_ENV);
-  console.log('🔍 User ID:', req.user?.id);
-
   const { page = '1', limit = '10', estado, search, tipo_origen } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
@@ -135,7 +131,6 @@ router.get('/', authenticateToken, asyncHandler(async (req: Request<object, obje
       LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
     `, [...queryParams, limit, offset]);
   } catch {
-    console.log('⚠️  New budget fields not available, using fallback query');
     result = await query<ProjectRow>(`
       SELECT
         p.id, p.nombre, p.nombre_corto, p.cliente_id, p.fecha_inicio, p.fecha_fin_estimada,
@@ -156,8 +151,6 @@ router.get('/', authenticateToken, asyncHandler(async (req: Request<object, obje
   `, queryParams);
 
   const total = parseInt(countResult.rows[0].total);
-
-  console.log('Found projects:', result.rows.length);
 
   res.json({
     success: true,

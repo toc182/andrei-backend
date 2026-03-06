@@ -85,16 +85,12 @@ interface QueryParams {
 
 // Get all expense categories
 router.get('/categories', authenticateToken, asyncHandler(async (_req: Request, res: Response): Promise<void> => {
-  console.log('📂 Fetching expense categories...');
-
   const result = await query<CategoryRow>(`
     SELECT id, nombre, descripcion, codigo, color, orden, activo
     FROM expense_categories
     WHERE activo = true
     ORDER BY orden, nombre
   `);
-
-  console.log('📂 Categories found:', result.rows.length);
 
   res.json({ success: true, categories: result.rows });
 }, {
