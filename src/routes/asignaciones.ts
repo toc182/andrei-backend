@@ -8,7 +8,7 @@ import { registrarAudit } from '../services/auditLog.js';
 const router = Router();
 
 type TipoUso = 'propio' | 'alquiler';
-type TipoCobro = 'hora' | 'dia' | 'mes' | 'global';
+type TipoCobro = 'hora' | 'dia' | 'semana' | 'mes' | 'costo_fijo';
 
 interface AsignacionRow {
   id: number;
