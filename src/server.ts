@@ -54,6 +54,7 @@ import solicitudesPagoRoutes from './routes/solicitudesPago.js';
 import solicitudesPagoAdjuntosRoutes from './routes/solicitudesPagoAdjuntos.js';
 import approvalSettingsRoutes from './routes/approvalSettings.js';
 import permissionsRoutes from './routes/permissions.js';
+import verificacionRoutes from './routes/verificacion.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -72,6 +73,9 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// Public routes (no auth required)
+app.use('/api/verificar', verificacionRoutes);
 
 // Routes
 app.use('/api/auth', authRoutes);

@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import QRCode from 'qrcode';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,6 +63,7 @@ interface PDFInput {
     numero_factura?: string;
     registrado_por_nombre: string;
   };
+  codigo_verificacion?: string;
 }
 
 // --- Colors ---
@@ -89,6 +91,19 @@ function formatDate(dateString: string): string {
 // --- Main generator ---
 
 export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
+  // Pre-generate QR code buffer (must be done before entering PDFKit's sync callback)
+  let qrBuffer: Buffer | null = null;
+  let verifyUrl = '';
+  if (data.codigo_verificacion) {
+    verifyUrl = `https://sistema.pinellaspanama.com/verificar/${data.codigo_verificacion}`;
+    const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
+      width: 180,
+      margin: 0,
+      color: { dark: '#1a365d', light: '#ffffff' }
+    });
+    qrBuffer = Buffer.from(qrDataUrl.split(',')[1], 'base64');
+  }
+
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: 'LETTER',
@@ -421,6 +436,23 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       doc.text(factText, tableX + 8, y + 18, { width: pageWidth - 16, lineBreak: false });
 
       y += factBoxH + 6;
+    }
+
+    // ==========================================
+    // 10. QR DE VERIFICACIÓN
+    // ==========================================
+    if (qrBuffer) {
+      const qrSize = 60;
+      const qrBlockH = qrSize + 10;
+
+      if (y + qrBlockH > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+
+      doc.image(qrBuffer, tableX, y, { width: qrSize, height: qrSize });
+
+      doc.font('Helvetica').fontSize(7).fillColor(GRAY);
+      doc.text('Escanee para verificar autenticidad', tableX + qrSize + 10, y + 18, { width: 200, lineBreak: false });
+      doc.font('Helvetica').fontSize(6).fillColor(GRAY);
+      doc.text(verifyUrl, tableX + qrSize + 10, y + 30, { width: 250, lineBreak: false });
     }
 
     doc.end();

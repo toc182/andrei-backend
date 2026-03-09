@@ -110,7 +110,8 @@ router.get('/:id/pdf', [
     ajustes: ajustes.rows,
     aprobaciones: aprobaciones.rows,
     comprobante: pdfComprobante,
-    factura: pdfFactura
+    factura: pdfFactura,
+    codigo_verificacion: sol.codigo_verificacion
   });
 
   // Obtener adjuntos (solo normales, no comprobantes)
@@ -201,6 +202,7 @@ interface SolicitudRow {
   tipo_cuenta: string | null;
   numero_cuenta: string | null;
   urgente: boolean;
+  codigo_verificacion: string;
   created_at: Date;
   updated_at: Date;
   proyecto_nombre?: string;
@@ -267,6 +269,16 @@ const TRANSICIONES: Record<string, string[]> = {
   'pagada': ['facturada'],
   'facturada': []
 };
+
+function generateCodigoVerificacion(): string {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(8);
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += chars[bytes[i] % chars.length];
+  }
+  return code;
+}
 
 async function generateNumero(projectId: number): Promise<string> {
   const project = await query<{ sp_prefijo: string | null }>('SELECT sp_prefijo FROM proyectos WHERE id = $1', [projectId]);
@@ -664,20 +676,25 @@ router.post('/', [
 
   const montoTotal = subtotal - totalDescuentos + totalImpuestos;
 
+  // Generar código de verificación único
+  const codigoVerificacion = generateCodigoVerificacion();
+
   // Insertar solicitud
   const result = await query<SolicitudRow>(`
     INSERT INTO solicitudes_pago (
       proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
       requisicion_id, subtotal, descuentos, impuestos, monto_total,
-      estado, observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta, urgente
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pendiente', $12, $13, $14, $15, $16, $17)
+      estado, observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta, urgente,
+      codigo_verificacion
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pendiente', $12, $13, $14, $15, $16, $17, $18)
     RETURNING *
   `, [
     proyecto_id, numero, fecha || new Date().toISOString().split('T')[0],
     proveedor, req.user!.id, solicitado_por || null,
     requisicion_id || null, subtotal, totalDescuentos, totalImpuestos, montoTotal,
     observaciones || null, beneficiario || null, banco || null,
-    tipo_cuenta || null, numero_cuenta || null, urgente || false
+    tipo_cuenta || null, numero_cuenta || null, urgente || false,
+    codigoVerificacion
   ]);
 
   const solicitudId = result.rows[0].id;
