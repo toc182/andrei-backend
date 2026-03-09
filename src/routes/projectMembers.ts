@@ -30,6 +30,7 @@ interface UserRow {
   nombre: string;
   email: string;
   rol: UserRole;
+  tipo_usuario: string | null;
 }
 
 interface ExternalContactRow {
@@ -72,7 +73,8 @@ router.get('/project/:projectId', authenticateToken, asyncHandler(async (req: Re
       ec.cargo as externo_cargo,
       ec.telefono as externo_telefono,
       ec.email as externo_email,
-      COALESCE(u.nombre, ec.nombre) as nombre_display
+      COALESCE(u.nombre, ec.nombre) as nombre_display,
+      u.tipo_usuario
     FROM project_members pm
     LEFT JOIN users u ON pm.user_id = u.id AND pm.tipo_miembro = 'usuario'
     LEFT JOIN external_contacts ec ON pm.external_contact_id = ec.id AND pm.tipo_miembro = 'externo'
@@ -89,9 +91,9 @@ router.get('/project/:projectId', authenticateToken, asyncHandler(async (req: Re
 // GET - Obtener todos los usuarios del sistema (para agregar miembros)
 router.get('/users', authenticateToken, asyncHandler(async (_req: Request, res: Response): Promise<void> => {
   const result = await query<UserRow>(`
-    SELECT id, nombre, email, rol
+    SELECT id, nombre, email, rol, tipo_usuario
     FROM users
-    WHERE activo = true AND (tipo_usuario = 'interno' OR tipo_usuario IS NULL)
+    WHERE activo = true
     ORDER BY nombre
   `);
 
