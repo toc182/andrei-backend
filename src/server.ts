@@ -55,6 +55,8 @@ import solicitudesPagoAdjuntosRoutes from './routes/solicitudesPagoAdjuntos.js';
 import approvalSettingsRoutes from './routes/approvalSettings.js';
 import permissionsRoutes from './routes/permissions.js';
 import verificacionRoutes from './routes/verificacion.js';
+import notificationsRoutes from './routes/notifications.js';
+import { startScheduler } from './cron/scheduler.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -107,6 +109,7 @@ app.use('/api/solicitudes-pago', solicitudesPagoAdjuntosRoutes);
 app.use('/api/solicitudes-pago', solicitudesPagoRoutes);
 app.use('/api/approval-settings', approvalSettingsRoutes);
 app.use('/api/permissions', permissionsRoutes);
+app.use('/api/notifications', notificationsRoutes);
 
 // Servir archivos estáticos de uploads
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
@@ -154,6 +157,9 @@ async function startServer(): Promise<void> {
     console.log('🔄 Ejecutando migraciones de base de datos...');
     await runAllMigrations();
     console.log('✅ Migrations completed');
+
+    // Start cron scheduler
+    startScheduler();
 
     console.log('🚀 Starting HTTP server...');
     app.listen(PORT, () => {
