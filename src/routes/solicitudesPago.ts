@@ -1350,27 +1350,33 @@ router.delete('/:id/revisar', [
   res.json({ success: true, message: 'Revisión desmarcada' });
 }));
 
-// --- DELETE /:id — Eliminar (solo pendiente) ---
+// --- DELETE /:id — Eliminar solicitud ---
+// Admin: puede eliminar cualquier solicitud sin importar estado
+// Usuario normal: solo puede eliminar solicitudes pendientes propias (o con permiso solicitudes_editar_todas)
 router.delete('/:id', [
   param('id').isInt()
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const { id } = req.params;
+  const isAdmin = req.user?.rol === 'admin' || req.user?.rol === 'co-admin';
 
   const existing = await query<SolicitudRow & { preparado_por: number }>('SELECT id, numero, estado, preparado_por FROM solicitudes_pago WHERE id = $1', [id]);
   if (existing.rows.length === 0) {
     res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
     return;
   }
-  if (existing.rows[0].estado !== 'pendiente') {
-    res.status(400).json({ success: false, message: 'Solo se pueden eliminar solicitudes en estado pendiente' });
-    return;
-  }
 
-  // Verificar permisos: admin/co-admin pasan; usuario con solicitudes_editar_todas pasa; sino verificar propiedad
-  if (req.user?.rol === 'usuario' && !req.user?.permissions?.solicitudes_editar_todas) {
-    if (existing.rows[0].preparado_por !== req.user.id) {
-      res.status(403).json({ success: false, message: 'Solo puedes eliminar tus propias solicitudes' });
+  if (!isAdmin) {
+    // Usuarios normales: solo pendientes
+    if (existing.rows[0].estado !== 'pendiente') {
+      res.status(400).json({ success: false, message: 'Solo se pueden eliminar solicitudes en estado pendiente' });
       return;
+    }
+    // Verificar propiedad o permiso
+    if (!req.user?.permissions?.solicitudes_editar_todas) {
+      if (existing.rows[0].preparado_por !== req.user!.id) {
+        res.status(403).json({ success: false, message: 'Solo puedes eliminar tus propias solicitudes' });
+        return;
+      }
     }
   }
 
@@ -1386,9 +1392,15 @@ router.delete('/:id', [
     }
   }
 
-  const { numero } = existing.rows[0];
+  // Limpiar tablas relacionadas que no tengan ON DELETE CASCADE
+  await query('DELETE FROM comprobantes_pago WHERE solicitud_pago_id = $1', [id]);
+  await query('DELETE FROM facturas_solicitud WHERE solicitud_pago_id = $1', [id]);
+  await query('DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1', [id]);
+  await query('DELETE FROM solicitud_revisiones WHERE solicitud_pago_id = $1', [id]);
+
+  const { numero, estado } = existing.rows[0];
   await query('DELETE FROM solicitudes_pago WHERE id = $1', [id]);
-  await registrarAudit(req.user!.id, 'eliminar', 'solicitud_pago', parseInt(id), { numero });
+  await registrarAudit(req.user!.id, 'eliminar', 'solicitud_pago', parseInt(id), { numero, estado_al_eliminar: estado });
 
   res.json({ success: true, message: 'Solicitud eliminada' });
 }));
