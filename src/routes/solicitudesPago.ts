@@ -203,6 +203,7 @@ interface SolicitudRow {
   tipo_cuenta: string | null;
   numero_cuenta: string | null;
   urgente: boolean;
+  pinellas_paga: boolean;
   codigo_verificacion: string;
   created_at: Date;
   updated_at: Date;
@@ -246,6 +247,7 @@ interface CreateBody {
   tipo_cuenta?: string;
   numero_cuenta?: string;
   urgente?: boolean;
+  pinellas_paga?: boolean;
   items: Array<{
     cantidad: number;
     unidad?: string;
@@ -320,6 +322,23 @@ router.get('/pending-approval-count', asyncHandler(async (req: Request, res: Res
     total,
     por_proyecto: result.rows
   });
+}));
+
+// --- GET /reembolsos/pendientes — Solicitudes con pinellas_paga y estado de reembolso ---
+router.get('/reembolsos/pendientes', asyncHandler(async (_req: Request, res: Response): Promise<void> => {
+  const result = await query(`
+    SELECT sp.id, sp.numero, sp.proveedor, sp.monto_total, sp.estado, sp.fecha, sp.urgente,
+      COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
+      CASE WHEN rp.id IS NOT NULL THEN true ELSE false END as reembolso_registrado,
+      rp.fecha_reembolso, rp.comprobante_nombre
+    FROM solicitudes_pago sp
+    LEFT JOIN proyectos p ON sp.proyecto_id = p.id
+    LEFT JOIN reembolsos_pinellas rp ON rp.solicitud_id = sp.id
+    WHERE sp.pinellas_paga = true
+    ORDER BY rp.id IS NOT NULL ASC, sp.created_at DESC
+  `);
+
+  res.json({ success: true, solicitudes: result.rows });
 }));
 
 // --- GET / — Listar todas (global) ---
@@ -598,6 +617,20 @@ router.get('/:id', [
     }
   }
 
+  // Reembolso a Pinellas (si aplica)
+  let reembolso = null;
+  if (solicitud.rows[0].pinellas_paga) {
+    const reembolsoResult = await query<{ id: number; comprobante_url: string | null; comprobante_nombre: string | null; fecha_reembolso: string; registrado_por_nombre: string; created_at: string }>(`
+      SELECT rp.*, u.nombre as registrado_por_nombre
+      FROM reembolsos_pinellas rp
+      LEFT JOIN users u ON rp.registrado_por = u.id
+      WHERE rp.solicitud_id = $1
+    `, [id]);
+    if (reembolsoResult.rows.length > 0) {
+      reembolso = reembolsoResult.rows[0];
+    }
+  }
+
   res.json({
     success: true,
     solicitud: solicitud.rows[0],
@@ -607,7 +640,8 @@ router.get('/:id', [
     aprobaciones: aprobaciones.rows,
     aprobadores_proyecto: aprobadoresProyecto.rows,
     comprobante,
-    factura
+    factura,
+    reembolso
   });
 }));
 
@@ -626,7 +660,7 @@ router.post('/', [
   const {
     proyecto_id, fecha, proveedor, solicitado_por, requisicion_id,
     observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta,
-    urgente, items, ajustes = []
+    urgente, pinellas_paga, items, ajustes = []
   } = req.body;
 
   // Verificar que el proyecto tiene aprobadores configurados
@@ -686,8 +720,8 @@ router.post('/', [
       proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
       requisicion_id, subtotal, descuentos, impuestos, monto_total,
       estado, observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta, urgente,
-      codigo_verificacion
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pendiente', $12, $13, $14, $15, $16, $17, $18)
+      pinellas_paga, codigo_verificacion
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pendiente', $12, $13, $14, $15, $16, $17, $18, $19)
     RETURNING *
   `, [
     proyecto_id, numero, fecha || new Date().toISOString().split('T')[0],
@@ -695,7 +729,7 @@ router.post('/', [
     requisicion_id || null, subtotal, totalDescuentos, totalImpuestos, montoTotal,
     observaciones || null, beneficiario || null, banco || null,
     tipo_cuenta || null, numero_cuenta || null, urgente || false,
-    codigoVerificacion
+    pinellas_paga || false, codigoVerificacion
   ]);
 
   const solicitudId = result.rows[0].id;
@@ -800,7 +834,7 @@ router.put('/:id', [
   const {
     fecha, proveedor, solicitado_por, requisicion_id,
     observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta,
-    urgente, items, ajustes = []
+    urgente, pinellas_paga, items, ajustes = []
   } = req.body;
 
   // Recalcular totales
@@ -828,14 +862,15 @@ router.put('/:id', [
       fecha = $1, proveedor = $2, solicitado_por = $3, requisicion_id = $4,
       subtotal = $5, descuentos = $6, impuestos = $7, monto_total = $8,
       observaciones = $9, beneficiario = $10, banco = $11, tipo_cuenta = $12,
-      numero_cuenta = $13, urgente = $14, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $15 RETURNING *
+      numero_cuenta = $13, urgente = $14, pinellas_paga = $15, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $16 RETURNING *
   `, [
     fecha || new Date().toISOString().split('T')[0], proveedor,
     solicitado_por || null, requisicion_id || null,
     subtotal, totalDescuentos, totalImpuestos, montoTotal,
     observaciones || null, beneficiario || null, banco || null,
-    tipo_cuenta || null, numero_cuenta || null, urgente || false, id
+    tipo_cuenta || null, numero_cuenta || null, urgente || false,
+    pinellas_paga || false, id
   ]);
 
   // Reemplazar items
@@ -1436,6 +1471,73 @@ router.delete('/:id/revisar', [
   res.json({ success: true, message: 'Revisión desmarcada' });
 }));
 
+// --- POST /:id/reembolso — Registrar reembolso a Pinellas con comprobante ---
+router.post('/:id/reembolso', [
+  param('id').isInt()
+], checkPermission('registrar_pago'), (req: Request, res: Response, next: NextFunction) => {
+  comprobanteUpload.single('comprobante')(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        res.status(400).json({ success: false, message: 'El archivo excede el límite de 10MB' });
+        return;
+      }
+      res.status(400).json({ success: false, message: err.message });
+      return;
+    }
+    if (err) {
+      res.status(400).json({ success: false, message: err.message });
+      return;
+    }
+    next();
+  });
+}, asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const userId = req.user!.id;
+  const { fecha_reembolso } = req.body;
+
+  // Verificar que la solicitud existe y tiene pinellas_paga
+  const solicitud = await query<SolicitudRow>('SELECT id, pinellas_paga, numero FROM solicitudes_pago WHERE id = $1', [id]);
+  if (solicitud.rows.length === 0) {
+    res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    return;
+  }
+  if (!solicitud.rows[0].pinellas_paga) {
+    res.status(400).json({ success: false, message: 'Esta solicitud no está marcada como "Pinellas paga"' });
+    return;
+  }
+
+  // Verificar que no tenga ya un reembolso
+  const existing = await query('SELECT id FROM reembolsos_pinellas WHERE solicitud_id = $1', [id]);
+  if (existing.rows.length > 0) {
+    res.status(400).json({ success: false, message: 'Esta solicitud ya tiene un reembolso registrado' });
+    return;
+  }
+
+  let comprobanteUrl: string | null = null;
+  let comprobanteNombre: string | null = null;
+
+  // Upload comprobante a R2
+  const file = req.file;
+  if (file) {
+    const uuid = crypto.randomUUID();
+    const safeName = sanitizeFilename(file.originalname);
+    const r2Key = `reembolsos/${id}/${uuid}_${safeName}`;
+
+    await uploadFile(r2Key, file.buffer, file.mimetype);
+    comprobanteUrl = r2Key;
+    comprobanteNombre = file.originalname;
+  }
+
+  await query(`
+    INSERT INTO reembolsos_pinellas (solicitud_id, comprobante_url, comprobante_nombre, fecha_reembolso, registrado_por)
+    VALUES ($1, $2, $3, $4, $5)
+  `, [id, comprobanteUrl, comprobanteNombre, fecha_reembolso || new Date().toISOString().split('T')[0], userId]);
+
+  await registrarAudit(userId, 'registrar_reembolso', 'solicitud_pago', parseInt(id), { numero: solicitud.rows[0].numero });
+
+  res.json({ success: true, message: 'Reembolso registrado' });
+}));
+
 // --- DELETE /:id — Eliminar solicitud ---
 // Admin: puede eliminar cualquier solicitud sin importar estado
 // Usuario normal: solo puede eliminar solicitudes pendientes propias (o con permiso solicitudes_editar_todas)
@@ -1479,6 +1581,7 @@ router.delete('/:id', [
   }
 
   // Limpiar tablas relacionadas que no tengan ON DELETE CASCADE
+  await query('DELETE FROM reembolsos_pinellas WHERE solicitud_id = $1', [id]);
   await query('DELETE FROM comprobantes_pago WHERE solicitud_pago_id = $1', [id]);
   await query('DELETE FROM facturas_solicitud WHERE solicitud_pago_id = $1', [id]);
   await query('DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1', [id]);
