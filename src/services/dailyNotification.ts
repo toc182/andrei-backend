@@ -46,9 +46,9 @@ function buildEmailHtml(nombre: string, solicitudes: PendingSolicitud[]): string
     <body style="margin: 0; padding: 0; background: #f7fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
       <div style="max-width: 600px; margin: 0 auto; padding: 24px;">
         <!-- Header -->
-        <div style="background: #1a365d; padding: 20px 24px; border-radius: 8px 8px 0 0;">
-          <h1 style="margin: 0; color: white; font-size: 18px; font-weight: 600;">Pinellas, S.A.</h1>
-          <p style="margin: 4px 0 0 0; color: #a0aec0; font-size: 13px;">Sistema Andrei — Notificación de Aprobaciones</p>
+        <div style="background: #1a365d; padding: 20px 24px; border-radius: 8px 8px 0 0; text-align: center;">
+          <img src="https://sistema.pinellaspanama.com/logo-pinellas.png" alt="Pinellas, S.A." style="max-height: 60px; margin-bottom: 8px;" />
+          <p style="margin: 0; color: #a0aec0; font-size: 13px;">Notificación de Aprobaciones</p>
         </div>
 
         <!-- Body -->
@@ -84,7 +84,7 @@ function buildEmailHtml(nombre: string, solicitudes: PendingSolicitud[]): string
         <!-- Footer -->
         <div style="padding: 16px 24px; text-align: center; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 8px 8px; background: #f7fafc;">
           <p style="margin: 0; font-size: 12px; color: #a0aec0;">
-            Este es un mensaje automático del Sistema Andrei. No responda a este correo.
+            Este es un mensaje automático del Sistema. No responda a este correo.
           </p>
         </div>
       </div>
