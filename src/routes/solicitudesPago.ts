@@ -8,6 +8,7 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { deleteFile, downloadFile, uploadFile } from '../services/storage.js';
 import { generateSolicitudPDF } from '../services/pdfGenerator.js';
 import { registrarAudit } from '../services/auditLog.js';
+import { sendEmail } from '../services/emailService.js';
 import { PDFDocument } from 'pdf-lib';
 import bcrypt from 'bcryptjs';
 
@@ -720,6 +721,47 @@ router.post('/', [
     message: 'Solicitud de pago creada',
     solicitud: result.rows[0]
   });
+
+  // Notificar al primer aprobador si es urgente (fire and forget)
+  if (urgente) {
+    (async () => {
+      try {
+        const aprobadorResult = await query<{ nombre: string; email: string }>(
+          `SELECT u.nombre, u.email FROM project_approval_settings pas
+           JOIN users u ON u.id = pas.user_id
+           WHERE pas.proyecto_id = $1 AND pas.activo = true
+           ORDER BY pas.orden ASC LIMIT 1`,
+          [proyecto_id]
+        );
+        if (aprobadorResult.rows.length === 0 || !aprobadorResult.rows[0].email) return;
+
+        const proyectoResult = await query<{ nombre_corto: string }>(
+          'SELECT nombre_corto FROM proyectos WHERE id = $1', [proyecto_id]
+        );
+        const nombreProyecto = proyectoResult.rows[0]?.nombre_corto || 'Proyecto';
+        const { nombre: aprobadorNombre, email: aprobadorEmail } = aprobadorResult.rows[0];
+
+        await sendEmail(
+          aprobadorEmail,
+          `⚠️ Solicitud Urgente: ${numero} - ${proveedor}`,
+          `<div style="font-family: Arial, sans-serif; max-width: 600px;">
+            <h2 style="color: #d97706;">⚠️ Solicitud de Pago Urgente</h2>
+            <p>Hola ${aprobadorNombre},</p>
+            <p>Se ha creado una solicitud de pago <strong>urgente</strong> que requiere tu aprobación:</p>
+            <table style="border-collapse: collapse; width: 100%; margin: 16px 0;">
+              <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Número</td><td style="padding: 8px; border: 1px solid #ddd;">${numero}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Proveedor</td><td style="padding: 8px; border: 1px solid #ddd;">${proveedor}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Monto Total</td><td style="padding: 8px; border: 1px solid #ddd;">$${montoTotal.toFixed(2)}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Proyecto</td><td style="padding: 8px; border: 1px solid #ddd;">${nombreProyecto}</td></tr>
+            </table>
+            <p><a href="https://sistema.pinellaspanama.com" style="background: #d97706; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">Ir al Sistema</a></p>
+          </div>`
+        );
+      } catch (err) {
+        console.error('Error enviando email de solicitud urgente:', err);
+      }
+    })();
+  }
 }));
 
 // --- PUT /:id — Editar solicitud ---
@@ -1221,7 +1263,8 @@ router.post('/:id/aprobar', [
   `, [id, userId, siguienteAprobador.orden]);
 
   // Si es el último aprobador, cambiar estado a aprobada
-  if (aprobacionesHechas + 1 >= aprobadores.rows.length) {
+  const esUltimoAprobador = aprobacionesHechas + 1 >= aprobadores.rows.length;
+  if (esUltimoAprobador) {
     await query(
       'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       ['aprobada', id]
@@ -1229,6 +1272,49 @@ router.post('/:id/aprobar', [
   }
 
   res.json({ success: true, message: 'Solicitud aprobada' });
+
+  // Notificar al siguiente aprobador si es urgente y quedan aprobadores (fire and forget)
+  if (solicitud.rows[0].urgente && !esUltimoAprobador) {
+    (async () => {
+      try {
+        // Buscar el siguiente aprobador (el que sigue después del actual)
+        const nextAprobador = await query<{ nombre: string; email: string }>(
+          `SELECT u.nombre, u.email FROM project_approval_settings pas
+           JOIN users u ON u.id = pas.user_id
+           WHERE pas.proyecto_id = $1 AND pas.activo = true AND pas.orden > $2
+           ORDER BY pas.orden ASC LIMIT 1`,
+          [solicitud.rows[0].proyecto_id, siguienteAprobador.orden]
+        );
+        if (nextAprobador.rows.length === 0 || !nextAprobador.rows[0].email) return;
+
+        const proyectoResult = await query<{ nombre_corto: string }>(
+          'SELECT nombre_corto FROM proyectos WHERE id = $1', [solicitud.rows[0].proyecto_id]
+        );
+        const nombreProyecto = proyectoResult.rows[0]?.nombre_corto || 'Proyecto';
+        const sol = solicitud.rows[0];
+        const { nombre: nextNombre, email: nextEmail } = nextAprobador.rows[0];
+
+        await sendEmail(
+          nextEmail,
+          `⚠️ Solicitud Urgente: ${sol.numero} - ${sol.proveedor}`,
+          `<div style="font-family: Arial, sans-serif; max-width: 600px;">
+            <h2 style="color: #d97706;">⚠️ Solicitud de Pago Urgente</h2>
+            <p>Hola ${nextNombre},</p>
+            <p>Hay una solicitud de pago <strong>urgente</strong> pendiente de tu aprobación:</p>
+            <table style="border-collapse: collapse; width: 100%; margin: 16px 0;">
+              <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Número</td><td style="padding: 8px; border: 1px solid #ddd;">${sol.numero}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Proveedor</td><td style="padding: 8px; border: 1px solid #ddd;">${sol.proveedor}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Monto Total</td><td style="padding: 8px; border: 1px solid #ddd;">$${parseFloat(sol.monto_total as unknown as string).toFixed(2)}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Proyecto</td><td style="padding: 8px; border: 1px solid #ddd;">${nombreProyecto}</td></tr>
+            </table>
+            <p><a href="https://sistema.pinellaspanama.com" style="background: #d97706; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">Ir al Sistema</a></p>
+          </div>`
+        );
+      } catch (err) {
+        console.error('Error enviando email de solicitud urgente al siguiente aprobador:', err);
+      }
+    })();
+  }
 }));
 
 // --- POST /:id/rechazar — Rechazar solicitud ---
