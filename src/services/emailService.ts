@@ -13,11 +13,12 @@ if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_PORT === 465,
+    family: 4,
     auth: {
       user: SMTP_USER,
       pass: SMTP_PASS
     }
-  });
+  } as nodemailer.TransportOptions);
   console.log('✅ Email service configured');
 } else {
   console.log('⚠️  Email service not configured (missing SMTP_HOST, SMTP_USER, or SMTP_PASS)');
