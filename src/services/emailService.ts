@@ -1,37 +1,24 @@
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
-const SMTP_HOST = process.env.SMTP_HOST;
-const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASS = process.env.SMTP_PASS;
-const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
-let transporter: nodemailer.Transporter | null = null;
+let resend: Resend | null = null;
 
-if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
-  transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_PORT === 465,
-    family: 4,
-    auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS
-    }
-  } as nodemailer.TransportOptions);
-  console.log('✅ Email service configured');
+if (RESEND_API_KEY) {
+  resend = new Resend(RESEND_API_KEY);
+  console.log('✅ Email service configured (Resend)');
 } else {
-  console.log('⚠️  Email service not configured (missing SMTP_HOST, SMTP_USER, or SMTP_PASS)');
+  console.log('⚠️  Email service not configured (missing RESEND_API_KEY)');
 }
 
 export async function sendEmail(to: string, subject: string, html: string): Promise<void> {
-  if (!transporter) {
-    console.log(`📧 Email skipped (no SMTP config): to=${to}, subject="${subject}"`);
+  if (!resend) {
+    console.log(`📧 Email skipped (no Resend config): to=${to}, subject="${subject}"`);
     return;
   }
 
-  await transporter.sendMail({
-    from: SMTP_FROM,
+  await resend.emails.send({
+    from: 'Pinellas <info@pinellaspanama.com>',
     to,
     subject,
     html
