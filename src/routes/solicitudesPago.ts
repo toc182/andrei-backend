@@ -1586,7 +1586,8 @@ router.delete('/:id', [
   param('id').isInt()
 ], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
   const { id } = req.params;
-  const isAdmin = req.user?.rol === 'admin' || req.user?.rol === 'co-admin';
+  const isAdmin = req.user?.rol === 'admin';
+  const isCoAdmin = req.user?.rol === 'co-admin';
 
   const existing = await query<SolicitudRow & { preparado_por: number }>('SELECT id, numero, estado, preparado_por FROM solicitudes_pago WHERE id = $1', [id]);
   if (existing.rows.length === 0) {
@@ -1595,16 +1596,18 @@ router.delete('/:id', [
   }
 
   if (!isAdmin) {
-    // Usuarios normales: solo pendientes
+    // Co-admin y usuarios normales: solo pendientes
     if (existing.rows[0].estado !== 'pendiente') {
       res.status(400).json({ success: false, message: 'Solo se pueden eliminar solicitudes en estado pendiente' });
       return;
     }
-    // Verificar propiedad o permiso
-    if (!req.user?.permissions?.solicitudes_editar_todas) {
-      if (existing.rows[0].preparado_por !== req.user!.id) {
-        res.status(403).json({ success: false, message: 'Solo puedes eliminar tus propias solicitudes' });
-        return;
+    // Usuarios normales: verificar propiedad o permiso
+    if (!isCoAdmin) {
+      if (!req.user?.permissions?.solicitudes_editar_todas) {
+        if (existing.rows[0].preparado_por !== req.user!.id) {
+          res.status(403).json({ success: false, message: 'Solo puedes eliminar tus propias solicitudes' });
+          return;
+        }
       }
     }
   }

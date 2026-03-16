@@ -152,7 +152,7 @@ router.post('/login', authLimiter, [
     rol: user.rol
   };
 
-  const token = jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: '24h' });
+  const token = jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: '7d' });
 
   // Remover password del objeto de respuesta
   const { password: _, ...userWithoutPassword } = user;
