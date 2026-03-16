@@ -73,6 +73,10 @@ interface PDFInput {
   codigo_verificacion?: string;
   total_aprobadores: number;
   aprobadores_proyecto: AprobadorData[];
+  reembolso?: {
+    fecha_reembolso: string;
+    registrado_por_nombre: string;
+  };
 }
 
 // --- Colors ---
@@ -201,7 +205,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     y = drawField('Preparado por', data.solicitud.preparado_nombre || '-', colLeft, y, colW);
     {
       let badgeX = colRight;
-      const badgeY = y - 14;
+      const badgeY = y - 18;
 
       if (data.solicitud.urgente) {
         doc.save();
@@ -402,15 +406,31 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       if (y + 22 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
 
       const statusBoxH = 22;
-      if (allApproved) {
+      let statusMsg: string;
+      let statusGreen = false;
+
+      if (allApproved && data.comprobante && data.factura) {
+        statusMsg = 'Solicitud aprobada, pagada y facturada';
+        statusGreen = true;
+      } else if (allApproved && data.comprobante && !data.factura) {
+        statusMsg = 'Solicitud aprobada y pagada — pendiente registro de factura';
+        statusGreen = true;
+      } else if (allApproved) {
+        statusMsg = 'Solicitud aprobada — proceder con el pago';
+        statusGreen = true;
+      } else {
+        statusMsg = 'Solicitud con aprobaciones pendientes — esperar hasta obtener todas las aprobaciones';
+      }
+
+      if (statusGreen) {
         doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).fill('#dcfce7');
         doc.font('Helvetica-Bold').fontSize(8).fillColor('#166534');
-        doc.text('Solicitud aprobada — proceder con el pago', tableX + 8, y + 7, { width: pageWidth - 16, lineBreak: false });
+        doc.text(statusMsg, tableX + 8, y + 7, { width: pageWidth - 16, lineBreak: false });
       } else {
         doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).fill('#fffbeb');
         doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).strokeColor('#fde68a').lineWidth(0.5).stroke();
         doc.font('Helvetica-Bold').fontSize(8).fillColor('#92400e');
-        doc.text('Solicitud con aprobaciones pendientes — esperar hasta obtener todas las aprobaciones', tableX + 8, y + 7, { width: pageWidth - 16, lineBreak: false });
+        doc.text(statusMsg, tableX + 8, y + 7, { width: pageWidth - 16, lineBreak: false });
       }
       y += statusBoxH + 6;
     }
@@ -425,6 +445,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       if (y + apBoxH > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
 
       const apContainerW = (pageWidth - 16) / 2 + 16;
+      const apStartY = y;
       doc.roundedRect(tableX, y, apContainerW, apBoxH, 2).strokeColor('#e2e8f0').lineWidth(0.5).stroke();
       doc.font('Helvetica-Bold').fontSize(7.5).fillColor(NAVY);
       doc.text('Aprobaciones', tableX + 8, y + 5, { width: apContainerW - 16, lineBreak: false });
@@ -464,6 +485,29 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
         apY += 16;
       }
+
+      // Recuadro de reembolso (a la derecha de aprobaciones)
+      if (data.solicitud.pinellas_paga) {
+        const reembX = tableX + apContainerW + 8;
+        const reembW = pageWidth - apContainerW - 8;
+
+        if (data.reembolso) {
+          const reembBoxH = 45;
+          doc.roundedRect(reembX, apStartY, reembW, reembBoxH, 2).fill('#eff6ff');
+          doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#1e40af');
+          doc.text('Reembolso registrado', reembX + 8, apStartY + 5, { width: reembW - 16, lineBreak: false });
+          doc.font('Helvetica').fontSize(7).fillColor('#1e40af');
+          doc.text(`Fecha: ${formatDate(data.reembolso.fecha_reembolso)}`, reembX + 8, apStartY + 19, { width: reembW - 16, lineBreak: false });
+          doc.text(`Por: ${data.reembolso.registrado_por_nombre}`, reembX + 8, apStartY + 31, { width: reembW - 16, lineBreak: false });
+        } else {
+          const reembBoxH = 22;
+          doc.roundedRect(reembX, apStartY, reembW, reembBoxH, 2).fill('#fffbeb');
+          doc.roundedRect(reembX, apStartY, reembW, reembBoxH, 2).strokeColor('#fde68a').lineWidth(0.5).stroke();
+          doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#92400e');
+          doc.text('Reembolso pendiente', reembX + 8, apStartY + 7, { width: reembW - 16, lineBreak: false });
+        }
+      }
+
       y += apBoxH + 6;
     }
 
@@ -492,7 +536,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     if (data.factura) {
       if (y + 40 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
 
-      const FACTURA_BG = '#f0fdf4';
+      const FACTURA_BG = '#eff6ff';
       let factText = `Fecha de factura: ${formatDate(data.factura.fecha_factura)}`;
       if (data.factura.numero_factura) {
         factText += `  —  Nro: ${data.factura.numero_factura}`;
@@ -502,10 +546,10 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       const factBoxH = 32;
 
       doc.roundedRect(tableX, y, pageWidth, factBoxH, 2).fill(FACTURA_BG);
-      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#166534');
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#1e40af');
       doc.text('Factura', tableX + 8, y + 5, { width: pageWidth - 16, lineBreak: false });
 
-      doc.font('Helvetica').fontSize(7.5).fillColor('#166534');
+      doc.font('Helvetica').fontSize(7.5).fillColor('#1e40af');
       doc.text(factText, tableX + 8, y + 18, { width: pageWidth - 16, lineBreak: false });
 
       y += factBoxH + 6;

@@ -109,3 +109,16 @@ Content-Type: application/json
 ### Test Delete Project
 DELETE https://andrei-backend-production.up.railway.app/api/projects/1
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiYWRtaW5AYW5kcmVpLmNvbSIsInJvbCI6ImFkbWluIiwiaWF0IjoxNzU1MTAzMzg3LCJleHAiOjE3NTUxODk3ODd9.aIsS3bD9fQppy9092C6JZwkyYoeckadBzaALO-UMR-Y
+
+### Login Ivan Produccion
+POST https://andrei-backend-production.up.railway.app/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "ivan@pinellaspanama.com",
+  "password": "123456"
+}
+
+### Test Notificaciones Diarias
+POST https://andrei-backend-production.up.railway.app/api/notifications/test-daily
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoiaXZhbkBwaW5lbGxhc3BhbmFtYS5jb20iLCJyb2wiOiJhZG1pbiIsImlhdCI6MTc3MzI2MTc1MiwiZXhwIjoxNzczMzQ4MTUyfQ.h6JWuECrr6WiK26Y1Xdz1T6y8sMTza2TYm_ZELb4YuU

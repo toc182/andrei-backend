@@ -99,6 +99,20 @@ router.get('/:id/pdf', [
     }
   }
 
+  // Reembolso (si pinellas_paga)
+  let pdfReembolso: { fecha_reembolso: string; registrado_por_nombre: string } | undefined;
+  if (sol.pinellas_paga) {
+    const reembResult = await query<{ fecha_reembolso: string; registrado_por_nombre: string }>(`
+      SELECT rp.fecha_reembolso, u.nombre as registrado_por_nombre
+      FROM reembolsos_pinellas rp
+      LEFT JOIN users u ON rp.registrado_por = u.id
+      WHERE rp.solicitud_id = $1
+    `, [id]);
+    if (reembResult.rows.length > 0) {
+      pdfReembolso = reembResult.rows[0];
+    }
+  }
+
   const solicitudBuffer = await generateSolicitudPDF({
     solicitud: {
       numero: sol.numero,
@@ -126,12 +140,13 @@ router.get('/:id/pdf', [
     factura: pdfFactura,
     codigo_verificacion: sol.codigo_verificacion,
     total_aprobadores: totalAprobadores,
-    aprobadores_proyecto: aprobadoresProyecto.rows
+    aprobadores_proyecto: aprobadoresProyecto.rows,
+    reembolso: pdfReembolso
   });
 
   // Obtener adjuntos (solo normales, no comprobantes)
   const adjuntos = await query<{ r2_key: string; tipo_mime: string; nombre_original: string }>(
-    'SELECT r2_key, tipo_mime, nombre_original FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 AND (tipo_adjunto = \'adjunto\' OR tipo_adjunto IS NULL) ORDER BY created_at',
+    `SELECT r2_key, tipo_mime, nombre_original FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 ORDER BY CASE tipo_adjunto WHEN 'comprobante' THEN 1 WHEN 'factura' THEN 2 ELSE 3 END, created_at`,
     [id]
   );
 
@@ -933,6 +948,25 @@ router.put('/:id', [
   }
 
   res.json({ success: true, message: 'Solicitud actualizada', solicitud: result.rows[0], aprobaciones_anuladas: tieneAprobacionesParciales });
+}));
+
+// --- PATCH /:id/pinellas-paga — Toggle pinellas_paga ---
+router.patch('/:id/pinellas-paga', [
+  param('id').isInt(),
+  body('pinellas_paga').isBoolean().withMessage('pinellas_paga debe ser booleano')
+], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { pinellas_paga } = req.body;
+
+  const existing = await query<SolicitudRow>('SELECT id FROM solicitudes_pago WHERE id = $1', [id]);
+  if (existing.rows.length === 0) {
+    res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    return;
+  }
+
+  await query('UPDATE solicitudes_pago SET pinellas_paga = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [pinellas_paga, id]);
+
+  res.json({ success: true, message: 'Campo pinellas_paga actualizado' });
 }));
 
 // --- PATCH /:id/estado — Cambiar estado ---
