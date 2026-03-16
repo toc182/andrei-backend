@@ -831,6 +831,26 @@ router.put('/:id', [
     }
   }
 
+  // Verificar estado de aprobaciones
+  const aprobacionesResult = await query<{ count: string }>(
+    'SELECT COUNT(*) as count FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1 AND accion = $2',
+    [id, 'aprobado']
+  );
+  const aprobacionesCount = parseInt(aprobacionesResult.rows[0].count);
+
+  const aprobadoresTotalResult = await query<{ count: string }>(
+    'SELECT COUNT(*) as count FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true',
+    [existing.rows[0].proyecto_id]
+  );
+  const aprobadoresTotal = parseInt(aprobadoresTotalResult.rows[0].count);
+
+  if (aprobacionesCount > 0 && aprobadoresTotal > 0 && aprobacionesCount >= aprobadoresTotal) {
+    res.status(403).json({ success: false, message: 'No se puede editar una solicitud con todas las aprobaciones completas' });
+    return;
+  }
+
+  const tieneAprobacionesParciales = aprobacionesCount > 0;
+
   const {
     fecha, proveedor, solicitado_por, requisicion_id,
     observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta,
@@ -891,7 +911,14 @@ router.put('/:id', [
     `, [id, ajuste.tipo, ajuste.descripcion, ajuste.porcentaje || null, ajuste.monto, ajuste.orden]);
   }
 
-  res.json({ success: true, message: 'Solicitud actualizada', solicitud: result.rows[0] });
+  // Si tenía aprobaciones parciales, anularlas y resetear estado
+  if (tieneAprobacionesParciales) {
+    await query('DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1', [id]);
+    await query('DELETE FROM solicitud_revisiones WHERE solicitud_pago_id = $1', [id]);
+    await query('UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', ['pendiente', id]);
+  }
+
+  res.json({ success: true, message: 'Solicitud actualizada', solicitud: result.rows[0], aprobaciones_anuladas: tieneAprobacionesParciales });
 }));
 
 // --- PATCH /:id/estado — Cambiar estado ---
