@@ -56,6 +56,17 @@ router.get('/:id/pdf', [
 
   const sol = solicitud.rows[0];
 
+  const totalAprobadoresResult = await query<{ count: string }>(
+    'SELECT COUNT(*) as count FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true',
+    [sol.proyecto_id]
+  );
+  const totalAprobadores = parseInt(totalAprobadoresResult.rows[0].count);
+
+  const aprobadoresProyecto = await query<{ user_id: number; nombre: string; orden: number }>(
+    'SELECT pas.user_id, u.nombre, pas.orden FROM project_approval_settings pas JOIN users u ON u.id = pas.user_id WHERE pas.proyecto_id = $1 AND pas.activo = true ORDER BY pas.orden',
+    [sol.proyecto_id]
+  );
+
   // Comprobante de pago (si está pagada o facturada)
   let pdfComprobante: { fecha_pago: string; registrado_por_nombre: string } | undefined;
   if (sol.estado === 'pagada' || sol.estado === 'facturada') {
@@ -105,14 +116,17 @@ router.get('/:id/pdf', [
       beneficiario: sol.beneficiario,
       banco: sol.banco,
       tipo_cuenta: sol.tipo_cuenta,
-      numero_cuenta: sol.numero_cuenta
+      numero_cuenta: sol.numero_cuenta,
+      pinellas_paga: sol.pinellas_paga
     },
     items: items.rows,
     ajustes: ajustes.rows,
     aprobaciones: aprobaciones.rows,
     comprobante: pdfComprobante,
     factura: pdfFactura,
-    codigo_verificacion: sol.codigo_verificacion
+    codigo_verificacion: sol.codigo_verificacion,
+    total_aprobadores: totalAprobadores,
+    aprobadores_proyecto: aprobadoresProyecto.rows
   });
 
   // Obtener adjuntos (solo normales, no comprobantes)

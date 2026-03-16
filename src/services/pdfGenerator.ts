@@ -26,6 +26,7 @@ interface SolicitudData {
   banco: string | null;
   tipo_cuenta: string | null;
   numero_cuenta: string | null;
+  pinellas_paga: boolean;
 }
 
 interface ItemData {
@@ -49,6 +50,12 @@ interface AprobacionData {
   fecha: string;
 }
 
+interface AprobadorData {
+  user_id: number;
+  nombre: string;
+  orden: number;
+}
+
 interface PDFInput {
   solicitud: SolicitudData;
   items: ItemData[];
@@ -64,6 +71,8 @@ interface PDFInput {
     registrado_por_nombre: string;
   };
   codigo_verificacion?: string;
+  total_aprobadores: number;
+  aprobadores_proyecto: AprobadorData[];
 }
 
 // --- Colors ---
@@ -94,7 +103,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
   // Pre-generate QR code buffer (must be done before entering PDFKit's sync callback)
   let qrBuffer: Buffer | null = null;
   let verifyUrl = '';
-  if (data.codigo_verificacion) {
+  if (data.codigo_verificacion && data.total_aprobadores > 0 && data.aprobaciones.length >= data.total_aprobadores) {
     verifyUrl = `https://sistema.pinellaspanama.com/verificar/${data.codigo_verificacion}`;
     const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
       width: 180,
@@ -190,14 +199,26 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
     // Row 3: Preparado por | Urgente badge
     y = drawField('Preparado por', data.solicitud.preparado_nombre || '-', colLeft, y, colW);
-    if (data.solicitud.urgente) {
-      doc.save();
-      const badgeX = colRight;
+    {
+      let badgeX = colRight;
       const badgeY = y - 14;
-      doc.roundedRect(badgeX, badgeY, 58, 14, 2).fill('#e53e3e');
-      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#ffffff');
-      doc.text('URGENTE', badgeX + 8, badgeY + 3, { lineBreak: false });
-      doc.restore();
+
+      if (data.solicitud.urgente) {
+        doc.save();
+        doc.roundedRect(badgeX, badgeY, 58, 14, 2).fill('#e53e3e');
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#ffffff');
+        doc.text('URGENTE', badgeX + 8, badgeY + 4, { lineBreak: false });
+        doc.restore();
+        badgeX += 62;
+      }
+
+      if (data.solicitud.pinellas_paga) {
+        doc.save();
+        doc.roundedRect(badgeX, badgeY, 108, 14, 2).fill('#d97706');
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#ffffff');
+        doc.text('REEMBOLSO PINELLAS', badgeX + 8, badgeY + 4, { lineBreak: false });
+        doc.restore();
+      }
     }
 
     // ==========================================
@@ -373,23 +394,75 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     }
 
     // ==========================================
-    // 7. APROBACIONES
+    // 7. ESTADO DE APROBACIONES
     // ==========================================
-    const approvedAprobaciones = data.aprobaciones.filter(a => a.accion === 'aprobado');
-    if (approvedAprobaciones.length > 0) {
-      if (y + 25 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+    {
+      const allApproved = data.total_aprobadores > 0 && data.aprobaciones.filter(a => a.accion === 'aprobado').length >= data.total_aprobadores;
 
-      const apBoxH = 18 + approvedAprobaciones.length * 13;
+      if (y + 22 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
 
-      doc.roundedRect(tableX, y, pageWidth, apBoxH, 2).fill(APPROVAL_BG);
-      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#276749');
-      doc.text('Aprobaciones', tableX + 8, y + 5, { width: pageWidth - 16, lineBreak: false });
+      const statusBoxH = 22;
+      if (allApproved) {
+        doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).fill('#dcfce7');
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#166534');
+        doc.text('Solicitud aprobada — proceder con el pago', tableX + 8, y + 7, { width: pageWidth - 16, lineBreak: false });
+      } else {
+        doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).fill('#fffbeb');
+        doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).strokeColor('#fde68a').lineWidth(0.5).stroke();
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#92400e');
+        doc.text('Solicitud con aprobaciones pendientes — esperar hasta obtener todas las aprobaciones', tableX + 8, y + 7, { width: pageWidth - 16, lineBreak: false });
+      }
+      y += statusBoxH + 6;
+    }
+
+    // ==========================================
+    // 7b. DETALLE DE APROBACIONES
+    // ==========================================
+    if (data.aprobadores_proyecto.length > 0) {
+      const apCount = data.aprobadores_proyecto.length;
+      const apBoxH = 18 + apCount * 16;
+
+      if (y + apBoxH > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+
+      const apContainerW = (pageWidth - 16) / 2 + 16;
+      doc.roundedRect(tableX, y, apContainerW, apBoxH, 2).strokeColor('#e2e8f0').lineWidth(0.5).stroke();
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(NAVY);
+      doc.text('Aprobaciones', tableX + 8, y + 5, { width: apContainerW - 16, lineBreak: false });
 
       let apY = y + 18;
-      for (const aprobacion of approvedAprobaciones) {
-        doc.font('Helvetica').fontSize(7.5).fillColor('#276749');
-        doc.text(`\u2713 ${aprobacion.usuario_nombre} — ${formatDate(aprobacion.fecha)}`, tableX + 8, apY, { width: pageWidth - 16, lineBreak: false });
-        apY += 13;
+      for (const aprobador of data.aprobadores_proyecto) {
+        const aprobacion = data.aprobaciones.find(a => a.usuario_nombre === aprobador.nombre);
+
+        let bgColor: string;
+        let textColor: string;
+        let icon: string;
+        let statusText: string;
+
+        if (aprobacion && aprobacion.accion === 'aprobado') {
+          bgColor = '#dcfce7';
+          textColor = '#166534';
+          icon = '\u2022';
+          statusText = `Aprobado — ${formatDate(aprobacion.fecha)}`;
+        } else if (aprobacion && aprobacion.accion === 'rechazado') {
+          bgColor = '#fee2e2';
+          textColor = '#991b1b';
+          icon = '\u2022';
+          statusText = `Rechazado — ${formatDate(aprobacion.fecha)}`;
+        } else {
+          bgColor = '#fffbeb';
+          textColor = '#92400e';
+          icon = '\u2022';
+          statusText = 'Pendiente';
+        }
+
+        const apRowW = (pageWidth - 16) / 2;
+        doc.roundedRect(tableX + 8, apY, apRowW, 13, 2).fill(bgColor);
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor(textColor);
+        doc.text(`${icon} ${aprobador.nombre}`, tableX + 14, apY + 3, { width: apRowW - 12, lineBreak: false });
+        doc.font('Helvetica').fontSize(7).fillColor(textColor);
+        doc.text(statusText, tableX + 14, apY + 3, { width: apRowW - 12, align: 'right', lineBreak: false });
+
+        apY += 16;
       }
       y += apBoxH + 6;
     }
