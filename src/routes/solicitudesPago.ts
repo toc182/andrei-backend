@@ -370,18 +370,79 @@ router.get('/reembolsos/pendientes', asyncHandler(async (_req: Request, res: Res
   res.json({ success: true, solicitudes: result.rows });
 }));
 
+// Helper: enrich solicitudes with aprobadores_estado
+async function enrichWithAprobadoresEstado(solicitudes: SolicitudRow[]): Promise<(SolicitudRow & { aprobadores_estado: { nombre: string; estado: string }[] })[]> {
+  if (solicitudes.length === 0) return [];
+
+  const proyectoIds = [...new Set(solicitudes.map(s => s.proyecto_id).filter(Boolean))] as number[];
+  const solicitudIds = solicitudes.map(s => s.id);
+
+  if (proyectoIds.length === 0) {
+    return solicitudes.map(s => ({ ...s, aprobadores_estado: [] }));
+  }
+
+  const [aprobadoresRes, aprobacionesRes] = await Promise.all([
+    query<{ proyecto_id: number; user_id: number; orden: number; nombre: string }>(
+      `SELECT pas.proyecto_id, pas.user_id, pas.orden, u.nombre
+       FROM project_approval_settings pas
+       JOIN users u ON pas.user_id = u.id
+       WHERE pas.proyecto_id = ANY($1::int[]) AND pas.activo = true
+       ORDER BY pas.proyecto_id, pas.orden`,
+      [proyectoIds]
+    ),
+    query<{ solicitud_pago_id: number; user_id: number; accion: string }>(
+      `SELECT sa.solicitud_pago_id, sa.user_id, sa.accion
+       FROM solicitud_aprobaciones sa
+       WHERE sa.solicitud_pago_id = ANY($1::int[])`,
+      [solicitudIds]
+    )
+  ]);
+
+  // Index approvers by proyecto_id
+  const aprobadoresPorProyecto = new Map<number, { user_id: number; nombre: string }[]>();
+  for (const row of aprobadoresRes.rows) {
+    if (!aprobadoresPorProyecto.has(row.proyecto_id)) {
+      aprobadoresPorProyecto.set(row.proyecto_id, []);
+    }
+    aprobadoresPorProyecto.get(row.proyecto_id)!.push({ user_id: row.user_id, nombre: row.nombre });
+  }
+
+  // Index approvals by solicitud_id + user_id
+  const aprobacionesMap = new Map<string, string>();
+  for (const row of aprobacionesRes.rows) {
+    aprobacionesMap.set(`${row.solicitud_pago_id}-${row.user_id}`, row.accion);
+  }
+
+  return solicitudes.map(sol => {
+    const aprobadores = sol.proyecto_id ? (aprobadoresPorProyecto.get(sol.proyecto_id) || []) : [];
+    const aprobadores_estado = aprobadores.map(a => ({
+      nombre: a.nombre,
+      estado: aprobacionesMap.get(`${sol.id}-${a.user_id}`) || 'pendiente'
+    }));
+    return { ...sol, aprobadores_estado };
+  });
+}
+
 // --- GET / — Listar todas (global) ---
 router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const { estado, proyecto_id } = req.query;
+  const currentUserId = req.user!.id;
 
   let whereClause = 'WHERE 1=1';
-  const params: unknown[] = [];
-  let paramCount = 0;
+  const params: unknown[] = [currentUserId];
+  let paramCount = 1;
 
   if (estado && estado !== 'all') {
-    paramCount++;
-    whereClause += ` AND sp.estado = $${paramCount}`;
-    params.push(estado);
+    const estados = (estado as string).split(',').map(e => e.trim()).filter(Boolean);
+    if (estados.length === 1) {
+      paramCount++;
+      whereClause += ` AND sp.estado = $${paramCount}`;
+      params.push(estados[0]);
+    } else if (estados.length > 1) {
+      paramCount++;
+      whereClause += ` AND sp.estado = ANY($${paramCount}::text[])`;
+      params.push(estados);
+    }
   }
 
   if (proyecto_id) {
@@ -394,7 +455,6 @@ router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> 
   let revisadaSelect = '';
 
   if (req.query.pending_my_approval === 'true') {
-    const userId = req.user!.id;
     paramCount++;
     whereClause += ` AND sp.estado = 'pendiente'
       AND EXISTS (
@@ -407,19 +467,29 @@ router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> 
             WHERE sa.solicitud_pago_id = sp.id AND sa.accion = 'aprobado'
           )
       )`;
-    params.push(userId);
+    params.push(currentUserId);
 
     paramCount++;
     revisadaJoin = `LEFT JOIN solicitud_revisiones sr ON sr.solicitud_pago_id = sp.id AND sr.user_id = $${paramCount}`;
     revisadaSelect = ', CASE WHEN sr.id IS NOT NULL THEN true ELSE false END as revisada';
-    params.push(req.user!.id);
+    params.push(currentUserId);
   }
 
   const result = await query<SolicitudRow>(`
     SELECT sp.*,
       COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
       u1.nombre as preparado_nombre,
-      u2.nombre as solicitado_nombre
+      u2.nombre as solicitado_nombre,
+      CASE WHEN sp.estado = 'pendiente' AND EXISTS (
+        SELECT 1 FROM project_approval_settings pas
+        WHERE pas.proyecto_id = sp.proyecto_id
+          AND pas.user_id = $1 AND pas.activo = true
+          AND pas.orden = (
+            SELECT COUNT(*) + 1
+            FROM solicitud_aprobaciones sa
+            WHERE sa.solicitud_pago_id = sp.id AND sa.accion = 'aprobado'
+          )
+      ) THEN true ELSE false END as es_mi_turno
       ${revisadaSelect}
     FROM solicitudes_pago sp
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
@@ -430,29 +500,37 @@ router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> 
     ORDER BY sp.created_at DESC
   `, params);
 
-  res.json({ success: true, solicitudes: result.rows });
+  const enriched = await enrichWithAprobadoresEstado(result.rows);
+  res.json({ success: true, solicitudes: enriched });
 }));
 
 // --- GET /project/:projectId — Listar del proyecto ---
 router.get('/project/:projectId', asyncHandler(async (req: Request<{ projectId: string }>, res: Response): Promise<void> => {
   const { projectId } = req.params;
   const { estado } = req.query;
+  const currentUserId = req.user!.id;
 
   let whereClause = 'WHERE sp.proyecto_id = $1';
-  const params: unknown[] = [projectId];
-  let paramCount = 1;
+  const params: unknown[] = [projectId, currentUserId];
+  let paramCount = 2;
 
   if (estado && estado !== 'all') {
-    paramCount++;
-    whereClause += ` AND sp.estado = $${paramCount}`;
-    params.push(estado);
+    const estados = (estado as string).split(',').map(e => e.trim()).filter(Boolean);
+    if (estados.length === 1) {
+      paramCount++;
+      whereClause += ` AND sp.estado = $${paramCount}`;
+      params.push(estados[0]);
+    } else if (estados.length > 1) {
+      paramCount++;
+      whereClause += ` AND sp.estado = ANY($${paramCount}::text[])`;
+      params.push(estados);
+    }
   }
 
   let revisadaJoin = '';
   let revisadaSelect = '';
 
   if (req.query.pending_my_approval === 'true') {
-    const userId = req.user!.id;
     paramCount++;
     whereClause += ` AND sp.estado = 'pendiente'
       AND EXISTS (
@@ -465,19 +543,29 @@ router.get('/project/:projectId', asyncHandler(async (req: Request<{ projectId: 
             WHERE sa.solicitud_pago_id = sp.id AND sa.accion = 'aprobado'
           )
       )`;
-    params.push(userId);
+    params.push(currentUserId);
 
     paramCount++;
     revisadaJoin = `LEFT JOIN solicitud_revisiones sr ON sr.solicitud_pago_id = sp.id AND sr.user_id = $${paramCount}`;
     revisadaSelect = ', CASE WHEN sr.id IS NOT NULL THEN true ELSE false END as revisada';
-    params.push(req.user!.id);
+    params.push(currentUserId);
   }
 
   const result = await query<SolicitudRow>(`
     SELECT sp.*,
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
-      r.numero as requisicion_numero
+      r.numero as requisicion_numero,
+      CASE WHEN sp.estado = 'pendiente' AND EXISTS (
+        SELECT 1 FROM project_approval_settings pas
+        WHERE pas.proyecto_id = sp.proyecto_id
+          AND pas.user_id = $2 AND pas.activo = true
+          AND pas.orden = (
+            SELECT COUNT(*) + 1
+            FROM solicitud_aprobaciones sa
+            WHERE sa.solicitud_pago_id = sp.id AND sa.accion = 'aprobado'
+          )
+      ) THEN true ELSE false END as es_mi_turno
       ${revisadaSelect}
     FROM solicitudes_pago sp
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
@@ -488,12 +576,14 @@ router.get('/project/:projectId', asyncHandler(async (req: Request<{ projectId: 
     ORDER BY sp.created_at DESC
   `, params);
 
-  // También devolver info del prefijo
-  const project = await query<{ sp_prefijo: string | null }>('SELECT sp_prefijo FROM proyectos WHERE id = $1', [projectId]);
+  const [enriched, project] = await Promise.all([
+    enrichWithAprobadoresEstado(result.rows),
+    query<{ sp_prefijo: string | null }>('SELECT sp_prefijo FROM proyectos WHERE id = $1', [projectId])
+  ]);
 
   res.json({
     success: true,
-    solicitudes: result.rows,
+    solicitudes: enriched,
     sp_prefijo: project.rows[0]?.sp_prefijo || null
   });
 }));
