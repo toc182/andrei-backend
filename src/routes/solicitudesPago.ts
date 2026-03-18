@@ -320,7 +320,7 @@ async function generateNumero(projectId: number): Promise<string> {
   const prefijo = project.rows[0].sp_prefijo;
   if (!prefijo) throw new Error('PREFIJO_NO_CONFIGURADO');
 
-  const count = await query<{ total: string }>('SELECT COUNT(*)::text as total FROM solicitudes_pago WHERE proyecto_id = $1', [projectId]);
+  const count = await query<{ total: string }>('SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, \'-\', 2) AS INTEGER)), 0)::text as total FROM solicitudes_pago WHERE proyecto_id = $1', [projectId]);
   const nextNum = parseInt(count.rows[0].total) + 1;
 
   return `${prefijo}-${String(nextNum).padStart(3, '0')}`;
@@ -381,7 +381,7 @@ async function enrichWithAprobadoresEstado(solicitudes: SolicitudRow[]): Promise
     return solicitudes.map(s => ({ ...s, aprobadores_estado: [] }));
   }
 
-  const [aprobadoresRes, aprobacionesRes] = await Promise.all([
+  const [aprobadoresRes, aprobacionesRes, reembolsosRes] = await Promise.all([
     query<{ proyecto_id: number; user_id: number; orden: number; nombre: string }>(
       `SELECT pas.proyecto_id, pas.user_id, pas.orden, u.nombre
        FROM project_approval_settings pas
@@ -394,6 +394,12 @@ async function enrichWithAprobadoresEstado(solicitudes: SolicitudRow[]): Promise
       `SELECT sa.solicitud_pago_id, sa.user_id, sa.accion
        FROM solicitud_aprobaciones sa
        WHERE sa.solicitud_pago_id = ANY($1::int[])`,
+      [solicitudIds]
+    ),
+    query<{ solicitud_id: number }>(
+      `SELECT rp.solicitud_id
+       FROM reembolsos_pinellas rp
+       WHERE rp.solicitud_id = ANY($1::int[])`,
       [solicitudIds]
     )
   ]);
@@ -413,13 +419,16 @@ async function enrichWithAprobadoresEstado(solicitudes: SolicitudRow[]): Promise
     aprobacionesMap.set(`${row.solicitud_pago_id}-${row.user_id}`, row.accion);
   }
 
+  // Set of solicitud IDs that have reembolso registered
+  const reembolsoIds = new Set(reembolsosRes.rows.map(r => r.solicitud_id));
+
   return solicitudes.map(sol => {
     const aprobadores = sol.proyecto_id ? (aprobadoresPorProyecto.get(sol.proyecto_id) || []) : [];
     const aprobadores_estado = aprobadores.map(a => ({
       nombre: a.nombre,
       estado: aprobacionesMap.get(`${sol.id}-${a.user_id}`) || 'pendiente'
     }));
-    return { ...sol, aprobadores_estado };
+    return { ...sol, aprobadores_estado, reembolso_registrado: reembolsoIds.has(sol.id) };
   });
 }
 
