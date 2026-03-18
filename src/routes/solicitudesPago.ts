@@ -114,6 +114,7 @@ router.get('/:id/pdf', [
   }
 
   const solicitudBuffer = await generateSolicitudPDF({
+    estado: sol.estado,
     solicitud: {
       numero: sol.numero,
       fecha: sol.fecha,

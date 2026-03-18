@@ -58,6 +58,7 @@ interface AprobadorData {
 
 interface PDFInput {
   solicitud: SolicitudData;
+  estado: string;
   items: ItemData[];
   ajustes: AjusteData[];
   aprobaciones: AprobacionData[];
@@ -107,7 +108,8 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
   // Pre-generate QR code buffer (must be done before entering PDFKit's sync callback)
   let qrBuffer: Buffer | null = null;
   let verifyUrl = '';
-  if (data.codigo_verificacion && data.total_aprobadores > 0 && data.aprobaciones.length >= data.total_aprobadores) {
+  const esPagadaOFacturada = data.estado === 'pagada' || data.estado === 'facturada';
+  if (data.codigo_verificacion && (esPagadaOFacturada || (data.total_aprobadores > 0 && data.aprobaciones.length >= data.total_aprobadores))) {
     verifyUrl = `https://sistema.pinellaspanama.com/verificar/${data.codigo_verificacion}`;
     const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
       width: 180,
@@ -409,7 +411,13 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       let statusMsg: string;
       let statusGreen = false;
 
-      if (allApproved && data.comprobante && data.factura) {
+      if (esPagadaOFacturada && data.estado === 'facturada') {
+        statusMsg = 'Solicitud aprobada, pagada y facturada';
+        statusGreen = true;
+      } else if (esPagadaOFacturada && data.estado === 'pagada') {
+        statusMsg = 'Solicitud aprobada y pagada — pendiente registro de factura';
+        statusGreen = true;
+      } else if (allApproved && data.comprobante && data.factura) {
         statusMsg = 'Solicitud aprobada, pagada y facturada';
         statusGreen = true;
       } else if (allApproved && data.comprobante && !data.factura) {
@@ -438,8 +446,13 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     // ==========================================
     // 7b. DETALLE DE APROBACIONES
     // ==========================================
-    if (data.aprobadores_proyecto.length > 0) {
-      const apCount = data.aprobadores_proyecto.length;
+    // For pagada/facturada, show only registered approvals; otherwise show all project approvers
+    const aprobadoresAMostrar = esPagadaOFacturada
+      ? data.aprobaciones.map((a, i) => ({ nombre: a.usuario_nombre, orden: i + 1 }))
+      : data.aprobadores_proyecto;
+
+    if (aprobadoresAMostrar.length > 0) {
+      const apCount = aprobadoresAMostrar.length;
       const apBoxH = 18 + apCount * 16;
 
       if (y + apBoxH > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
@@ -451,7 +464,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       doc.text('Aprobaciones', tableX + 8, y + 5, { width: apContainerW - 16, lineBreak: false });
 
       let apY = y + 18;
-      for (const aprobador of data.aprobadores_proyecto) {
+      for (const aprobador of aprobadoresAMostrar) {
         const aprobacion = data.aprobaciones.find(a => a.usuario_nombre === aprobador.nombre);
 
         let bgColor: string;
