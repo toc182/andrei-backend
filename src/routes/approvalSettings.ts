@@ -63,17 +63,39 @@ router.put('/project/:projectId', [
     return;
   }
 
-  // Eliminar aprobadores actuales
-  await query('DELETE FROM project_approval_settings WHERE proyecto_id = $1', [projectId]);
+  await query('BEGIN');
 
-  // Insertar nuevos en una sola query
-  if (approvers.length > 0) {
-    const values = approvers.map((_, i) => `($1, $${i * 2 + 2}, $${i * 2 + 3}, true)`).join(', ');
-    const params: unknown[] = [projectId, ...approvers.flatMap(a => [a.user_id, a.orden])];
-    await query(`
-      INSERT INTO project_approval_settings (proyecto_id, user_id, orden, activo)
-      VALUES ${values}
-    `, params);
+  try {
+    // Resetear solicitudes no finalizadas del proyecto
+    const affected = await query<{ id: number }>(
+      `SELECT id FROM solicitudes_pago WHERE proyecto_id = $1 AND estado NOT IN ('pagada', 'facturada')`,
+      [projectId]
+    );
+
+    if (affected.rows.length > 0) {
+      const affectedIds = affected.rows.map(r => r.id);
+      await query('DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = ANY($1::int[])', [affectedIds]);
+      await query('DELETE FROM solicitud_revisiones WHERE solicitud_pago_id = ANY($1::int[])', [affectedIds]);
+      await query(`UPDATE solicitudes_pago SET estado = 'pendiente' WHERE id = ANY($1::int[])`, [affectedIds]);
+    }
+
+    // Eliminar aprobadores actuales
+    await query('DELETE FROM project_approval_settings WHERE proyecto_id = $1', [projectId]);
+
+    // Insertar nuevos en una sola query
+    if (approvers.length > 0) {
+      const values = approvers.map((_, i) => `($1, $${i * 2 + 2}, $${i * 2 + 3}, true)`).join(', ');
+      const params: unknown[] = [projectId, ...approvers.flatMap(a => [a.user_id, a.orden])];
+      await query(`
+        INSERT INTO project_approval_settings (proyecto_id, user_id, orden, activo)
+        VALUES ${values}
+      `, params);
+    }
+
+    await query('COMMIT');
+  } catch (err) {
+    await query('ROLLBACK');
+    throw err;
   }
 
   // Retornar la lista actualizada
