@@ -1500,13 +1500,42 @@ router.patch(
       const { pinellas_paga } = req.body;
 
       const existing = await query<SolicitudRow>(
-        'SELECT id FROM solicitudes_pago WHERE id = $1',
+        'SELECT id, estado, pinellas_paga, preparado_por FROM solicitudes_pago WHERE id = $1',
         [id],
       );
       if (existing.rows.length === 0) {
         res
           .status(404)
           .json({ success: false, message: 'Solicitud no encontrada' });
+        return;
+      }
+
+      const sol = existing.rows[0];
+      const userId = req.user!.id;
+      const userRol = req.user!.rol;
+      const isAdminOrCoAdmin =
+        userRol === 'admin' || userRol === 'co-admin';
+      const isCreator = sol.preparado_por === userId;
+
+      if (!isAdminOrCoAdmin && !isCreator) {
+        res.status(403).json({
+          success: false,
+          message: 'No tienes permiso para cambiar este campo',
+        });
+        return;
+      }
+
+      // Block toggle ON if solicitud reached pagada/facturada without being marked
+      if (
+        pinellas_paga === true &&
+        !sol.pinellas_paga &&
+        (sol.estado === 'pagada' || sol.estado === 'facturada')
+      ) {
+        res.status(400).json({
+          success: false,
+          message:
+            'No se puede marcar como "Pinellas paga" una solicitud que ya fue pagada o facturada sin esta marca',
+        });
         return;
       }
 
@@ -2376,11 +2405,20 @@ router.post(
         return;
       }
 
+      // Comprobante es requerido
+      const file = req.file;
+      if (!file) {
+        res.status(400).json({
+          success: false,
+          message: 'El comprobante de reembolso es requerido',
+        });
+        return;
+      }
+
       let comprobanteUrl: string | null = null;
       let comprobanteNombre: string | null = null;
 
       // Upload comprobante a R2
-      const file = req.file;
       if (file) {
         const uuid = crypto.randomUUID();
         const safeName = sanitizeFilename(file.originalname);
