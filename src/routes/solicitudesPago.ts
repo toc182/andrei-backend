@@ -2494,14 +2494,32 @@ router.delete(
       const isAdmin = req.user?.rol === 'admin';
       const isCoAdmin = req.user?.rol === 'co-admin';
 
-      const existing = await query<SolicitudRow & { preparado_por: number }>(
-        'SELECT id, numero, estado, preparado_por FROM solicitudes_pago WHERE id = $1',
+      const existing = await query<SolicitudRow & { preparado_por: number; proyecto_id: number }>(
+        'SELECT id, numero, estado, preparado_por, proyecto_id FROM solicitudes_pago WHERE id = $1',
         [id],
       );
       if (existing.rows.length === 0) {
         res
           .status(404)
           .json({ success: false, message: 'Solicitud no encontrada' });
+        return;
+      }
+
+      // Block deletion of pagada/facturada unless it's the test project
+      const testProjectId = process.env.TEST_PROJECT_ID
+        ? parseInt(process.env.TEST_PROJECT_ID)
+        : null;
+      const sol = existing.rows[0];
+      if (
+        isAdmin &&
+        (sol.estado === 'pagada' || sol.estado === 'facturada') &&
+        sol.proyecto_id !== testProjectId
+      ) {
+        res.status(400).json({
+          success: false,
+          message:
+            'No se pueden eliminar solicitudes pagadas o facturadas',
+        });
         return;
       }
 
