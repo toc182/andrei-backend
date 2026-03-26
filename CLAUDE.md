@@ -56,14 +56,14 @@ res.json({ success: true, data: result.rows });
 ## Database
 
 - query() from src/database/config.ts — parameterized only, never string concat
-- Migrations: src/database/migrations/NNN_name.sql format, next is 058
+- Migrations: src/database/migrations/NNN_name.sql format, next is 059
 - runAllMigrations() runs automatically on server start
 - Local: andrei_db / Production: DATABASE_URL (Railway)
 - MCP postgres tool available for local queries
 - Root-level routes/ and migrations/ folders are empty legacy dirs — ignore them
 
 Migration file format:
--- 058_description.sql
+-- 059_description.sql
 ALTER TABLE nombre ADD COLUMN IF NOT EXISTS columna tipo;
 CREATE TABLE IF NOT EXISTS nueva_tabla (...);
 

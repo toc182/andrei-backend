@@ -950,10 +950,11 @@ router.get(
         const factResult = await query<{
           fecha_factura: string;
           numero_factura: string | null;
+          tipo: string;
           registrado_por_nombre: string;
         }>(
           `
-      SELECT fs.fecha_factura, fs.numero_factura, u.nombre as registrado_por_nombre
+      SELECT fs.fecha_factura, fs.numero_factura, COALESCE(fs.tipo, 'factura') as tipo, u.nombre as registrado_por_nombre
       FROM facturas_solicitud fs
       LEFT JOIN users u ON fs.registrado_por = u.id
       WHERE fs.solicitud_pago_id = $1
@@ -1805,14 +1806,15 @@ router.post(
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;
-      const { fecha_factura, numero_factura } = req.body;
+      const { fecha_factura, numero_factura, tipo } = req.body;
+      const tipoDoc = tipo === 'recibo' ? 'recibo' : 'factura';
       const files = req.files as Express.Multer.File[];
       const userId = req.user!.id;
 
       if (!fecha_factura) {
         res.status(400).json({
           success: false,
-          message: 'La fecha de factura es obligatoria',
+          message: `La fecha es obligatoria`,
         });
         return;
       }
@@ -1820,7 +1822,7 @@ router.post(
       if (!files || files.length === 0) {
         res.status(400).json({
           success: false,
-          message: 'Debe adjuntar al menos un archivo de factura',
+          message: `Debe adjuntar al menos un archivo`,
         });
         return;
       }
@@ -1844,10 +1846,10 @@ router.post(
         return;
       }
 
-      // Crear registro de factura
+      // Crear registro de factura/recibo
       await query(
-        'INSERT INTO facturas_solicitud (solicitud_pago_id, fecha_factura, numero_factura, registrado_por) VALUES ($1, $2, $3, $4)',
-        [id, fecha_factura, numero_factura || null, userId],
+        'INSERT INTO facturas_solicitud (solicitud_pago_id, fecha_factura, numero_factura, registrado_por, tipo) VALUES ($1, $2, $3, $4, $5)',
+        [id, fecha_factura, numero_factura || null, userId, tipoDoc],
       );
 
       // Upload archivos a R2 y registrar en adjuntos
@@ -1883,6 +1885,7 @@ router.post(
         parseInt(id),
         {
           numero: solicitud.rows[0].numero,
+          tipo: tipoDoc,
           fecha_factura,
           numero_factura: numero_factura || null,
           archivos: archivosInfo,
