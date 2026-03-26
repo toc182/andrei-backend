@@ -442,7 +442,19 @@ router.get(
 // --- GET /reembolsos/pendientes — Solicitudes con pinellas_paga y estado de reembolso ---
 router.get(
   '/reembolsos/pendientes',
-  asyncHandler(async (_req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    let projectFilter = '';
+    const params: unknown[] = [];
+    const userRol = req.user!.rol;
+
+    if (
+      userRol === 'usuario' &&
+      !req.user!.permissions?.acceso_global
+    ) {
+      params.push(req.user!.id);
+      projectFilter = ` AND sp.proyecto_id IN (SELECT proyecto_id FROM user_project_access WHERE user_id = $${params.length})`;
+    }
+
     const result = await query(`
     SELECT sp.id, sp.numero, sp.proveedor, sp.monto_total, sp.estado, sp.fecha, sp.urgente,
       COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
@@ -451,9 +463,9 @@ router.get(
     FROM solicitudes_pago sp
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
     LEFT JOIN reembolsos_pinellas rp ON rp.solicitud_id = sp.id
-    WHERE sp.pinellas_paga = true
+    WHERE sp.pinellas_paga = true${projectFilter}
     ORDER BY rp.id IS NOT NULL ASC, sp.created_at DESC
-  `);
+  `, params);
 
     res.json({ success: true, solicitudes: result.rows });
   }),
@@ -555,6 +567,17 @@ router.get(
     let whereClause = 'WHERE 1=1';
     const params: unknown[] = [currentUserId];
     let paramCount = 1;
+
+    // Filter by project access for non-admin users without acceso_global
+    const userRol = req.user!.rol;
+    if (
+      userRol === 'usuario' &&
+      !req.user!.permissions?.acceso_global
+    ) {
+      paramCount++;
+      whereClause += ` AND sp.proyecto_id IN (SELECT proyecto_id FROM user_project_access WHERE user_id = $${paramCount})`;
+      params.push(currentUserId);
+    }
 
     if (estado && estado !== 'all') {
       const estados = (estado as string)
