@@ -2734,47 +2734,6 @@ router.get(
   ),
 );
 
-// --- POST /admin/backfill-archived-pdfs — One-time: generate archived PDFs for existing facturadas ---
-router.post(
-  '/admin/backfill-archived-pdfs',
-  asyncHandler(async (req: Request, res: Response): Promise<void> => {
-    if (req.user?.rol !== 'admin') {
-      res.status(403).json({ success: false, message: 'Solo admin' });
-      return;
-    }
-
-    const solicitudes = await query<{ id: number; numero: string; nombre_corto: string }>(
-      `SELECT sp.id, sp.numero, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
-       FROM solicitudes_pago sp
-       LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-       WHERE sp.estado IN ('facturada', 'devolucion')
-       ORDER BY sp.id`,
-    );
-
-    const results: { numero: string; status: string }[] = [];
-
-    for (const sol of solicitudes.rows) {
-      try {
-        const pdfBuffer = await generateFullPDF(sol.id);
-        const archiveKey = `${sol.nombre_corto}/solicitudes/${sol.numero}.pdf`;
-        await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
-        results.push({ numero: sol.numero, status: 'ok' });
-        console.log(`✅ Archived ${sol.numero} → ${archiveKey}`);
-      } catch (err) {
-        const error = err as Error;
-        results.push({ numero: sol.numero, status: `error: ${error.message}` });
-        console.error(`❌ Failed to archive ${sol.numero}:`, error.message);
-      }
-    }
-
-    res.json({
-      success: true,
-      message: `Processed ${results.length} solicitudes`,
-      results,
-    });
-  }),
-);
-
 // --- DELETE /:id — Eliminar solicitud ---
 // Admin: puede eliminar cualquier solicitud sin importar estado
 // Usuario normal: solo puede eliminar solicitudes pendientes propias (o con permiso solicitudes_editar_todas)
