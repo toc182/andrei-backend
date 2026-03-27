@@ -2640,8 +2640,11 @@ router.post(
       }
 
       // Verificar solicitud existe y estado válido
-      const solicitud = await query<SolicitudRow>(
-        'SELECT id, numero, estado FROM solicitudes_pago WHERE id = $1',
+      const solicitud = await query<SolicitudRow & { nombre_corto: string }>(
+        `SELECT sp.id, sp.numero, sp.estado, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
+         FROM solicitudes_pago sp
+         LEFT JOIN proyectos p ON sp.proyecto_id = p.id
+         WHERE sp.id = $1`,
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -2693,6 +2696,17 @@ router.post(
         'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         ['devolucion', id],
       );
+
+      // Archive PDF with devolucion comprobante
+      try {
+        const pdfBuffer = await generateFullPDF(parseInt(id));
+        const nombreCorto = solicitud.rows[0].nombre_corto;
+        const numero = solicitud.rows[0].numero;
+        const archiveKey = `${nombreCorto}/solicitudes/${numero}-devolucion.pdf`;
+        await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
+      } catch (archiveErr) {
+        console.error('Error archiving devolucion PDF:', archiveErr);
+      }
 
       await registrarAudit(
         userId,
