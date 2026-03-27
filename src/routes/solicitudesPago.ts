@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { query, pool } from '../database/config.js';
 import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { deleteFile, downloadFile, uploadFile } from '../services/storage.js';
+import { deleteFile, downloadFile, uploadFile, getFileSignedUrl } from '../services/storage.js';
 import { generateSolicitudPDF } from '../services/pdfGenerator.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { sendEmail } from '../services/emailService.js';
@@ -189,7 +189,16 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     [solicitudId],
   );
 
-  if (adjuntos.rows.length === 0) {
+  // Also fetch devolucion comprobante if exists
+  const devolucionComp = await query<{
+    comprobante_url: string;
+    comprobante_nombre: string;
+  }>(
+    'SELECT comprobante_url, comprobante_nombre FROM devoluciones_solicitud WHERE solicitud_id = $1',
+    [solicitudId],
+  );
+
+  if (adjuntos.rows.length === 0 && devolucionComp.rows.length === 0) {
     return solicitudBuffer;
   }
 
@@ -240,6 +249,42 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
         `Error procesando adjunto ${adjunto.nombre_original}:`,
         err,
       );
+    }
+  }
+
+  // Merge devolucion comprobante if exists
+  if (devolucionComp.rows.length > 0) {
+    try {
+      const devFile = await downloadFile(devolucionComp.rows[0].comprobante_url);
+      const devMime = devolucionComp.rows[0].comprobante_url.toLowerCase();
+      if (devMime.endsWith('.pdf')) {
+        const devPdf = await PDFDocument.load(devFile);
+        const pages = await mergedPdf.copyPages(devPdf, devPdf.getPageIndices());
+        for (const page of pages) {
+          mergedPdf.addPage(page);
+        }
+      } else if (devMime.endsWith('.jpg') || devMime.endsWith('.jpeg') || devMime.endsWith('.png')) {
+        const img = devMime.endsWith('.png')
+          ? await mergedPdf.embedPng(devFile)
+          : await mergedPdf.embedJpg(devFile);
+        const pageW = 612;
+        const pageH = 792;
+        const margin = 40;
+        const maxW = pageW - margin * 2;
+        const maxH = pageH - margin * 2;
+        const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+        const drawW = img.width * scale;
+        const drawH = img.height * scale;
+        const page = mergedPdf.addPage([pageW, pageH]);
+        page.drawImage(img, {
+          x: (pageW - drawW) / 2,
+          y: (pageH - drawH) / 2,
+          width: drawW,
+          height: drawH,
+        });
+      }
+    } catch (err) {
+      console.error('Error procesando comprobante de devolución:', err);
     }
   }
 
@@ -2890,6 +2935,29 @@ router.post(
       );
 
       res.json({ success: true, message: 'Devolución registrada' });
+    },
+  ),
+);
+
+// --- GET /:id/devolucion/comprobante — Download devolucion comprobante ---
+router.get(
+  '/:id/devolucion/comprobante',
+  [param('id').isInt()],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const { id } = req.params;
+      const result = await query<{ comprobante_url: string }>(
+        'SELECT comprobante_url FROM devoluciones_solicitud WHERE solicitud_id = $1',
+        [id],
+      );
+      if (result.rows.length === 0) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Devolución no encontrada' });
+        return;
+      }
+      const url = await getFileSignedUrl(result.rows[0].comprobante_url);
+      res.json({ success: true, url });
     },
   ),
 );
