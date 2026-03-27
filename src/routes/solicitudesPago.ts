@@ -598,8 +598,9 @@ const TRANSICIONES: Record<string, string[]> = {
   pendiente: ['rechazada'],
   aprobada: ['pagada'],
   rechazada: ['pendiente'],
-  pagada: ['facturada'],
-  facturada: [],
+  pagada: ['facturada', 'devolucion'],
+  facturada: ['devolucion'],
+  devolucion: [],
 };
 
 function generateCodigoVerificacion(): string {
@@ -1238,6 +1239,31 @@ router.get(
         }
       }
 
+      // Devolución (si aplica)
+      let devolucion = null;
+      if (solicitud.rows[0].estado === 'devolucion') {
+        const devResult = await query<{
+          id: number;
+          fecha_devolucion: string;
+          motivo: string;
+          comprobante_url: string;
+          comprobante_nombre: string;
+          registrado_por_nombre: string;
+          created_at: string;
+        }>(
+          `
+      SELECT ds.*, u.nombre as registrado_por_nombre
+      FROM devoluciones_solicitud ds
+      LEFT JOIN users u ON ds.registrado_por = u.id
+      WHERE ds.solicitud_id = $1
+    `,
+          [id],
+        );
+        if (devResult.rows.length > 0) {
+          devolucion = devResult.rows[0];
+        }
+      }
+
       res.json({
         success: true,
         solicitud: solicitud.rows[0],
@@ -1249,6 +1275,7 @@ router.get(
         comprobante,
         factura,
         reembolso,
+        devolucion,
       });
     },
   ),
@@ -2739,6 +2766,134 @@ router.post(
   ),
 );
 
+// --- POST /:id/devolucion — Registrar devolución total ---
+router.post(
+  '/:id/devolucion',
+  [param('id').isInt()],
+  checkPermission('registrar_pago'),
+  (req: Request, res: Response, next: NextFunction) => {
+    comprobanteUpload.single('comprobante')(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          res.status(400).json({
+            success: false,
+            message: 'El archivo excede el límite de 10MB',
+          });
+          return;
+        }
+        res.status(400).json({ success: false, message: err.message });
+        return;
+      }
+      if (err) {
+        res.status(400).json({ success: false, message: err.message });
+        return;
+      }
+      next();
+    });
+  },
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const { id } = req.params;
+      const userId = req.user!.id;
+      const { fecha_devolucion, motivo } = req.body;
+
+      if (!fecha_devolucion) {
+        res.status(400).json({
+          success: false,
+          message: 'La fecha de devolución es obligatoria',
+        });
+        return;
+      }
+
+      if (!motivo || !motivo.trim()) {
+        res.status(400).json({
+          success: false,
+          message: 'El motivo de la devolución es obligatorio',
+        });
+        return;
+      }
+
+      const file = req.file;
+      if (!file) {
+        res.status(400).json({
+          success: false,
+          message: 'El comprobante de devolución es requerido',
+        });
+        return;
+      }
+
+      // Verificar solicitud existe y estado válido
+      const solicitud = await query<SolicitudRow>(
+        'SELECT id, numero, estado FROM solicitudes_pago WHERE id = $1',
+        [id],
+      );
+      if (solicitud.rows.length === 0) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Solicitud no encontrada' });
+        return;
+      }
+      if (
+        solicitud.rows[0].estado !== 'pagada' &&
+        solicitud.rows[0].estado !== 'facturada'
+      ) {
+        res.status(400).json({
+          success: false,
+          message:
+            'Solo se puede registrar devolución en solicitudes pagadas o facturadas',
+        });
+        return;
+      }
+
+      // Verificar que no tenga ya una devolución
+      const existing = await query(
+        'SELECT id FROM devoluciones_solicitud WHERE solicitud_id = $1',
+        [id],
+      );
+      if (existing.rows.length > 0) {
+        res.status(400).json({
+          success: false,
+          message: 'Esta solicitud ya tiene una devolución registrada',
+        });
+        return;
+      }
+
+      // Upload comprobante a R2
+      const uuid = crypto.randomUUID();
+      const safeName = sanitizeFilename(file.originalname);
+      const r2Key = `devoluciones/${id}/${uuid}_${safeName}`;
+      await uploadFile(r2Key, file.buffer, file.mimetype);
+
+      // Insertar registro
+      await query(
+        `INSERT INTO devoluciones_solicitud (solicitud_id, fecha_devolucion, motivo, comprobante_url, comprobante_nombre, registrado_por)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [id, fecha_devolucion, motivo.trim(), r2Key, file.originalname, userId],
+      );
+
+      // Cambiar estado a devolucion
+      await query(
+        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        ['devolucion', id],
+      );
+
+      await registrarAudit(
+        userId,
+        'registrar_devolucion',
+        'solicitud_pago',
+        parseInt(id),
+        {
+          numero: solicitud.rows[0].numero,
+          motivo: motivo.trim(),
+          fecha_devolucion,
+        },
+      );
+
+      res.json({ success: true, message: 'Devolución registrada' });
+    },
+  ),
+);
+
 // --- DELETE /:id — Eliminar solicitud ---
 // Admin: puede eliminar cualquier solicitud sin importar estado
 // Usuario normal: solo puede eliminar solicitudes pendientes propias (o con permiso solicitudes_editar_todas)
@@ -2817,6 +2972,9 @@ router.delete(
       }
 
       // Limpiar tablas relacionadas que no tengan ON DELETE CASCADE
+      await query('DELETE FROM devoluciones_solicitud WHERE solicitud_id = $1', [
+        id,
+      ]);
       await query('DELETE FROM reembolsos_pinellas WHERE solicitud_id = $1', [
         id,
       ]);
