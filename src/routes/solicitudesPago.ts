@@ -14,6 +14,239 @@ import bcrypt from 'bcryptjs';
 
 const router = Router();
 
+// Helper: generate full PDF (solicitud + adjuntos merged) for a given solicitud ID
+async function generateFullPDF(solicitudId: number): Promise<Buffer> {
+  const solicitud = await query<SolicitudRow>(
+    `
+    SELECT sp.*,
+      COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
+      u1.nombre as preparado_nombre,
+      u2.nombre as solicitado_nombre
+    FROM solicitudes_pago sp
+    LEFT JOIN proyectos p ON sp.proyecto_id = p.id
+    LEFT JOIN users u1 ON sp.preparado_por = u1.id
+    LEFT JOIN users u2 ON sp.solicitado_por = u2.id
+    WHERE sp.id = $1
+  `,
+    [solicitudId],
+  );
+
+  if (solicitud.rows.length === 0) throw new Error('Solicitud no encontrada');
+
+  const sol = solicitud.rows[0];
+
+  const items = await query<ItemRow>(
+    'SELECT * FROM solicitud_pago_items WHERE solicitud_pago_id = $1 ORDER BY orden, id',
+    [solicitudId],
+  );
+
+  const ajustes = await query<AjusteRow>(
+    'SELECT * FROM solicitud_pago_ajustes WHERE solicitud_pago_id = $1 ORDER BY orden, id',
+    [solicitudId],
+  );
+
+  const aprobaciones = await query<{
+    usuario_nombre: string;
+    accion: string;
+    fecha: string;
+  }>(
+    `
+    SELECT sa.accion, sa.fecha, u.nombre as usuario_nombre
+    FROM solicitud_aprobaciones sa
+    JOIN users u ON sa.user_id = u.id
+    WHERE sa.solicitud_pago_id = $1
+    ORDER BY sa.orden
+  `,
+    [solicitudId],
+  );
+
+  const totalAprobadoresResult = await query<{ count: string }>(
+    'SELECT COUNT(*) as count FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true',
+    [sol.proyecto_id],
+  );
+  const totalAprobadores = parseInt(totalAprobadoresResult.rows[0].count);
+
+  const aprobadoresProyecto = await query<{
+    user_id: number;
+    nombre: string;
+    orden: number;
+  }>(
+    'SELECT pas.user_id, u.nombre, pas.orden FROM project_approval_settings pas JOIN users u ON u.id = pas.user_id WHERE pas.proyecto_id = $1 AND pas.activo = true ORDER BY pas.orden',
+    [sol.proyecto_id],
+  );
+
+  let pdfComprobante:
+    | { fecha_pago: string; registrado_por_nombre: string }
+    | undefined;
+  if (sol.estado === 'pagada' || sol.estado === 'facturada') {
+    const compResult = await query<{
+      fecha_pago: string;
+      registrado_por_nombre: string;
+    }>(
+      `
+      SELECT cp.fecha_pago, u.nombre as registrado_por_nombre
+      FROM comprobantes_pago cp
+      LEFT JOIN users u ON cp.registrado_por = u.id
+      WHERE cp.solicitud_pago_id = $1
+    `,
+      [solicitudId],
+    );
+    if (compResult.rows.length > 0) {
+      pdfComprobante = compResult.rows[0];
+    }
+  }
+
+  let pdfFactura:
+    | {
+        fecha_factura: string;
+        numero_factura?: string;
+        registrado_por_nombre: string;
+      }
+    | undefined;
+  if (sol.estado === 'facturada') {
+    const factResult = await query<{
+      fecha_factura: string;
+      numero_factura: string | null;
+      registrado_por_nombre: string;
+    }>(
+      `
+      SELECT fs.fecha_factura, fs.numero_factura, u.nombre as registrado_por_nombre
+      FROM facturas_solicitud fs
+      LEFT JOIN users u ON fs.registrado_por = u.id
+      WHERE fs.solicitud_pago_id = $1
+    `,
+      [solicitudId],
+    );
+    if (factResult.rows.length > 0) {
+      pdfFactura = {
+        fecha_factura: factResult.rows[0].fecha_factura,
+        numero_factura: factResult.rows[0].numero_factura || undefined,
+        registrado_por_nombre: factResult.rows[0].registrado_por_nombre,
+      };
+    }
+  }
+
+  let pdfReembolso:
+    | { fecha_reembolso: string; registrado_por_nombre: string }
+    | undefined;
+  if (sol.pinellas_paga) {
+    const reembResult = await query<{
+      fecha_reembolso: string;
+      registrado_por_nombre: string;
+    }>(
+      `
+      SELECT rp.fecha_reembolso, u.nombre as registrado_por_nombre
+      FROM reembolsos_pinellas rp
+      LEFT JOIN users u ON rp.registrado_por = u.id
+      WHERE rp.solicitud_id = $1
+    `,
+      [solicitudId],
+    );
+    if (reembResult.rows.length > 0) {
+      pdfReembolso = reembResult.rows[0];
+    }
+  }
+
+  const solicitudBuffer = await generateSolicitudPDF({
+    estado: sol.estado,
+    solicitud: {
+      numero: sol.numero,
+      fecha: sol.fecha,
+      proveedor: sol.proveedor,
+      proyecto_nombre: sol.proyecto_nombre || '',
+      preparado_nombre: sol.preparado_nombre || '',
+      solicitado_nombre: sol.solicitado_nombre || null,
+      observaciones: sol.observaciones,
+      urgente: sol.urgente,
+      subtotal: sol.subtotal,
+      descuentos: sol.descuentos,
+      impuestos: sol.impuestos,
+      monto_total: sol.monto_total,
+      beneficiario: sol.beneficiario,
+      banco: sol.banco,
+      tipo_cuenta: sol.tipo_cuenta,
+      numero_cuenta: sol.numero_cuenta,
+      pinellas_paga: sol.pinellas_paga,
+    },
+    items: items.rows,
+    ajustes: ajustes.rows,
+    aprobaciones: aprobaciones.rows,
+    comprobante: pdfComprobante,
+    factura: pdfFactura,
+    codigo_verificacion: sol.codigo_verificacion,
+    total_aprobadores: totalAprobadores,
+    aprobadores_proyecto: aprobadoresProyecto.rows,
+    reembolso: pdfReembolso,
+  });
+
+  // Merge adjuntos into the PDF
+  const adjuntos = await query<{
+    r2_key: string;
+    tipo_mime: string;
+    nombre_original: string;
+  }>(
+    `SELECT r2_key, tipo_mime, nombre_original FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 ORDER BY CASE tipo_adjunto WHEN 'comprobante' THEN 1 WHEN 'factura' THEN 2 ELSE 3 END, created_at`,
+    [solicitudId],
+  );
+
+  if (adjuntos.rows.length === 0) {
+    return solicitudBuffer;
+  }
+
+  const mergedPdf = await PDFDocument.load(solicitudBuffer);
+
+  for (const adjunto of adjuntos.rows) {
+    try {
+      const fileBuffer = await downloadFile(adjunto.r2_key);
+
+      if (adjunto.tipo_mime === 'application/pdf') {
+        const attachedPdf = await PDFDocument.load(fileBuffer);
+        const pages = await mergedPdf.copyPages(
+          attachedPdf,
+          attachedPdf.getPageIndices(),
+        );
+        for (const page of pages) {
+          mergedPdf.addPage(page);
+        }
+      } else if (
+        adjunto.tipo_mime === 'image/jpeg' ||
+        adjunto.tipo_mime === 'image/png'
+      ) {
+        const img =
+          adjunto.tipo_mime === 'image/jpeg'
+            ? await mergedPdf.embedJpg(fileBuffer)
+            : await mergedPdf.embedPng(fileBuffer);
+
+        const pageW = 612;
+        const pageH = 792;
+        const margin = 40;
+        const maxW = pageW - margin * 2;
+        const maxH = pageH - margin * 2;
+
+        const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+        const drawW = img.width * scale;
+        const drawH = img.height * scale;
+
+        const page = mergedPdf.addPage([pageW, pageH]);
+        page.drawImage(img, {
+          x: (pageW - drawW) / 2,
+          y: (pageH - drawH) / 2,
+          width: drawW,
+          height: drawH,
+        });
+      }
+    } catch (err) {
+      console.error(
+        `Error procesando adjunto ${adjunto.nombre_original}:`,
+        err,
+      );
+    }
+  }
+
+  const mergedBytes = await mergedPdf.save();
+  return Buffer.from(mergedBytes);
+}
+
 // --- GET /:id/pdf — Generar PDF (ANTES del middleware global de auth) ---
 // Token se inyecta desde query param en server.ts para soportar window.open
 router.get(
@@ -1828,8 +2061,11 @@ router.post(
       }
 
       // Verificar que la solicitud existe y está pagada
-      const solicitud = await query<SolicitudRow>(
-        'SELECT id, numero, estado FROM solicitudes_pago WHERE id = $1',
+      const solicitud = await query<SolicitudRow & { nombre_corto: string }>(
+        `SELECT sp.id, sp.numero, sp.estado, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
+         FROM solicitudes_pago sp
+         LEFT JOIN proyectos p ON sp.proyecto_id = p.id
+         WHERE sp.id = $1`,
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -1877,6 +2113,27 @@ router.post(
         'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         ['facturada', id],
       );
+
+      // Archive immutable PDF copy to R2
+      try {
+        const pdfBuffer = await generateFullPDF(parseInt(id));
+        const nombreCorto = solicitud.rows[0].nombre_corto;
+        const numero = solicitud.rows[0].numero;
+        const archiveKey = `${nombreCorto}/solicitudes/${numero}.pdf`;
+        await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
+      } catch (archiveErr) {
+        // Rollback estado change if archive fails
+        await query(
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+          ['pagada', id],
+        );
+        console.error('Error archiving PDF:', archiveErr);
+        res.status(500).json({
+          success: false,
+          message: 'Error al guardar copia del PDF. Intente nuevamente.',
+        });
+        return;
+      }
 
       await registrarAudit(
         userId,
