@@ -3,7 +3,7 @@ import { body, param, validationResult } from 'express-validator';
 import multer from 'multer';
 import crypto from 'crypto';
 import { query, pool } from '../database/config.js';
-import { authenticateToken, checkPermission } from '../middleware/auth.js';
+import { authenticateToken, checkPermission, requireRole } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { deleteFile, downloadFile, uploadFile, getFileSignedUrl } from '../services/storage.js';
 import { generateSolicitudPDF } from '../services/pdfGenerator.js';
@@ -290,6 +290,50 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
 
   const mergedBytes = await mergedPdf.save();
   return Buffer.from(mergedBytes);
+}
+
+// Helper: build cambios array by comparing old and new solicitud data
+interface CambioSimple {
+  campo: string;
+  anterior: string;
+  nuevo: string;
+}
+
+interface CambioItem {
+  campo: 'item';
+  item_id: number;
+  descripcion: string;
+  cambios: { campo: string; anterior: string; nuevo: string }[];
+}
+
+interface CambioItemAgregado {
+  campo: 'item_agregado';
+  descripcion: string;
+  nuevo: Record<string, unknown>;
+}
+
+interface CambioItemEliminado {
+  campo: 'item_eliminado';
+  descripcion: string;
+  anterior: Record<string, unknown>;
+}
+
+type Cambio = CambioSimple | CambioItem | CambioItemAgregado | CambioItemEliminado;
+
+function buildSolicitudDiff(
+  oldData: Record<string, unknown>,
+  newData: Record<string, unknown>,
+  fields: string[],
+): CambioSimple[] {
+  const cambios: CambioSimple[] = [];
+  for (const field of fields) {
+    const oldVal = String(oldData[field] ?? '');
+    const newVal = String(newData[field] ?? '');
+    if (oldVal !== newVal) {
+      cambios.push({ campo: field, anterior: oldVal, nuevo: newVal });
+    }
+  }
+  return cambios;
 }
 
 // --- GET /:id/pdf — Generar PDF (ANTES del middleware global de auth) ---
@@ -878,6 +922,31 @@ router.put(
   ),
 );
 
+// --- GET /:id/correcciones — Historial de correcciones ---
+router.get(
+  '/:id/correcciones',
+  [param('id').isInt()],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const { id } = req.params;
+
+      const correcciones = await query(
+        `
+        SELECT c.id, c.motivo, c.cambios, c.version_pdf, c.created_at,
+          u.nombre as usuario_nombre
+        FROM correcciones_solicitud c
+        JOIN users u ON c.user_id = u.id
+        WHERE c.solicitud_pago_id = $1
+        ORDER BY c.created_at DESC
+        `,
+        [id],
+      );
+
+      res.json({ success: true, data: correcciones.rows });
+    },
+  ),
+);
+
 // --- GET /:id — Detalle completo ---
 router.get(
   '/:id',
@@ -892,7 +961,8 @@ router.get(
       p.nombre as proyecto_nombre,
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
-      r.numero as requisicion_numero
+      r.numero as requisicion_numero,
+      (SELECT COUNT(*) FROM correcciones_solicitud WHERE solicitud_pago_id = sp.id) as correcciones_count
     FROM solicitudes_pago sp
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
@@ -1739,6 +1809,460 @@ function sanitizeFilename(name: string): string {
     .replace(/[^a-zA-Z0-9._-]/g, '_')
     .replace(/_+/g, '_');
 }
+
+// --- POST /:id/corregir — Modo corrección admin ---
+router.post(
+  '/:id/corregir',
+  [param('id').isInt()],
+  requireRole(['admin']),
+  (req: Request, res: Response, next: NextFunction) => {
+    comprobanteUpload.fields([
+      { name: 'archivos_comprobante', maxCount: 5 },
+      { name: 'archivos_factura', maxCount: 5 },
+    ])(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          res.status(400).json({ success: false, message: 'El archivo excede el limite de 10MB' });
+          return;
+        }
+        res.status(400).json({ success: false, message: err.message });
+        return;
+      }
+      if (err) {
+        res.status(400).json({ success: false, message: err.message });
+        return;
+      }
+      next();
+    });
+  },
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const { id } = req.params;
+      const userId = req.user!.id;
+      const { motivo, updated_at, items, ajustes, ...solicitudFields } = req.body;
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+
+      // Validate motivo
+      if (!motivo || !motivo.trim()) {
+        res.status(400).json({ success: false, message: 'El motivo de la corrección es obligatorio' });
+        return;
+      }
+
+      // Load current state
+      const currentResult = await query<SolicitudRow & { nombre_corto: string }>(
+        `SELECT sp.*, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
+         FROM solicitudes_pago sp
+         LEFT JOIN proyectos p ON sp.proyecto_id = p.id
+         WHERE sp.id = $1`,
+        [id],
+      );
+      if (currentResult.rows.length === 0) {
+        res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+        return;
+      }
+
+      const current = currentResult.rows[0];
+
+      // Validate estado
+      if (current.estado !== 'pagada' && current.estado !== 'facturada') {
+        res.status(400).json({ success: false, message: 'Solo se pueden corregir solicitudes pagadas o facturadas' });
+        return;
+      }
+
+      // Optimistic lock check
+      if (updated_at && new Date(current.updated_at).getTime() !== new Date(updated_at).getTime()) {
+        res.status(409).json({ success: false, message: 'La solicitud fue modificada por otro usuario. Recargue e intente de nuevo.' });
+        return;
+      }
+
+      // Parse items and ajustes from body (sent as JSON strings in multipart)
+      const parsedItems = typeof items === 'string' ? JSON.parse(items) : items || [];
+      const parsedAjustes = typeof ajustes === 'string' ? JSON.parse(ajustes) : ajustes || [];
+
+      if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
+        res.status(400).json({ success: false, message: 'Debe incluir al menos un item' });
+        return;
+      }
+
+      // Build diff for solicitud fields
+      const solicitudDiffFields = [
+        'proveedor', 'fecha', 'observaciones', 'beneficiario',
+        'banco', 'tipo_cuenta', 'numero_cuenta',
+      ];
+      const cambios: Cambio[] = buildSolicitudDiff(
+        current as unknown as Record<string, unknown>,
+        solicitudFields,
+        solicitudDiffFields.filter((f) => solicitudFields[f] !== undefined),
+      );
+
+      // Load current comprobante and factura for diff
+      const currentComprobante = await query<{ fecha_pago: string }>(
+        'SELECT fecha_pago FROM comprobantes_pago WHERE solicitud_pago_id = $1',
+        [id],
+      );
+      const currentFactura = await query<{ fecha_factura: string; numero_factura: string; tipo: string }>(
+        'SELECT fecha_factura, numero_factura, COALESCE(tipo, \'factura\') as tipo FROM facturas_solicitud WHERE solicitud_pago_id = $1',
+        [id],
+      );
+
+      // Diff comprobante fields
+      if (solicitudFields.fecha_pago !== undefined && currentComprobante.rows.length > 0) {
+        const oldFechaPago = String(currentComprobante.rows[0].fecha_pago ?? '');
+        const newFechaPago = String(solicitudFields.fecha_pago ?? '');
+        if (oldFechaPago !== newFechaPago) {
+          cambios.push({ campo: 'fecha_pago', anterior: oldFechaPago, nuevo: newFechaPago });
+        }
+      }
+
+      // Diff factura fields
+      if (currentFactura.rows.length > 0) {
+        const factFields = ['fecha_factura', 'numero_factura', 'tipo'];
+        for (const f of factFields) {
+          if (solicitudFields[f] !== undefined) {
+            const oldVal = String(currentFactura.rows[0][f as keyof typeof currentFactura.rows[0]] ?? '');
+            const newVal = String(solicitudFields[f] ?? '');
+            if (oldVal !== newVal) {
+              cambios.push({ campo: f, anterior: oldVal, nuevo: newVal });
+            }
+          }
+        }
+      }
+
+      // Diff items
+      const currentItems = await query<ItemRow>(
+        'SELECT * FROM solicitud_pago_items WHERE solicitud_pago_id = $1 ORDER BY orden, id',
+        [id],
+      );
+
+      const currentItemsMap = new Map(currentItems.rows.map((item) => [item.id, item]));
+      const submittedItemIds = new Set(parsedItems.filter((i: { id?: number }) => i.id).map((i: { id: number }) => i.id));
+
+      // Items removed
+      for (const oldItem of currentItems.rows) {
+        if (!submittedItemIds.has(oldItem.id)) {
+          cambios.push({
+            campo: 'item_eliminado',
+            descripcion: oldItem.descripcion,
+            anterior: {
+              cantidad: oldItem.cantidad,
+              unidad: oldItem.unidad,
+              precio_unitario: oldItem.precio_unitario,
+              precio_total: oldItem.precio_total,
+            },
+          });
+        }
+      }
+
+      // Items modified or added
+      for (const newItem of parsedItems) {
+        if (newItem.id && currentItemsMap.has(newItem.id)) {
+          const oldItem = currentItemsMap.get(newItem.id)!;
+          const itemCambios: { campo: string; anterior: string; nuevo: string }[] = [];
+          const itemFields = ['descripcion', 'cantidad', 'unidad', 'precio_unitario'];
+          for (const f of itemFields) {
+            const oldVal = String(oldItem[f as keyof typeof oldItem] ?? '');
+            const newVal = String(newItem[f] ?? '');
+            if (oldVal !== newVal) {
+              itemCambios.push({ campo: f, anterior: oldVal, nuevo: newVal });
+            }
+          }
+          if (itemCambios.length > 0) {
+            cambios.push({
+              campo: 'item',
+              item_id: newItem.id,
+              descripcion: oldItem.descripcion,
+              cambios: itemCambios,
+            });
+          }
+        } else if (!newItem.id) {
+          cambios.push({
+            campo: 'item_agregado',
+            descripcion: newItem.descripcion,
+            nuevo: {
+              cantidad: newItem.cantidad,
+              unidad: newItem.unidad,
+              precio_unitario: newItem.precio_unitario,
+            },
+          });
+        }
+      }
+
+      // Diff files
+      const comprobanteFiles = files?.archivos_comprobante;
+      const facturaFiles = files?.archivos_factura;
+      if (comprobanteFiles && comprobanteFiles.length > 0) {
+        cambios.push({
+          campo: 'comprobante',
+          anterior: '(archivos anteriores)',
+          nuevo: comprobanteFiles.map((f) => f.originalname).join(', '),
+        });
+      }
+      if (facturaFiles && facturaFiles.length > 0) {
+        cambios.push({
+          campo: 'factura',
+          anterior: '(archivos anteriores)',
+          nuevo: facturaFiles.map((f) => f.originalname).join(', '),
+        });
+      }
+
+      // Reject if nothing changed
+      if (cambios.length === 0) {
+        res.status(400).json({ success: false, message: 'No se detectaron cambios' });
+        return;
+      }
+
+      // Calculate new totals from items
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const itemsCalculados = parsedItems.map((item: any) => {
+        const cantidad = parseFloat(String(item.cantidad)) || 1;
+        const precioUnitario = parseFloat(String(item.precio_unitario)) || 0;
+        return { ...item, cantidad, precio_unitario: precioUnitario, precio_total: cantidad * precioUnitario };
+      });
+
+      const newSubtotal = itemsCalculados.reduce(
+        (sum: number, item: { precio_total: number }) => sum + item.precio_total,
+        0,
+      );
+
+      const ajustesCalculados = parsedAjustes.map((a: { tipo?: string; monto?: number; porcentaje?: number; [key: string]: unknown }) => ({
+        ...a,
+        monto: parseFloat(String(a.monto)) || 0,
+        porcentaje: a.porcentaje ? parseFloat(String(a.porcentaje)) : null,
+      }));
+
+      const newImpuestos = ajustesCalculados
+        .filter((a: { tipo: string }) => a.tipo === 'impuesto' || a.tipo === 'aumento')
+        .reduce((sum: number, a: { monto: number }) => sum + a.monto, 0);
+
+      const newDescuentos = ajustesCalculados
+        .filter((a: { tipo: string }) => a.tipo === 'descuento' || a.tipo === 'disminucion')
+        .reduce((sum: number, a: { monto: number }) => sum + a.monto, 0);
+
+      const newMontoTotal = newSubtotal + newImpuestos - newDescuentos;
+
+      // Check if totals changed and add to diff
+      if (parseFloat(String(current.subtotal)) !== newSubtotal) {
+        cambios.push({ campo: 'subtotal', anterior: String(current.subtotal), nuevo: String(newSubtotal) });
+      }
+      if (parseFloat(String(current.monto_total)) !== newMontoTotal) {
+        cambios.push({ campo: 'monto_total', anterior: String(current.monto_total), nuevo: String(newMontoTotal) });
+      }
+
+      // --- Execute transaction ---
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Update solicitud main fields
+        const updateFields: string[] = [];
+        const updateValues: unknown[] = [];
+        let paramIndex = 1;
+
+        for (const field of solicitudDiffFields) {
+          if (solicitudFields[field] !== undefined) {
+            updateFields.push(`${field} = $${paramIndex}`);
+            updateValues.push(solicitudFields[field]);
+            paramIndex++;
+          }
+        }
+
+        // Always update totals and updated_at
+        updateFields.push(`subtotal = $${paramIndex}`);
+        updateValues.push(newSubtotal);
+        paramIndex++;
+        updateFields.push(`descuentos = $${paramIndex}`);
+        updateValues.push(newDescuentos);
+        paramIndex++;
+        updateFields.push(`impuestos = $${paramIndex}`);
+        updateValues.push(newImpuestos);
+        paramIndex++;
+        updateFields.push(`monto_total = $${paramIndex}`);
+        updateValues.push(newMontoTotal);
+        paramIndex++;
+        updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
+
+        updateValues.push(id);
+        await client.query(
+          `UPDATE solicitudes_pago SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`,
+          updateValues,
+        );
+
+        // Replace items
+        await client.query('DELETE FROM solicitud_pago_items WHERE solicitud_pago_id = $1', [id]);
+        for (let i = 0; i < itemsCalculados.length; i++) {
+          const item = itemsCalculados[i];
+          await client.query(
+            `INSERT INTO solicitud_pago_items (solicitud_pago_id, cantidad, unidad, descripcion, descripcion_detallada, precio_unitario, precio_total, orden)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [
+              id,
+              item.cantidad,
+              item.unidad || 'unidad',
+              item.descripcion,
+              item.descripcion_detallada || null,
+              item.precio_unitario,
+              item.precio_total,
+              i,
+            ],
+          );
+        }
+
+        // Replace ajustes
+        await client.query('DELETE FROM solicitud_pago_ajustes WHERE solicitud_pago_id = $1', [id]);
+        for (let i = 0; i < ajustesCalculados.length; i++) {
+          const ajuste = ajustesCalculados[i];
+          await client.query(
+            `INSERT INTO solicitud_pago_ajustes (solicitud_pago_id, tipo, descripcion, porcentaje, monto, orden)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [id, ajuste.tipo, ajuste.descripcion, ajuste.porcentaje, ajuste.monto, i],
+          );
+        }
+
+        // Update comprobante fields
+        if (solicitudFields.fecha_pago !== undefined && currentComprobante.rows.length > 0) {
+          await client.query(
+            'UPDATE comprobantes_pago SET fecha_pago = $1 WHERE solicitud_pago_id = $2',
+            [solicitudFields.fecha_pago, id],
+          );
+        }
+
+        // Update factura fields
+        if (currentFactura.rows.length > 0) {
+          const factUpdates: string[] = [];
+          const factValues: unknown[] = [];
+          let fIdx = 1;
+          if (solicitudFields.fecha_factura !== undefined) {
+            factUpdates.push(`fecha_factura = $${fIdx}`);
+            factValues.push(solicitudFields.fecha_factura);
+            fIdx++;
+          }
+          if (solicitudFields.numero_factura !== undefined) {
+            factUpdates.push(`numero_factura = $${fIdx}`);
+            factValues.push(solicitudFields.numero_factura || null);
+            fIdx++;
+          }
+          if (solicitudFields.tipo !== undefined) {
+            factUpdates.push(`tipo = $${fIdx}`);
+            factValues.push(solicitudFields.tipo);
+            fIdx++;
+          }
+          if (factUpdates.length > 0) {
+            factValues.push(id);
+            await client.query(
+              `UPDATE facturas_solicitud SET ${factUpdates.join(', ')} WHERE solicitud_pago_id = $${fIdx}`,
+              factValues,
+            );
+          }
+        }
+
+        // Upload replacement comprobante files
+        if (comprobanteFiles && comprobanteFiles.length > 0) {
+          await client.query(
+            `DELETE FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 AND tipo_adjunto = 'comprobante'`,
+            [id],
+          );
+          for (const file of comprobanteFiles) {
+            const uuid = crypto.randomUUID();
+            const safeName = sanitizeFilename(file.originalname);
+            const r2Key = `solicitudes-pago/${id}/comprobantes/${uuid}_${safeName}`;
+            await uploadFile(r2Key, file.buffer, file.mimetype);
+            await client.query(
+              `INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
+               VALUES ($1, $2, $3, $4, $5, $6, 'comprobante')`,
+              [id, file.originalname, r2Key, file.mimetype, file.size, userId],
+            );
+          }
+        }
+
+        // Upload replacement factura files
+        if (facturaFiles && facturaFiles.length > 0) {
+          await client.query(
+            `DELETE FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 AND tipo_adjunto = 'factura'`,
+            [id],
+          );
+          for (const file of facturaFiles) {
+            const uuid = crypto.randomUUID();
+            const safeName = sanitizeFilename(file.originalname);
+            const r2Key = `solicitudes-pago/${id}/facturas/${uuid}_${safeName}`;
+            await uploadFile(r2Key, file.buffer, file.mimetype);
+            await client.query(
+              `INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
+               VALUES ($1, $2, $3, $4, $5, $6, 'factura')`,
+              [id, file.originalname, r2Key, file.mimetype, file.size, userId],
+            );
+          }
+        }
+
+        // Insert correction record
+        const versionPdf: string | null = null;
+        await client.query(
+          `INSERT INTO correcciones_solicitud (solicitud_pago_id, user_id, motivo, cambios, version_pdf)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [id, userId, motivo.trim(), JSON.stringify(cambios), versionPdf],
+        );
+
+        // Audit log
+        await registrarAudit(userId, 'correccion', 'solicitud_pago', parseInt(id), {
+          numero: current.numero,
+          motivo: motivo.trim(),
+          cambios_count: cambios.length,
+        });
+
+        await client.query('COMMIT');
+
+        // Post-transaction: generate versioned PDF if archived PDF exists
+        if (current.estado === 'facturada') {
+          try {
+            const nombreCorto = current.nombre_corto;
+            const numero = current.numero;
+            const baseKey = `${nombreCorto}/solicitudes/${numero}.pdf`;
+
+            // Check if base PDF exists
+            try {
+              await downloadFile(baseKey);
+            } catch {
+              // No base PDF exists, skip versioning
+              res.json({ success: true, message: 'Corrección guardada exitosamente' });
+              return;
+            }
+
+            // Count total corrections for version number
+            const countResult = await query<{ count: string }>(
+              'SELECT COUNT(*) as count FROM correcciones_solicitud WHERE solicitud_pago_id = $1',
+              [id],
+            );
+            const version = parseInt(countResult.rows[0].count) + 1;
+
+            const pdfBuffer = await generateFullPDF(parseInt(id));
+            const versionKey = `${nombreCorto}/solicitudes/${numero}-v${version}.pdf`;
+            await uploadFile(versionKey, pdfBuffer, 'application/pdf');
+
+            // Update the correction record with the PDF key
+            await query(
+              `UPDATE correcciones_solicitud SET version_pdf = $1
+               WHERE id = (
+                 SELECT id FROM correcciones_solicitud
+                 WHERE solicitud_pago_id = $2 AND version_pdf IS NULL
+                 ORDER BY created_at DESC LIMIT 1
+               )`,
+              [versionKey, id],
+            );
+          } catch (pdfErr) {
+            console.error('Error generating versioned PDF:', pdfErr);
+            // Don't fail the whole correction — data is already saved
+          }
+        }
+
+        res.json({ success: true, message: 'Corrección guardada exitosamente' });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+  ),
+);
 
 // --- POST /:id/registrar-pago — Registrar pago con comprobante ---
 router.post(
