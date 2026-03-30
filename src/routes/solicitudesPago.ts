@@ -1188,11 +1188,11 @@ router.get(
       const sol = solicitud.rows[0];
       const isAdmin = req.user?.rol === 'admin';
       const testProjectId = process.env.TEST_PROJECT_ID ? parseInt(process.env.TEST_PROJECT_ID) : null;
-      const isPagadaFacturada = sol.estado === 'pagada' || sol.estado === 'facturada';
+      const isEstadoProtegido = sol.estado === 'pagada' || sol.estado === 'facturada' || sol.estado === 'devolucion';
       let puede_eliminar = false;
       if (isAdmin) {
-        // Admin can delete anything except pagada/facturada outside test project
-        puede_eliminar = !isPagadaFacturada || sol.proyecto_id === testProjectId;
+        // Admin can delete anything except protected states outside test project
+        puede_eliminar = !isEstadoProtegido || sol.proyecto_id === testProjectId;
       } else {
         // Non-admin: only pendiente, own solicitud, no approvals
         puede_eliminar =
@@ -3372,13 +3372,13 @@ router.delete(
       const sol = existing.rows[0];
       if (
         isAdmin &&
-        (sol.estado === 'pagada' || sol.estado === 'facturada') &&
+        (sol.estado === 'pagada' || sol.estado === 'facturada' || sol.estado === 'devolucion') &&
         sol.proyecto_id !== testProjectId
       ) {
         res.status(400).json({
           success: false,
           message:
-            'No se pueden eliminar solicitudes pagadas o facturadas',
+            'No se pueden eliminar solicitudes pagadas, facturadas o en devolución',
         });
         return;
       }
