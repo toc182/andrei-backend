@@ -1184,6 +1184,23 @@ router.get(
         }
       }
 
+      // Calculate puede_eliminar (mirrors DELETE /:id logic)
+      const sol = solicitud.rows[0];
+      const isAdmin = req.user?.rol === 'admin';
+      const testProjectId = process.env.TEST_PROJECT_ID ? parseInt(process.env.TEST_PROJECT_ID) : null;
+      const isPagadaFacturada = sol.estado === 'pagada' || sol.estado === 'facturada';
+      let puede_eliminar = false;
+      if (isAdmin) {
+        // Admin can delete anything except pagada/facturada outside test project
+        puede_eliminar = !isPagadaFacturada || sol.proyecto_id === testProjectId;
+      } else {
+        // Non-admin: only pendiente, own solicitud, no approvals
+        puede_eliminar =
+          sol.estado === 'pendiente' &&
+          aprobaciones.rows.length === 0 &&
+          (sol.preparado_por === req.user?.id || !!req.user?.permissions?.solicitudes_editar_todas);
+      }
+
       res.json({
         success: true,
         solicitud: solicitud.rows[0],
@@ -1196,6 +1213,7 @@ router.get(
         factura,
         reembolso,
         devolucion,
+        puede_eliminar,
       });
     },
   ),
