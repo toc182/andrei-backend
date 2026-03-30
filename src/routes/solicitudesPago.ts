@@ -3442,6 +3442,10 @@ router.delete(
         'DELETE FROM solicitud_revisiones WHERE solicitud_pago_id = $1',
         [id],
       );
+      await query(
+        'DELETE FROM correcciones_solicitud WHERE solicitud_pago_id = $1',
+        [id],
+      );
 
       const { numero, estado } = existing.rows[0];
       await query('DELETE FROM solicitudes_pago WHERE id = $1', [id]);
