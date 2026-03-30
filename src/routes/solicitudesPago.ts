@@ -2280,7 +2280,7 @@ router.post(
         await client.query('COMMIT');
 
         // Post-transaction: generate versioned PDF if archived PDF exists
-        if (current.estado === 'facturada') {
+        if (current.estado === 'pagada' || current.estado === 'facturada') {
           try {
             const nombreCorto = current.nombre_corto;
             const numero = current.numero;
@@ -2382,8 +2382,11 @@ router.post(
       }
 
       // Verificar que la solicitud existe y está aprobada
-      const solicitud = await query<SolicitudRow>(
-        'SELECT id, numero, estado FROM solicitudes_pago WHERE id = $1',
+      const solicitud = await query<SolicitudRow & { nombre_corto: string }>(
+        `SELECT sp.id, sp.numero, sp.estado, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
+         FROM solicitudes_pago sp
+         LEFT JOIN proyectos p ON sp.proyecto_id = p.id
+         WHERE sp.id = $1`,
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -2431,6 +2434,27 @@ router.post(
         'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         ['pagada', id],
       );
+
+      // Archive immutable PDF copy to R2
+      try {
+        const pdfBuffer = await generateFullPDF(parseInt(id));
+        const nombreCorto = solicitud.rows[0].nombre_corto;
+        const numero = solicitud.rows[0].numero;
+        const archiveKey = `${nombreCorto}/solicitudes/${numero}.pdf`;
+        await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
+      } catch (archiveErr) {
+        // Rollback estado change if archive fails
+        await query(
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+          ['aprobada', id],
+        );
+        console.error('Error archiving PDF at pagada:', archiveErr);
+        res.status(500).json({
+          success: false,
+          message: 'Error al guardar copia del PDF. Intente nuevamente.',
+        });
+        return;
+      }
 
       await registrarAudit(
         userId,
@@ -2552,25 +2576,15 @@ router.post(
         ['facturada', id],
       );
 
-      // Archive immutable PDF copy to R2
+      // Archive immutable copy of factura file to project folder
       try {
-        const pdfBuffer = await generateFullPDF(parseInt(id));
         const nombreCorto = solicitud.rows[0].nombre_corto;
         const numero = solicitud.rows[0].numero;
-        const archiveKey = `${nombreCorto}/solicitudes/${numero}.pdf`;
-        await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
+        const firstFile = files[0];
+        const archiveKey = `${nombreCorto}/solicitudes/${numero}-factura.pdf`;
+        await uploadFile(archiveKey, firstFile.buffer, firstFile.mimetype);
       } catch (archiveErr) {
-        // Rollback estado change if archive fails
-        await query(
-          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-          ['pagada', id],
-        );
-        console.error('Error archiving PDF:', archiveErr);
-        res.status(500).json({
-          success: false,
-          message: 'Error al guardar copia del PDF. Intente nuevamente.',
-        });
-        return;
+        console.error('Error archiving factura file:', archiveErr);
       }
 
       await registrarAudit(
@@ -3291,15 +3305,14 @@ router.post(
         ['devolucion', id],
       );
 
-      // Archive PDF with devolucion comprobante
+      // Archive immutable copy of devolucion comprobante to project folder
       try {
-        const pdfBuffer = await generateFullPDF(parseInt(id));
         const nombreCorto = solicitud.rows[0].nombre_corto;
         const numero = solicitud.rows[0].numero;
         const archiveKey = `${nombreCorto}/solicitudes/${numero}-devolucion.pdf`;
-        await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
+        await uploadFile(archiveKey, file.buffer, file.mimetype);
       } catch (archiveErr) {
-        console.error('Error archiving devolucion PDF:', archiveErr);
+        console.error('Error archiving devolucion file:', archiveErr);
       }
 
       await registrarAudit(
