@@ -320,6 +320,29 @@ interface CambioItemEliminado {
 
 type Cambio = CambioSimple | CambioItem | CambioItemAgregado | CambioItemEliminado;
 
+// Normalize a date value to YYYY-MM-DD for comparison
+function normalizeDate(val: unknown): string {
+  if (!val) return '';
+  const s = String(val);
+  // If it's already YYYY-MM-DD, return as-is
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // Try to parse and extract date part
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+  return s.split('T')[0] || s;
+}
+
+// Normalize a numeric value for comparison (avoids "1.00" vs "1" false diffs)
+function normalizeNumeric(val: unknown): string {
+  if (val === null || val === undefined || val === '') return '';
+  const n = parseFloat(String(val));
+  if (isNaN(n)) return String(val);
+  return String(n);
+}
+
+const DATE_FIELDS = ['fecha', 'fecha_pago', 'fecha_factura'];
+const NUMERIC_FIELDS = ['cantidad', 'precio_unitario', 'precio_total', 'monto', 'porcentaje', 'subtotal', 'monto_total'];
+
 function buildSolicitudDiff(
   oldData: Record<string, unknown>,
   newData: Record<string, unknown>,
@@ -327,8 +350,18 @@ function buildSolicitudDiff(
 ): CambioSimple[] {
   const cambios: CambioSimple[] = [];
   for (const field of fields) {
-    const oldVal = String(oldData[field] ?? '');
-    const newVal = String(newData[field] ?? '');
+    let oldVal: string;
+    let newVal: string;
+    if (DATE_FIELDS.includes(field)) {
+      oldVal = normalizeDate(oldData[field]);
+      newVal = normalizeDate(newData[field]);
+    } else if (NUMERIC_FIELDS.includes(field)) {
+      oldVal = normalizeNumeric(oldData[field]);
+      newVal = normalizeNumeric(newData[field]);
+    } else {
+      oldVal = String(oldData[field] ?? '');
+      newVal = String(newData[field] ?? '');
+    }
     if (oldVal !== newVal) {
       cambios.push({ campo: field, anterior: oldVal, nuevo: newVal });
     }
@@ -1907,8 +1940,8 @@ router.post(
 
       // Diff comprobante fields
       if (solicitudFields.fecha_pago !== undefined && currentComprobante.rows.length > 0) {
-        const oldFechaPago = String(currentComprobante.rows[0].fecha_pago ?? '');
-        const newFechaPago = String(solicitudFields.fecha_pago ?? '');
+        const oldFechaPago = normalizeDate(currentComprobante.rows[0].fecha_pago);
+        const newFechaPago = normalizeDate(solicitudFields.fecha_pago);
         if (oldFechaPago !== newFechaPago) {
           cambios.push({ campo: 'fecha_pago', anterior: oldFechaPago, nuevo: newFechaPago });
         }
@@ -1919,8 +1952,15 @@ router.post(
         const factFields = ['fecha_factura', 'numero_factura', 'tipo'];
         for (const f of factFields) {
           if (solicitudFields[f] !== undefined) {
-            const oldVal = String(currentFactura.rows[0][f as keyof typeof currentFactura.rows[0]] ?? '');
-            const newVal = String(solicitudFields[f] ?? '');
+            let oldVal: string;
+            let newVal: string;
+            if (DATE_FIELDS.includes(f)) {
+              oldVal = normalizeDate(currentFactura.rows[0][f as keyof typeof currentFactura.rows[0]]);
+              newVal = normalizeDate(solicitudFields[f]);
+            } else {
+              oldVal = String(currentFactura.rows[0][f as keyof typeof currentFactura.rows[0]] ?? '');
+              newVal = String(solicitudFields[f] ?? '');
+            }
             if (oldVal !== newVal) {
               cambios.push({ campo: f, anterior: oldVal, nuevo: newVal });
             }
@@ -1960,8 +2000,15 @@ router.post(
           const itemCambios: { campo: string; anterior: string; nuevo: string }[] = [];
           const itemFields = ['descripcion', 'cantidad', 'unidad', 'precio_unitario'];
           for (const f of itemFields) {
-            const oldVal = String(oldItem[f as keyof typeof oldItem] ?? '');
-            const newVal = String(newItem[f] ?? '');
+            let oldVal: string;
+            let newVal: string;
+            if (NUMERIC_FIELDS.includes(f)) {
+              oldVal = normalizeNumeric(oldItem[f as keyof typeof oldItem]);
+              newVal = normalizeNumeric(newItem[f]);
+            } else {
+              oldVal = String(oldItem[f as keyof typeof oldItem] ?? '');
+              newVal = String(newItem[f] ?? '');
+            }
             if (oldVal !== newVal) {
               itemCambios.push({ campo: f, anterior: oldVal, nuevo: newVal });
             }
@@ -2040,12 +2087,16 @@ router.post(
 
       const newMontoTotal = newSubtotal + newImpuestos - newDescuentos;
 
-      // Check if totals changed and add to diff
-      if (parseFloat(String(current.subtotal)) !== newSubtotal) {
-        cambios.push({ campo: 'subtotal', anterior: String(current.subtotal), nuevo: String(newSubtotal) });
+      // Check if totals changed and add to diff (round to 2 decimals to avoid float noise)
+      const oldSubtotal = Math.round(parseFloat(String(current.subtotal)) * 100) / 100;
+      const roundedNewSubtotal = Math.round(newSubtotal * 100) / 100;
+      const oldMontoTotal = Math.round(parseFloat(String(current.monto_total)) * 100) / 100;
+      const roundedNewMontoTotal = Math.round(newMontoTotal * 100) / 100;
+      if (oldSubtotal !== roundedNewSubtotal) {
+        cambios.push({ campo: 'subtotal', anterior: String(oldSubtotal), nuevo: String(roundedNewSubtotal) });
       }
-      if (parseFloat(String(current.monto_total)) !== newMontoTotal) {
-        cambios.push({ campo: 'monto_total', anterior: String(current.monto_total), nuevo: String(newMontoTotal) });
+      if (oldMontoTotal !== roundedNewMontoTotal) {
+        cambios.push({ campo: 'monto_total', anterior: String(oldMontoTotal), nuevo: String(roundedNewMontoTotal) });
       }
 
       // --- Execute transaction ---
@@ -2256,6 +2307,7 @@ router.post(
         res.json({ success: true, message: 'Corrección guardada exitosamente' });
       } catch (err) {
         await client.query('ROLLBACK');
+        console.error('Error en corrección de solicitud:', err);
         throw err;
       } finally {
         client.release();
