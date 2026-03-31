@@ -548,3 +548,118 @@ router.delete(
     res.json({ success: true, message: 'Gasto eliminado' });
   }),
 );
+
+// POST /:id/adjuntos — upload file to R2
+router.post(
+  '/:id/adjuntos',
+  [param('id').isInt()],
+  upload.single('archivo'),
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const { id } = req.params;
+    const user = req.user!;
+    const file = req.file;
+
+    if (!file) {
+      res.status(400).json({ success: false, error: 'No se proporcionó archivo' });
+      return;
+    }
+
+    // Verify caja exists
+    const caja = await query<{ id: number }>('SELECT id FROM cajas_menudas WHERE id = $1', [id]);
+    if (caja.rows.length === 0) {
+      res.status(404).json({ success: false, error: 'Caja menuda no encontrada' });
+      return;
+    }
+
+    const safeName = sanitizeFilename(file.originalname);
+    const r2Key = `cajas-menudas/${id}/${crypto.randomUUID()}_${safeName}`;
+
+    await uploadFile(r2Key, file.buffer, file.mimetype);
+
+    const result = await query<{ id: number }>(
+      `INSERT INTO cajas_menudas_adjuntos (caja_menuda_id, nombre_original, r2_key, tipo_mime, tamano, subido_por)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [id, file.originalname, r2Key, file.mimetype, file.size, user.id],
+    );
+
+    await registrarAudit(user.id, 'crear', 'caja_menuda_adjunto', result.rows[0].id, {
+      caja_menuda_id: Number(id), nombre: file.originalname,
+    });
+
+    res.status(201).json({ success: true, data: { id: result.rows[0].id, nombre_original: file.originalname } });
+  }),
+);
+
+// GET /:id/adjuntos — list adjuntos
+router.get(
+  '/:id/adjuntos',
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const { id } = req.params;
+
+    const result = await query<AdjuntoRow>(
+      `SELECT a.*, u.nombre AS subido_por_nombre
+       FROM cajas_menudas_adjuntos a
+       JOIN users u ON u.id = a.subido_por
+       WHERE a.caja_menuda_id = $1
+       ORDER BY a.created_at DESC`,
+      [id],
+    );
+
+    res.json({ success: true, data: result.rows });
+  }),
+);
+
+// GET /:id/adjuntos/:adjuntoId/download — get signed download URL
+router.get(
+  '/:id/adjuntos/:adjuntoId/download',
+  [param('id').isInt(), param('adjuntoId').isInt()],
+  asyncHandler(async (req: Request<{ id: string; adjuntoId: string }>, res: Response): Promise<void> => {
+    const { id, adjuntoId } = req.params;
+
+    const result = await query<{ r2_key: string; nombre_original: string }>(
+      'SELECT r2_key, nombre_original FROM cajas_menudas_adjuntos WHERE id = $1 AND caja_menuda_id = $2',
+      [adjuntoId, id],
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ success: false, error: 'Adjunto no encontrado' });
+      return;
+    }
+
+    const url = await getFileSignedUrl(result.rows[0].r2_key);
+    res.json({ success: true, data: { url, nombre: result.rows[0].nombre_original } });
+  }),
+);
+
+// DELETE /:id/adjuntos/:adjuntoId — delete file from R2 + DB
+router.delete(
+  '/:id/adjuntos/:adjuntoId',
+  [param('id').isInt(), param('adjuntoId').isInt()],
+  asyncHandler(async (req: Request<{ id: string; adjuntoId: string }>, res: Response): Promise<void> => {
+    const { id, adjuntoId } = req.params;
+    const user = req.user!;
+
+    const result = await query<{ r2_key: string }>(
+      'SELECT r2_key FROM cajas_menudas_adjuntos WHERE id = $1 AND caja_menuda_id = $2',
+      [adjuntoId, id],
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ success: false, error: 'Adjunto no encontrado' });
+      return;
+    }
+
+    await deleteFile(result.rows[0].r2_key);
+    await query('DELETE FROM cajas_menudas_adjuntos WHERE id = $1', [adjuntoId]);
+
+    await registrarAudit(user.id, 'eliminar', 'caja_menuda_adjunto', Number(adjuntoId), {
+      caja_menuda_id: Number(id),
+    });
+
+    res.json({ success: true, message: 'Adjunto eliminado' });
+  }),
+);
+
+export default router;
