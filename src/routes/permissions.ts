@@ -109,7 +109,7 @@ router.put(
        equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
        equipos_asignacion, equipos_uso, equipos_editar_asignacion,
        documentos_acceso, oportunidades_ver, registrar_pago, caja_menuda, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, CURRENT_TIMESTAMP)
      ON CONFLICT (user_id) DO UPDATE SET
        acceso_global = EXCLUDED.acceso_global,
        proyectos_crear = EXCLUDED.proyectos_crear,
