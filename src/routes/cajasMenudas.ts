@@ -706,4 +706,158 @@ router.delete(
   }),
 );
 
+// POST /:id/reembolso — generate solicitud de pago from pending expenses
+router.post(
+  '/:id/reembolso',
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
+    const { id } = req.params;
+    const user = req.user!;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Get caja menuda info
+      const cajaResult = await client.query<{ proyecto_id: number; nombre: string; estado: string }>(
+        'SELECT proyecto_id, nombre, estado FROM cajas_menudas WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+
+      if (cajaResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        res.status(404).json({ success: false, error: 'Caja menuda no encontrada' });
+        return;
+      }
+
+      const caja = cajaResult.rows[0];
+
+      if (caja.estado !== 'abierta') {
+        await client.query('ROLLBACK');
+        res.status(400).json({ success: false, error: 'La caja menuda está cerrada' });
+        return;
+      }
+
+      // Get pending gastos
+      const gastosResult = await client.query<{ monto_total: string; fecha: string }>(
+        `SELECT monto_total, fecha FROM cajas_menudas_gastos
+         WHERE caja_menuda_id = $1 AND solicitud_reembolso_id IS NULL
+         ORDER BY fecha ASC`,
+        [id],
+      );
+
+      if (gastosResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ success: false, error: 'No hay gastos pendientes de reembolso' });
+        return;
+      }
+
+      // Calculate total and date range
+      const total = gastosResult.rows.reduce((sum, g) => sum + Number(g.monto_total), 0);
+      const fechaMin = gastosResult.rows[0].fecha;
+      const fechaMax = gastosResult.rows[gastosResult.rows.length - 1].fecha;
+
+      const formatFecha = (f: string) => {
+        const d = new Date(f + 'T00:00:00');
+        return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      };
+
+      // Generate solicitud numero
+      const projectResult = await client.query<{ sp_prefijo: string | null }>(
+        'SELECT sp_prefijo FROM proyectos WHERE id = $1',
+        [caja.proyecto_id],
+      );
+
+      const prefijo = projectResult.rows[0]?.sp_prefijo;
+      if (!prefijo) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ success: false, error: 'El proyecto no tiene prefijo de solicitud configurado' });
+        return;
+      }
+
+      const countResult = await client.query<{ total: string }>(
+        "SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total FROM solicitudes_pago WHERE proyecto_id = $1",
+        [caja.proyecto_id],
+      );
+      const nextNum = parseInt(countResult.rows[0].total) + 1;
+      const numero = `${prefijo}-${String(nextNum).padStart(3, '0')}`;
+
+      // Generate verification code
+      const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+      const bytes = crypto.randomBytes(8);
+      let codigoVerificacion = '';
+      for (let i = 0; i < 8; i++) {
+        codigoVerificacion += chars[bytes[i] % chars.length];
+      }
+
+      // Create solicitud de pago
+      const descripcionItem = `Reembolso de caja menuda ${caja.nombre} — ${formatFecha(fechaMin)} a ${formatFecha(fechaMax)}`;
+
+      const solicitudResult = await client.query<{ id: number }>(
+        `INSERT INTO solicitudes_pago (
+          proyecto_id, numero, fecha, proveedor, preparado_por,
+          subtotal, descuentos, impuestos, monto_total,
+          estado, observaciones, codigo_verificacion
+        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 0, 0, $5, 'pendiente', $6, $7)
+        RETURNING id`,
+        [
+          caja.proyecto_id,
+          numero,
+          `Reembolso Caja Menuda - ${caja.nombre}`,
+          user.id,
+          total,
+          descripcionItem,
+          codigoVerificacion,
+        ],
+      );
+
+      const solicitudId = solicitudResult.rows[0].id;
+
+      // Create single item
+      await client.query(
+        `INSERT INTO solicitud_pago_items (solicitud_pago_id, descripcion, cantidad, precio_unitario, precio_total, orden)
+         VALUES ($1, $2, 1, $3, $3, 0)`,
+        [solicitudId, descripcionItem, total],
+      );
+
+      // Link pending gastos to the new solicitud
+      await client.query(
+        `UPDATE cajas_menudas_gastos SET solicitud_reembolso_id = $1
+         WHERE caja_menuda_id = $2 AND solicitud_reembolso_id IS NULL`,
+        [solicitudId, id],
+      );
+
+      await client.query('COMMIT');
+
+      await registrarAudit(user.id, 'crear', 'caja_menuda_reembolso', solicitudId, {
+        caja_menuda_id: Number(id),
+        monto_total: total,
+        gastos_count: gastosResult.rows.length,
+        numero,
+      });
+
+      res.status(201).json({
+        success: true,
+        data: {
+          solicitud_id: solicitudId,
+          numero,
+          monto_total: total,
+          gastos_count: gastosResult.rows.length,
+        },
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }),
+);
+
 export default router;
