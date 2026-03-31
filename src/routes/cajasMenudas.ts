@@ -365,3 +365,186 @@ router.put(
     }
   }),
 );
+
+// GET /:id/gastos — list expenses, optionally filtered by solicitud_reembolso_id
+router.get(
+  '/:id/gastos',
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const { id } = req.params;
+    const { solicitud_reembolso_id } = req.query;
+
+    let whereClause = 'WHERE g.caja_menuda_id = $1';
+    const params: unknown[] = [id];
+
+    if (solicitud_reembolso_id === 'null') {
+      whereClause += ' AND g.solicitud_reembolso_id IS NULL';
+    } else if (solicitud_reembolso_id) {
+      whereClause += ' AND g.solicitud_reembolso_id = $2';
+      params.push(solicitud_reembolso_id);
+    }
+
+    const result = await query<GastoRow>(
+      `SELECT g.*, u.nombre AS registrado_por_nombre
+       FROM cajas_menudas_gastos g
+       JOIN users u ON u.id = g.registrado_por
+       ${whereClause}
+       ORDER BY g.fecha DESC, g.id DESC`,
+      params,
+    );
+
+    res.json({ success: true, data: result.rows });
+  }),
+);
+
+// POST /:id/gastos — register expense
+router.post(
+  '/:id/gastos',
+  [
+    param('id').isInt(),
+    body('fecha').isDate(),
+    body('proveedor').isString().trim().notEmpty(),
+    body('descripcion').isString().trim().notEmpty(),
+    body('monto').isFloat({ gt: 0 }),
+    body('itbms').optional().isFloat({ min: 0 }),
+    body('monto_total').isFloat({ gt: 0 }),
+  ],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
+    const { id } = req.params;
+    const { fecha, proveedor, descripcion, monto, itbms, monto_total } = req.body;
+    const user = req.user!;
+
+    // Verify caja exists and is open
+    const caja = await query<{ estado: string }>('SELECT estado FROM cajas_menudas WHERE id = $1', [id]);
+    if (caja.rows.length === 0) {
+      res.status(404).json({ success: false, error: 'Caja menuda no encontrada' });
+      return;
+    }
+    if (caja.rows[0].estado !== 'abierta') {
+      res.status(400).json({ success: false, error: 'La caja menuda está cerrada' });
+      return;
+    }
+
+    const result = await query<{ id: number }>(
+      `INSERT INTO cajas_menudas_gastos (caja_menuda_id, fecha, proveedor, descripcion, monto, itbms, monto_total, registrado_por)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id`,
+      [id, fecha, proveedor, descripcion, monto, itbms ?? 0, monto_total, user.id],
+    );
+
+    await registrarAudit(user.id, 'crear', 'caja_menuda_gasto', result.rows[0].id, {
+      caja_menuda_id: Number(id), proveedor, monto_total,
+    });
+
+    res.status(201).json({ success: true, data: { id: result.rows[0].id } });
+  }),
+);
+
+// PUT /:id/gastos/:gastoId — edit (only if not reimbursed)
+router.put(
+  '/:id/gastos/:gastoId',
+  [
+    param('id').isInt(),
+    param('gastoId').isInt(),
+    body('fecha').optional().isDate(),
+    body('proveedor').optional().isString().trim().notEmpty(),
+    body('descripcion').optional().isString().trim().notEmpty(),
+    body('monto').optional().isFloat({ gt: 0 }),
+    body('itbms').optional().isFloat({ min: 0 }),
+    body('monto_total').optional().isFloat({ gt: 0 }),
+  ],
+  asyncHandler(async (req: Request<{ id: string; gastoId: string }>, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
+    const { id, gastoId } = req.params;
+    const user = req.user!;
+
+    // Verify gasto exists, belongs to this caja, and is not reimbursed
+    const gasto = await query<{ solicitud_reembolso_id: number | null }>(
+      'SELECT solicitud_reembolso_id FROM cajas_menudas_gastos WHERE id = $1 AND caja_menuda_id = $2',
+      [gastoId, id],
+    );
+
+    if (gasto.rows.length === 0) {
+      res.status(404).json({ success: false, error: 'Gasto no encontrado' });
+      return;
+    }
+    if (gasto.rows[0].solicitud_reembolso_id !== null) {
+      res.status(400).json({ success: false, error: 'No se puede editar un gasto ya reembolsado' });
+      return;
+    }
+
+    const { fecha, proveedor, descripcion, monto, itbms, monto_total } = req.body;
+
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    let paramIdx = 1;
+
+    if (fecha !== undefined) { sets.push(`fecha = $${paramIdx++}`); params.push(fecha); }
+    if (proveedor !== undefined) { sets.push(`proveedor = $${paramIdx++}`); params.push(proveedor); }
+    if (descripcion !== undefined) { sets.push(`descripcion = $${paramIdx++}`); params.push(descripcion); }
+    if (monto !== undefined) { sets.push(`monto = $${paramIdx++}`); params.push(monto); }
+    if (itbms !== undefined) { sets.push(`itbms = $${paramIdx++}`); params.push(itbms); }
+    if (monto_total !== undefined) { sets.push(`monto_total = $${paramIdx++}`); params.push(monto_total); }
+
+    if (sets.length === 0) {
+      res.status(400).json({ success: false, error: 'No hay campos para actualizar' });
+      return;
+    }
+
+    params.push(gastoId);
+
+    await query(
+      `UPDATE cajas_menudas_gastos SET ${sets.join(', ')} WHERE id = $${paramIdx}`,
+      params,
+    );
+
+    await registrarAudit(user.id, 'editar', 'caja_menuda_gasto', Number(gastoId), {
+      caja_menuda_id: Number(id), campos: Object.keys(req.body),
+    });
+
+    res.json({ success: true, data: { id: Number(gastoId) } });
+  }),
+);
+
+// DELETE /:id/gastos/:gastoId — delete (only if not reimbursed)
+router.delete(
+  '/:id/gastos/:gastoId',
+  [param('id').isInt(), param('gastoId').isInt()],
+  asyncHandler(async (req: Request<{ id: string; gastoId: string }>, res: Response): Promise<void> => {
+    const { id, gastoId } = req.params;
+    const user = req.user!;
+
+    const gasto = await query<{ solicitud_reembolso_id: number | null }>(
+      'SELECT solicitud_reembolso_id FROM cajas_menudas_gastos WHERE id = $1 AND caja_menuda_id = $2',
+      [gastoId, id],
+    );
+
+    if (gasto.rows.length === 0) {
+      res.status(404).json({ success: false, error: 'Gasto no encontrado' });
+      return;
+    }
+    if (gasto.rows[0].solicitud_reembolso_id !== null) {
+      res.status(400).json({ success: false, error: 'No se puede eliminar un gasto ya reembolsado' });
+      return;
+    }
+
+    await query('DELETE FROM cajas_menudas_gastos WHERE id = $1', [gastoId]);
+
+    await registrarAudit(user.id, 'eliminar', 'caja_menuda_gasto', Number(gastoId), {
+      caja_menuda_id: Number(id),
+    });
+
+    res.json({ success: true, message: 'Gasto eliminado' });
+  }),
+);
