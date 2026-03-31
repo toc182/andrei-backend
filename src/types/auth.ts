@@ -29,6 +29,7 @@ export interface UserPermissions {
   documentos_acceso: boolean;
   oportunidades_ver: boolean;
   registrar_pago: boolean;
+  caja_menuda: boolean;
 }
 
 /**
@@ -68,7 +69,7 @@ export interface AuthenticatedRequest extends Request {
 export type ExpressMiddleware = (
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => void | Promise<void>;
 
 /**

@@ -1,7 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { query } from '../database/config.js';
-import type { AuthUser, UserRole, JWTPayload, UserPermissions } from '../types/auth.js';
+import type {
+  AuthUser,
+  UserRole,
+  JWTPayload,
+  UserPermissions,
+} from '../types/auth.js';
 
 interface UserRow {
   id: number;
@@ -13,12 +18,26 @@ interface UserRow {
 
 // Whitelist de permisos válidos para evitar SQL injection
 const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
-  'acceso_global', 'proyectos_crear', 'proyectos_editar', 'proyectos_eliminar',
-  'clientes_agregar', 'clientes_editar', 'clientes_eliminar',
-  'solicitudes_editar_todas', 'requisiciones_editar_todas',
-  'equipos_ver', 'equipos_agregar', 'equipos_editar', 'equipos_eliminar',
-  'equipos_asignacion', 'equipos_uso', 'equipos_editar_asignacion',
-  'documentos_acceso', 'oportunidades_ver', 'registrar_pago'
+  'acceso_global',
+  'proyectos_crear',
+  'proyectos_editar',
+  'proyectos_eliminar',
+  'clientes_agregar',
+  'clientes_editar',
+  'clientes_eliminar',
+  'solicitudes_editar_todas',
+  'requisiciones_editar_todas',
+  'equipos_ver',
+  'equipos_agregar',
+  'equipos_editar',
+  'equipos_eliminar',
+  'equipos_asignacion',
+  'equipos_uso',
+  'equipos_editar_asignacion',
+  'documentos_acceso',
+  'oportunidades_ver',
+  'registrar_pago',
+  'caja_menuda',
 ];
 
 /**
@@ -27,7 +46,7 @@ const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
 export async function authenticateToken(
   req: Request,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<void> {
   try {
     const authHeader = req.headers['authorization'];
@@ -36,23 +55,25 @@ export async function authenticateToken(
     if (!token) {
       res.status(401).json({
         success: false,
-        message: 'Token de acceso requerido'
+        message: 'Token de acceso requerido',
       });
       return;
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!, { algorithms: ['HS256'] }) as JWTPayload;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!, {
+      algorithms: ['HS256'],
+    }) as JWTPayload;
 
     // Verificar que el usuario existe y está activo
     const result = await query<UserRow>(
       'SELECT id, nombre, email, rol, debe_cambiar_password FROM users WHERE id = $1 AND activo = true',
-      [decoded.userId]
+      [decoded.userId],
     );
 
     if (result.rows.length === 0) {
       res.status(401).json({
         success: false,
-        message: 'Usuario no válido'
+        message: 'Usuario no válido',
       });
       return;
     }
@@ -67,9 +88,9 @@ export async function authenticateToken(
                 solicitudes_editar_todas, requisiciones_editar_todas,
                 equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
                 equipos_asignacion, equipos_uso, equipos_editar_asignacion,
-                documentos_acceso, oportunidades_ver, registrar_pago
+                documentos_acceso, oportunidades_ver, registrar_pago, caja_menuda
          FROM user_permissions WHERE user_id = $1`,
-        [user.id]
+        [user.id],
       );
       if (permsResult.rows.length > 0) {
         user.permissions = permsResult.rows[0];
@@ -84,14 +105,14 @@ export async function authenticateToken(
     if (jwtError.name === 'TokenExpiredError') {
       res.status(401).json({
         success: false,
-        message: 'Token expirado'
+        message: 'Token expirado',
       });
       return;
     }
 
     res.status(403).json({
       success: false,
-      message: 'Token inválido'
+      message: 'Token inválido',
     });
   }
 }
@@ -104,7 +125,7 @@ export function requireRole(allowedRoles: UserRole[]) {
     if (!req.user || !allowedRoles.includes(req.user.rol)) {
       res.status(403).json({
         success: false,
-        message: 'No tienes permisos para esta acción'
+        message: 'No tienes permisos para esta acción',
       });
       return;
     }
@@ -147,7 +168,7 @@ export function checkPermission(permiso: keyof UserPermissions) {
     }
     res.status(403).json({
       success: false,
-      message: 'No tienes permisos para esta acción'
+      message: 'No tienes permisos para esta acción',
     });
   };
 }
@@ -157,7 +178,11 @@ export function checkPermission(permiso: keyof UserPermissions) {
  * admin/co-admin pasan; usuario con acceso_global pasa; sino verifica user_project_access.
  */
 export function checkProjectAccess(paramName: string = 'id') {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  return async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     if (!req.user) {
       res.status(401).json({ success: false, message: 'No autenticado' });
       return;
@@ -175,13 +200,15 @@ export function checkProjectAccess(paramName: string = 'id') {
     // verificar acceso al proyecto específico
     const projectId = parseInt(req.params[paramName], 10);
     if (isNaN(projectId)) {
-      res.status(400).json({ success: false, message: 'ID de proyecto inválido' });
+      res
+        .status(400)
+        .json({ success: false, message: 'ID de proyecto inválido' });
       return;
     }
     try {
       const result = await query(
         'SELECT 1 FROM user_project_access WHERE user_id = $1 AND proyecto_id = $2',
-        [req.user.id, projectId]
+        [req.user.id, projectId],
       );
       if (result.rows.length > 0) {
         next();
@@ -189,10 +216,12 @@ export function checkProjectAccess(paramName: string = 'id') {
       }
       res.status(403).json({
         success: false,
-        message: 'No tienes acceso a este proyecto'
+        message: 'No tienes acceso a este proyecto',
       });
     } catch {
-      res.status(500).json({ success: false, message: 'Error verificando acceso' });
+      res
+        .status(500)
+        .json({ success: false, message: 'Error verificando acceso' });
     }
   };
 }
