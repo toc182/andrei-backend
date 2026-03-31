@@ -125,7 +125,27 @@ router.get(
   '/proyecto/:proyectoId',
   [param('proyectoId').isInt()],
   asyncHandler(async (req: Request<{ proyectoId: string }>, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
     const { proyectoId } = req.params;
+    const user = req.user!;
+    const isAdmin = user.rol === 'admin' || user.rol === 'co-admin';
+
+    // Non-admin users can only see cajas from their assigned projects
+    if (!isAdmin) {
+      const access = await query(
+        'SELECT 1 FROM user_project_access WHERE user_id = $1 AND proyecto_id = $2',
+        [user.id, proyectoId],
+      );
+      if (access.rows.length === 0) {
+        res.status(403).json({ success: false, error: 'No tienes acceso a este proyecto' });
+        return;
+      }
+    }
 
     const result = await query<CajaMenudaRow>(
       `SELECT cm.id, cm.proyecto_id, cm.responsable_id, cm.nombre,
@@ -151,6 +171,12 @@ router.get(
   '/:id',
   [param('id').isInt()],
   asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
     const { id } = req.params;
 
     const result = await query<CajaMenudaRow>(
@@ -371,6 +397,12 @@ router.get(
   '/:id/gastos',
   [param('id').isInt()],
   asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
     const { id } = req.params;
     const { solicitud_reembolso_id } = req.query;
 
@@ -596,6 +628,12 @@ router.get(
   '/:id/adjuntos',
   [param('id').isInt()],
   asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
     const { id } = req.params;
 
     const result = await query<AdjuntoRow>(
@@ -616,6 +654,12 @@ router.get(
   '/:id/adjuntos/:adjuntoId/download',
   [param('id').isInt(), param('adjuntoId').isInt()],
   asyncHandler(async (req: Request<{ id: string; adjuntoId: string }>, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
     const { id, adjuntoId } = req.params;
 
     const result = await query<{ r2_key: string; nombre_original: string }>(
