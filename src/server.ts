@@ -11,19 +11,28 @@ const __dirname = path.dirname(__filename);
 
 // Validación de variables de entorno críticas
 const requiredEnvVars = ['JWT_SECRET'];
-const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+const missingEnvVars = requiredEnvVars.filter(
+  (varName) => !process.env[varName],
+);
 
 if (missingEnvVars.length > 0) {
   console.error('❌ ERROR: Missing required environment variables:');
-  missingEnvVars.forEach(varName => console.error(`   - ${varName}`));
-  console.error('\nPlease check your .env file and ensure all required variables are set.');
+  missingEnvVars.forEach((varName) => console.error(`   - ${varName}`));
+  console.error(
+    '\nPlease check your .env file and ensure all required variables are set.',
+  );
   process.exit(1);
 }
 
 // Validar configuración de base de datos
-if (!process.env.DATABASE_URL && (!process.env.DB_HOST || !process.env.DB_NAME || !process.env.DB_USER)) {
+if (
+  !process.env.DATABASE_URL &&
+  (!process.env.DB_HOST || !process.env.DB_NAME || !process.env.DB_USER)
+) {
   console.error('❌ ERROR: Database configuration is incomplete.');
-  console.error('   Either set DATABASE_URL or all of: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD');
+  console.error(
+    '   Either set DATABASE_URL or all of: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD',
+  );
   process.exit(1);
 }
 
@@ -56,22 +65,25 @@ import approvalSettingsRoutes from './routes/approvalSettings.js';
 import permissionsRoutes from './routes/permissions.js';
 import verificacionRoutes from './routes/verificacion.js';
 import notificationsRoutes from './routes/notifications.js';
+import cajasMenudasRoutes from './routes/cajasMenudas.js';
 import { startScheduler } from './cron/scheduler.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors({
-  origin: [
-    'https://andrei-frontend.vercel.app',
-    'https://sistema.pinellaspanama.com',
-    'http://localhost:5173'
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+app.use(
+  cors({
+    origin: [
+      'https://andrei-frontend.vercel.app',
+      'https://sistema.pinellaspanama.com',
+      'http://localhost:5173',
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  }),
+);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -110,6 +122,7 @@ app.use('/api/solicitudes-pago', solicitudesPagoRoutes);
 app.use('/api/approval-settings', approvalSettingsRoutes);
 app.use('/api/permissions', permissionsRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/cajas-menudas', cajasMenudasRoutes);
 
 // Servir archivos estáticos de uploads
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
@@ -119,7 +132,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     success: true,
     message: 'Servidor funcionando correctamente',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -127,7 +140,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
 app.use('*', (_req: Request, res: Response) => {
   res.status(404).json({
     success: false,
-    message: 'Ruta no encontrada'
+    message: 'Ruta no encontrada',
   });
 });
 
@@ -136,7 +149,7 @@ app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Error no manejado:', error);
   res.status(500).json({
     success: false,
-    message: 'Error interno del servidor'
+    message: 'Error interno del servidor',
   });
 });
 
