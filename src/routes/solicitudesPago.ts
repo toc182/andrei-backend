@@ -78,7 +78,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
   let pdfComprobante:
     | { fecha_pago: string; registrado_por_nombre: string }
     | undefined;
-  if (sol.estado === 'pagada' || sol.estado === 'facturada') {
+  if (sol.estado === 'pagada' || sol.estado === 'facturada' || sol.estado === 'devolucion') {
     const compResult = await query<{
       fecha_pago: string;
       registrado_por_nombre: string;
@@ -103,7 +103,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
         registrado_por_nombre: string;
       }
     | undefined;
-  if (sol.estado === 'facturada') {
+  if (sol.estado === 'facturada' || sol.estado === 'devolucion') {
     const factResult = await query<{
       fecha_factura: string;
       numero_factura: string | null;
@@ -147,6 +147,100 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     }
   }
 
+  // Fetch correcciones
+  const correccionesResult = await query<{
+    motivo: string;
+    cambios: string;
+    created_at: string;
+    usuario_nombre: string;
+  }>(
+    `SELECT c.motivo, c.cambios, c.created_at, u.nombre as usuario_nombre
+     FROM correcciones_solicitud c
+     JOIN users u ON c.user_id = u.id
+     WHERE c.solicitud_pago_id = $1
+     ORDER BY c.created_at ASC`,
+    [solicitudId],
+  );
+  const FIELD_LABELS: Record<string, string> = {
+    proveedor: 'Proveedor', fecha: 'Fecha', observaciones: 'Observaciones',
+    beneficiario: 'Beneficiario', banco: 'Banco', tipo_cuenta: 'Tipo de Cuenta',
+    numero_cuenta: 'Número de Cuenta', fecha_pago: 'Fecha de Pago',
+    fecha_factura: 'Fecha de Factura', numero_factura: 'Número de Factura',
+    tipo: 'Tipo', subtotal: 'Subtotal', monto_total: 'Monto Total',
+    precio_unitario: 'Precio Unitario', precio_total: 'Precio Total',
+    cantidad: 'Cantidad', unidad: 'Unidad', descripcion: 'Descripción',
+  };
+
+  const MONEY_FIELDS = ['subtotal', 'monto_total', 'precio_unitario', 'precio_total', 'monto'];
+
+  function formatVal(campo: string, val: unknown): string {
+    const s = String(val ?? '');
+    if (!s) return '';
+    if (MONEY_FIELDS.includes(campo)) {
+      const n = parseFloat(s);
+      if (!isNaN(n)) return n.toFixed(2);
+    }
+    return s;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function flattenCambio(ch: any): { campo: string; anterior: string; nuevo: string }[] {
+    const label = (f: string) => FIELD_LABELS[f] || f;
+    if (ch.campo === 'item' && Array.isArray(ch.cambios)) {
+      return ch.cambios.map((sub: { campo: string; anterior: string; nuevo: string }) => ({
+        campo: `${ch.descripcion || 'Item'} — ${label(sub.campo)}`,
+        anterior: formatVal(sub.campo, sub.anterior),
+        nuevo: formatVal(sub.campo, sub.nuevo),
+      }));
+    }
+    if (ch.campo === 'item_agregado') {
+      return [{ campo: `Item agregado: ${ch.descripcion || ''}`, anterior: '', nuevo: '' }];
+    }
+    if (ch.campo === 'item_eliminado') {
+      return [{ campo: `Item eliminado: ${ch.descripcion || ''}`, anterior: '', nuevo: '' }];
+    }
+    return [{
+      campo: label(ch.campo || ''),
+      anterior: formatVal(ch.campo, ch.anterior),
+      nuevo: formatVal(ch.campo, ch.nuevo),
+    }];
+  }
+
+  const pdfCorrecciones = correccionesResult.rows.length > 0
+    ? correccionesResult.rows.map((c, i) => {
+        const cambiosObj = typeof c.cambios === 'string' ? JSON.parse(c.cambios) : c.cambios;
+        const cambiosList = Array.isArray(cambiosObj)
+          ? cambiosObj.flatMap(flattenCambio).filter((ch: { campo: string }) => ch.campo)
+          : [];
+        return {
+          version: i + 2,
+          fecha: c.created_at,
+          usuario_nombre: c.usuario_nombre,
+          motivo: c.motivo,
+          cambios: cambiosList,
+        };
+      })
+    : undefined;
+
+  // Fetch devolucion
+  let pdfDevolucion: { fecha_devolucion: string; motivo: string; registrado_por_nombre: string } | undefined;
+  if (sol.estado === 'devolucion') {
+    const devResult = await query<{
+      fecha_devolucion: string;
+      motivo: string;
+      registrado_por_nombre: string;
+    }>(
+      `SELECT ds.fecha_devolucion, ds.motivo, u.nombre as registrado_por_nombre
+       FROM devoluciones_solicitud ds
+       LEFT JOIN users u ON ds.registrado_por = u.id
+       WHERE ds.solicitud_id = $1`,
+      [solicitudId],
+    );
+    if (devResult.rows.length > 0) {
+      pdfDevolucion = devResult.rows[0];
+    }
+  }
+
   const solicitudBuffer = await generateSolicitudPDF({
     estado: sol.estado,
     solicitud: {
@@ -177,6 +271,8 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     total_aprobadores: totalAprobadores,
     aprobadores_proyecto: aprobadoresProyecto.rows,
     reembolso: pdfReembolso,
+    correcciones: pdfCorrecciones,
+    devolucion: pdfDevolucion,
   });
 
   // Merge adjuntos into the PDF

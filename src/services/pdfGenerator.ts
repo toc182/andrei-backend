@@ -56,6 +56,26 @@ interface AprobadorData {
   orden: number;
 }
 
+interface CambioData {
+  campo: string;
+  anterior: string;
+  nuevo: string;
+}
+
+interface CorreccionData {
+  version: number;
+  fecha: string;
+  usuario_nombre: string;
+  motivo: string;
+  cambios: CambioData[];
+}
+
+interface DevolucionData {
+  fecha_devolucion: string;
+  motivo: string;
+  registrado_por_nombre: string;
+}
+
 interface PDFInput {
   solicitud: SolicitudData;
   estado: string;
@@ -78,6 +98,8 @@ interface PDFInput {
     fecha_reembolso: string;
     registrado_por_nombre: string;
   };
+  correcciones?: CorreccionData[];
+  devolucion?: DevolucionData;
 }
 
 // --- Colors ---
@@ -99,7 +121,11 @@ function formatMoney(amount: number): string {
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString);
-  return date.toLocaleDateString('es-PA', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return date.toLocaleDateString('es-PA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
 }
 
 // --- Main generator ---
@@ -108,13 +134,19 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
   // Pre-generate QR code buffer (must be done before entering PDFKit's sync callback)
   let qrBuffer: Buffer | null = null;
   let verifyUrl = '';
-  const esPagadaOFacturada = data.estado === 'pagada' || data.estado === 'facturada';
-  if (data.codigo_verificacion && (esPagadaOFacturada || (data.total_aprobadores > 0 && data.aprobaciones.length >= data.total_aprobadores))) {
+  const esPagadaOFacturada =
+    data.estado === 'pagada' || data.estado === 'facturada' || data.estado === 'devolucion';
+  if (
+    data.codigo_verificacion &&
+    (esPagadaOFacturada ||
+      (data.total_aprobadores > 0 &&
+        data.aprobaciones.length >= data.total_aprobadores))
+  ) {
     verifyUrl = `https://sistema.pinellaspanama.com/verificar/${data.codigo_verificacion}`;
     const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
       width: 180,
       margin: 0,
-      color: { dark: '#1a365d', light: '#ffffff' }
+      color: { dark: '#1a365d', light: '#ffffff' },
     });
     qrBuffer = Buffer.from(qrDataUrl.split(',')[1], 'base64');
   }
@@ -123,7 +155,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     const doc = new PDFDocument({
       size: 'LETTER',
       margins: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN },
-      bufferPages: true
+      bufferPages: true,
     });
 
     doc.info.Title = `SP-${data.solicitud.numero}`;
@@ -137,7 +169,10 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     const tableX = MARGIN;
 
     // Load logo
-    const logoPath = path.resolve(__dirname, '../../templates/LogoPinellas.png');
+    const logoPath = path.resolve(
+      __dirname,
+      '../../templates/LogoPinellas.png',
+    );
     let logoBuffer: Buffer | null = null;
     try {
       logoBuffer = fs.readFileSync(logoPath);
@@ -147,7 +182,14 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
     // Table column config
     const cols = [24, 220, 40, 40, 104, 104]; // = 532
-    const colHeaders = ['#', 'Descripción', 'Cant.', 'Und.', 'P.Unit (B/.)', 'P.Total (B/.)'];
+    const colHeaders = [
+      '#',
+      'Descripción',
+      'Cant.',
+      'Und.',
+      'P.Unit (B/.)',
+      'P.Total (B/.)',
+    ];
 
     // Draw table header row (reusable for page breaks)
     const drawTableHeader = (atY: number) => {
@@ -156,7 +198,11 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       let cx = tableX + 3;
       for (let i = 0; i < colHeaders.length; i++) {
         const align = i >= 4 ? 'right' : 'left';
-        doc.text(colHeaders[i], cx, atY + 4, { width: cols[i] - 6, align, lineBreak: false });
+        doc.text(colHeaders[i], cx, atY + 4, {
+          width: cols[i] - 6,
+          align,
+          lineBreak: false,
+        });
         cx += cols[i];
       }
     };
@@ -171,13 +217,26 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     }
 
     doc.font('Helvetica-Bold').fontSize(14).fillColor(NAVY);
-    doc.text('SOLICITUD DE PAGO', 0, y + 2, { align: 'right', width: 612 - MARGIN, lineBreak: false });
+    doc.text('SOLICITUD DE PAGO', 0, y + 2, {
+      align: 'right',
+      width: 612 - MARGIN,
+      lineBreak: false,
+    });
     doc.font('Helvetica').fontSize(10).fillColor(NAVY);
-    doc.text(data.solicitud.numero, 0, y + 20, { align: 'right', width: 612 - MARGIN, lineBreak: false });
+    doc.text(data.solicitud.numero, 0, y + 20, {
+      align: 'right',
+      width: 612 - MARGIN,
+      lineBreak: false,
+    });
 
     // Separator line
     y += 38;
-    doc.moveTo(MARGIN, y).lineTo(MARGIN + pageWidth, y).strokeColor(NAVY).lineWidth(0.75).stroke();
+    doc
+      .moveTo(MARGIN, y)
+      .lineTo(MARGIN + pageWidth, y)
+      .strokeColor(NAVY)
+      .lineWidth(0.75)
+      .stroke();
 
     // ==========================================
     // 2. DATOS GENERALES (compact 2-col grid)
@@ -187,7 +246,13 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     const colRight = MARGIN + pageWidth / 2 + 5;
     const colW = pageWidth / 2 - 5;
 
-    const drawField = (label: string, value: string, x: number, yPos: number, w: number): number => {
+    const drawField = (
+      label: string,
+      value: string,
+      x: number,
+      yPos: number,
+      w: number,
+    ): number => {
       doc.font('Helvetica').fontSize(7).fillColor(GRAY);
       doc.text(label, x, yPos, { width: w, lineBreak: false });
       doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#000000');
@@ -197,14 +262,32 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
     // Row 1: Fecha | Proyecto
     y = drawField('Fecha', formatDate(data.solicitud.fecha), colLeft, y, colW);
-    drawField('Proyecto', data.solicitud.proyecto_nombre || '-', colRight, y - 22, colW);
+    drawField(
+      'Proyecto',
+      data.solicitud.proyecto_nombre || '-',
+      colRight,
+      y - 22,
+      colW,
+    );
 
     // Row 2: Proveedor | Solicitado por
     y = drawField('Proveedor', data.solicitud.proveedor, colLeft, y, colW);
-    drawField('Solicitado por', data.solicitud.solicitado_nombre || '-', colRight, y - 22, colW);
+    drawField(
+      'Solicitado por',
+      data.solicitud.solicitado_nombre || '-',
+      colRight,
+      y - 22,
+      colW,
+    );
 
     // Row 3: Preparado por | Urgente badge
-    y = drawField('Preparado por', data.solicitud.preparado_nombre || '-', colLeft, y, colW);
+    y = drawField(
+      'Preparado por',
+      data.solicitud.preparado_nombre || '-',
+      colLeft,
+      y,
+      colW,
+    );
     {
       let badgeX = colRight;
       const badgeY = y - 18;
@@ -222,9 +305,45 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
         doc.save();
         doc.roundedRect(badgeX, badgeY, 108, 14, 2).fill('#d97706');
         doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#ffffff');
-        doc.text('REEMBOLSO PINELLAS', badgeX + 8, badgeY + 4, { lineBreak: false });
+        doc.text('REEMBOLSO PINELLAS', badgeX + 8, badgeY + 4, {
+          lineBreak: false,
+        });
         doc.restore();
       }
+    }
+
+    // ==========================================
+    // 2b. OBSERVACIONES
+    // ==========================================
+    if (data.solicitud.observaciones) {
+      if (y + 30 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = MARGIN;
+      }
+
+      const obsH = doc
+        .font('Helvetica')
+        .fontSize(8)
+        .heightOfString(data.solicitud.observaciones, {
+          width: pageWidth - 16,
+        });
+      const boxH = obsH + 22;
+
+      doc
+        .roundedRect(tableX, y, pageWidth, boxH, 2)
+        .strokeColor('#e2e8f0')
+        .lineWidth(0.5)
+        .stroke();
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(NAVY);
+      doc.text('Observaciones', tableX + 8, y + 5, {
+        width: pageWidth - 16,
+        lineBreak: false,
+      });
+      doc.font('Helvetica').fontSize(8).fillColor('#000000');
+      doc.text(data.solicitud.observaciones, tableX + 8, y + 16, {
+        width: pageWidth - 16,
+      });
+      y += boxH + 6;
     }
 
     // ==========================================
@@ -242,11 +361,20 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       const isAlt = idx % 2 === 1;
 
       // Calculate row height
-      const descHeight = doc.font('Helvetica').fontSize(8).heightOfString(item.descripcion, { width: cols[1] - 6 });
+      const descHeight = doc
+        .font('Helvetica')
+        .fontSize(8)
+        .heightOfString(item.descripcion, { width: cols[1] - 6 });
       const detailHeight = item.descripcion_detallada
-        ? doc.font('Helvetica').fontSize(6.5).heightOfString(item.descripcion_detallada, { width: cols[1] - 6 })
+        ? doc
+            .font('Helvetica')
+            .fontSize(6.5)
+            .heightOfString(item.descripcion_detallada, { width: cols[1] - 6 })
         : 0;
-      const rowHeight = Math.max(15, descHeight + detailHeight + (item.descripcion_detallada ? 8 : 5));
+      const rowHeight = Math.max(
+        15,
+        descHeight + detailHeight + (item.descripcion_detallada ? 8 : 5),
+      );
 
       // Page break: repeat table header on new page
       if (y + rowHeight > PAGE_BOTTOM) {
@@ -265,58 +393,98 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
       // # column
       doc.font('Helvetica').fontSize(8).fillColor('#000000');
-      doc.text(String(idx + 1), cx, y + 3, { width: cols[0] - 6, lineBreak: false });
+      doc.text(String(idx + 1), cx, y + 3, {
+        width: cols[0] - 6,
+        lineBreak: false,
+      });
       cx += cols[0];
 
       // Description
       doc.font('Helvetica').fontSize(8).fillColor('#000000');
       doc.text(item.descripcion, cx, y + 3, { width: cols[1] - 6 });
       if (item.descripcion_detallada) {
-        const mainH = doc.font('Helvetica').fontSize(8).heightOfString(item.descripcion, { width: cols[1] - 6 });
+        const mainH = doc
+          .font('Helvetica')
+          .fontSize(8)
+          .heightOfString(item.descripcion, { width: cols[1] - 6 });
         doc.font('Helvetica').fontSize(6.5).fillColor(GRAY);
-        doc.text(item.descripcion_detallada, cx, y + 3 + mainH + 1, { width: cols[1] - 6 });
+        doc.text(item.descripcion_detallada, cx, y + 3 + mainH + 1, {
+          width: cols[1] - 6,
+        });
       }
       cx += cols[1];
 
       // Quantity
       doc.font('Helvetica').fontSize(8).fillColor('#000000');
-      doc.text(String(item.cantidad), cx, y + 3, { width: cols[2] - 6, lineBreak: false });
+      doc.text(String(item.cantidad), cx, y + 3, {
+        width: cols[2] - 6,
+        lineBreak: false,
+      });
       cx += cols[2];
 
       // Unit
-      doc.text(item.unidad, cx, y + 3, { width: cols[3] - 6, lineBreak: false });
+      doc.text(item.unidad, cx, y + 3, {
+        width: cols[3] - 6,
+        lineBreak: false,
+      });
       cx += cols[3];
 
       // Unit price
-      doc.text(formatMoney(item.precio_unitario).replace('B/. ', ''), cx, y + 3, { width: cols[4] - 6, align: 'right', lineBreak: false });
+      doc.text(
+        formatMoney(item.precio_unitario).replace('B/. ', ''),
+        cx,
+        y + 3,
+        { width: cols[4] - 6, align: 'right', lineBreak: false },
+      );
       cx += cols[4];
 
       // Total price
       doc.font('Helvetica-Bold').fontSize(8).fillColor('#000000');
-      doc.text(formatMoney(item.precio_total).replace('B/. ', ''), cx, y + 3, { width: cols[5] - 6, align: 'right', lineBreak: false });
+      doc.text(formatMoney(item.precio_total).replace('B/. ', ''), cx, y + 3, {
+        width: cols[5] - 6,
+        align: 'right',
+        lineBreak: false,
+      });
 
       y += rowHeight;
     }
 
     // Table bottom border
-    doc.moveTo(tableX, y).lineTo(tableX + pageWidth, y).strokeColor('#e2e8f0').lineWidth(0.5).stroke();
+    doc
+      .moveTo(tableX, y)
+      .lineTo(tableX + pageWidth, y)
+      .strokeColor('#e2e8f0')
+      .lineWidth(0.5)
+      .stroke();
 
     // ==========================================
     // 4. TOTALES
     // ==========================================
     y += 6;
-    const totalsValueX = tableX + 3 + cols[0] + cols[1] + cols[2] + cols[3] + cols[4];
+    const totalsValueX =
+      tableX + 3 + cols[0] + cols[1] + cols[2] + cols[3] + cols[4];
     const totalsValueW = cols[5] - 6;
     const totalsLabelW = 110;
     const totalsLabelX = totalsValueX - totalsLabelW - 5;
 
-    if (y + 50 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+    if (y + 50 > PAGE_BOTTOM) {
+      doc.addPage();
+      y = MARGIN;
+    }
 
     // Subtotal
     doc.font('Helvetica').fontSize(8).fillColor(GRAY);
-    doc.text('Subtotal:', totalsLabelX, y, { width: totalsLabelW, align: 'right', lineBreak: false });
+    doc.text('Subtotal:', totalsLabelX, y, {
+      width: totalsLabelW,
+      align: 'right',
+      lineBreak: false,
+    });
     doc.font('Helvetica').fontSize(8).fillColor('#000000');
-    doc.text(formatMoney(data.solicitud.subtotal), totalsValueX, y, { width: totalsValueW, align: 'right', lineBreak: false });
+    doc.text(formatMoney(data.solicitud.subtotal), totalsValueX, y, {
+      width: totalsValueW,
+      align: 'right',
+      lineBreak: false,
+    });
     y += 13;
 
     // Ajustes
@@ -327,49 +495,141 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
         ? `- ${formatMoney(Math.abs(ajuste.monto))}`
         : formatMoney(Math.abs(ajuste.monto));
       doc.font('Helvetica').fontSize(8).fillColor(GRAY);
-      doc.text(`${ajuste.descripcion}:`, totalsLabelX, y, { width: totalsLabelW, align: 'right', lineBreak: false });
+      doc.text(`${ajuste.descripcion}:`, totalsLabelX, y, {
+        width: totalsLabelW,
+        align: 'right',
+        lineBreak: false,
+      });
       doc.font('Helvetica').fontSize(8).fillColor(color);
-      doc.text(montoStr, totalsValueX, y, { width: totalsValueW, align: 'right', lineBreak: false });
+      doc.text(montoStr, totalsValueX, y, {
+        width: totalsValueW,
+        align: 'right',
+        lineBreak: false,
+      });
       y += 13;
     }
 
     // Total line
-    doc.moveTo(totalsLabelX + 20, y).lineTo(totalsValueX + totalsValueW, y).strokeColor('#cbd5e0').lineWidth(0.5).stroke();
+    doc
+      .moveTo(totalsLabelX + 20, y)
+      .lineTo(totalsValueX + totalsValueW, y)
+      .strokeColor('#cbd5e0')
+      .lineWidth(0.5)
+      .stroke();
     y += 4;
 
     doc.font('Helvetica-Bold').fontSize(10).fillColor(NAVY);
-    doc.text('TOTAL:', totalsLabelX, y, { width: totalsLabelW, align: 'right', lineBreak: false });
-    doc.text(formatMoney(data.solicitud.monto_total), totalsValueX, y, { width: totalsValueW, align: 'right', lineBreak: false });
+    doc.text('TOTAL:', totalsLabelX, y, {
+      width: totalsLabelW,
+      align: 'right',
+      lineBreak: false,
+    });
+    doc.text(formatMoney(data.solicitud.monto_total), totalsValueX, y, {
+      width: totalsValueW,
+      align: 'right',
+      lineBreak: false,
+    });
     y += 18;
 
-    // ==========================================
-    // 5. OBSERVACIONES
-    // ==========================================
-    if (data.solicitud.observaciones) {
-      if (y + 30 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+    // (Observaciones moved above table)
 
-      const obsH = doc.font('Helvetica').fontSize(8).heightOfString(data.solicitud.observaciones, { width: pageWidth - 16 });
-      const boxH = obsH + 22;
+    // ==========================================
+    // 5b. CORRECCIONES
+    // ==========================================
+    if (data.correcciones && data.correcciones.length > 0) {
+      // Calculate dynamic height: header + each correction (header line + cambios lines)
+      let totalCorrH = 20;
+      for (const corr of data.correcciones) {
+        totalCorrH += 14; // version/date/motivo line
+        totalCorrH += corr.cambios.length * 11; // each cambio line
+        totalCorrH += 6; // spacing
+      }
 
-      doc.roundedRect(tableX, y, pageWidth, boxH, 2).strokeColor('#e2e8f0').lineWidth(0.5).stroke();
-      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(NAVY);
-      doc.text('Observaciones', tableX + 8, y + 5, { width: pageWidth - 16, lineBreak: false });
-      doc.font('Helvetica').fontSize(8).fillColor('#000000');
-      doc.text(data.solicitud.observaciones, tableX + 8, y + 16, { width: pageWidth - 16 });
-      y += boxH + 6;
+      if (y + totalCorrH > PAGE_BOTTOM) {
+        doc.addPage();
+        y = MARGIN;
+      }
+
+      // Yellow background box, subtle border
+      doc.roundedRect(tableX, y, pageWidth, totalCorrH, 2).fill('#fffbeb');
+      doc
+        .roundedRect(tableX, y, pageWidth, totalCorrH, 2)
+        .strokeColor('#fde68a')
+        .lineWidth(0.5)
+        .stroke();
+
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#92400e');
+      doc.text('Correcciones registradas después de pago', tableX + 8, y + 5, {
+        width: pageWidth - 16,
+        lineBreak: false,
+      });
+
+      let corrY = y + 18;
+      for (let ci = 0; ci < data.correcciones.length; ci++) {
+        const corr = data.correcciones[ci];
+
+        if (corrY + 14 + corr.cambios.length * 11 > PAGE_BOTTOM) {
+          doc.addPage();
+          corrY = MARGIN;
+        }
+
+        // Separator between corrections
+        if (ci > 0) {
+          doc.moveTo(tableX + 8, corrY - 2).lineTo(tableX + pageWidth - 8, corrY - 2).strokeColor('#fde68a').lineWidth(0.5).stroke();
+          corrY += 2;
+        }
+
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#78350f');
+        doc.text(`v${corr.version}`, tableX + 8, corrY, {
+          continued: true,
+          lineBreak: false,
+        });
+        doc.font('Helvetica').fontSize(7.5).fillColor('#78350f');
+        doc.text(
+          ` — ${formatDate(corr.fecha)} por ${corr.usuario_nombre} — `,
+          { continued: true, lineBreak: false },
+        );
+        doc.font('Helvetica').fontSize(7.5).fillColor('#6b7280');
+        doc.text(`Motivo: ${corr.motivo}`, { lineBreak: false });
+        corrY += 14;
+
+        // Cambios list with bullet points
+        for (const cambio of corr.cambios) {
+          doc.font('Helvetica').fontSize(7).fillColor('#92400e');
+          const cambioText = cambio.anterior || cambio.nuevo
+            ? `- ${cambio.campo}: ${cambio.anterior} >> ${cambio.nuevo}`
+            : `- ${cambio.campo}`;
+          doc.text(
+            cambioText,
+            tableX + 20,
+            corrY,
+            { width: pageWidth - 36, lineBreak: false },
+          );
+          corrY += 11;
+        }
+        corrY += 4;
+      }
+
+      y += totalCorrH + 6;
     }
 
     // ==========================================
     // 6. DATOS BANCARIOS (inline 2-col)
     // ==========================================
     if (data.solicitud.beneficiario || data.solicitud.banco) {
-      if (y + 30 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+      if (y + 30 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = MARGIN;
+      }
 
       const bankLines: Array<[string, string]> = [];
-      if (data.solicitud.beneficiario) bankLines.push(['Beneficiario', data.solicitud.beneficiario]);
+      if (data.solicitud.beneficiario)
+        bankLines.push(['Beneficiario', data.solicitud.beneficiario]);
       if (data.solicitud.banco) bankLines.push(['Banco', data.solicitud.banco]);
-      if (data.solicitud.tipo_cuenta) bankLines.push(['Tipo cuenta', data.solicitud.tipo_cuenta]);
-      if (data.solicitud.numero_cuenta) bankLines.push(['Nro. cuenta', data.solicitud.numero_cuenta]);
+      if (data.solicitud.tipo_cuenta)
+        bankLines.push(['Tipo cuenta', data.solicitud.tipo_cuenta]);
+      if (data.solicitud.numero_cuenta)
+        bankLines.push(['Nro. cuenta', data.solicitud.numero_cuenta]);
 
       // Layout: 2 fields per row
       const bankRows = Math.ceil(bankLines.length / 2);
@@ -377,20 +637,31 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
       doc.roundedRect(tableX, y, pageWidth, bankBoxH, 2).fill(BANK_BG);
       doc.font('Helvetica-Bold').fontSize(7.5).fillColor(NAVY);
-      doc.text('Datos Bancarios', tableX + 8, y + 5, { width: pageWidth - 16, lineBreak: false });
+      doc.text('Datos Bancarios', tableX + 8, y + 5, {
+        width: pageWidth - 16,
+        lineBreak: false,
+      });
 
       let bY = y + 18;
       const halfW = (pageWidth - 16) / 2;
       for (let i = 0; i < bankLines.length; i += 2) {
         // Left field
         doc.font('Helvetica').fontSize(7).fillColor(GRAY);
-        doc.text(`${bankLines[i][0]}: `, tableX + 8, bY, { width: halfW, continued: true, lineBreak: false });
+        doc.text(`${bankLines[i][0]}: `, tableX + 8, bY, {
+          width: halfW,
+          continued: true,
+          lineBreak: false,
+        });
         doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#000000');
         doc.text(bankLines[i][1], { lineBreak: false });
         // Right field
         if (i + 1 < bankLines.length) {
           doc.font('Helvetica').fontSize(7).fillColor(GRAY);
-          doc.text(`${bankLines[i + 1][0]}: `, tableX + 8 + halfW, bY, { width: halfW, continued: true, lineBreak: false });
+          doc.text(`${bankLines[i + 1][0]}: `, tableX + 8 + halfW, bY, {
+            width: halfW,
+            continued: true,
+            lineBreak: false,
+          });
           doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#000000');
           doc.text(bankLines[i + 1][1], { lineBreak: false });
         }
@@ -403,42 +674,77 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     // 7. ESTADO DE APROBACIONES
     // ==========================================
     {
-      const allApproved = data.total_aprobadores > 0 && data.aprobaciones.filter(a => a.accion === 'aprobado').length >= data.total_aprobadores;
+      const allApproved =
+        data.total_aprobadores > 0 &&
+        data.aprobaciones.filter((a) => a.accion === 'aprobado').length >=
+          data.total_aprobadores;
 
-      if (y + 22 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+      if (y + 22 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = MARGIN;
+      }
 
       const statusBoxH = 22;
       let statusMsg: string;
       let statusGreen = false;
+      let statusRed = false;
 
-      if (esPagadaOFacturada && data.estado === 'facturada') {
+      if (data.devolucion) {
+        statusMsg = 'Solicitud con devolución registrada';
+        statusRed = true;
+      } else if (esPagadaOFacturada && data.estado === 'facturada') {
         statusMsg = 'Solicitud aprobada, pagada y facturada';
         statusGreen = true;
       } else if (esPagadaOFacturada && data.estado === 'pagada') {
-        statusMsg = 'Solicitud aprobada y pagada — pendiente registro de factura';
+        statusMsg =
+          'Solicitud aprobada y pagada — pendiente registro de factura';
         statusGreen = true;
       } else if (allApproved && data.comprobante && data.factura) {
         statusMsg = 'Solicitud aprobada, pagada y facturada';
         statusGreen = true;
       } else if (allApproved && data.comprobante && !data.factura) {
-        statusMsg = 'Solicitud aprobada y pagada — pendiente registro de factura';
+        statusMsg =
+          'Solicitud aprobada y pagada — pendiente registro de factura';
         statusGreen = true;
       } else if (allApproved) {
         statusMsg = 'Solicitud aprobada — proceder con el pago';
         statusGreen = true;
       } else {
-        statusMsg = 'Solicitud con aprobaciones pendientes — esperar hasta obtener todas las aprobaciones';
+        statusMsg =
+          'Solicitud con aprobaciones pendientes — esperar hasta obtener todas las aprobaciones';
       }
 
-      if (statusGreen) {
+      if (statusRed) {
+        doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).fill('#fef2f2');
+        doc
+          .roundedRect(tableX, y, pageWidth, statusBoxH, 2)
+          .strokeColor('#fca5a5')
+          .lineWidth(0.5)
+          .stroke();
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#991b1b');
+        doc.text(statusMsg, tableX + 8, y + 7, {
+          width: pageWidth - 16,
+          lineBreak: false,
+        });
+      } else if (statusGreen) {
         doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).fill('#dcfce7');
         doc.font('Helvetica-Bold').fontSize(8).fillColor('#166534');
-        doc.text(statusMsg, tableX + 8, y + 7, { width: pageWidth - 16, lineBreak: false });
+        doc.text(statusMsg, tableX + 8, y + 7, {
+          width: pageWidth - 16,
+          lineBreak: false,
+        });
       } else {
         doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).fill('#fffbeb');
-        doc.roundedRect(tableX, y, pageWidth, statusBoxH, 2).strokeColor('#fde68a').lineWidth(0.5).stroke();
+        doc
+          .roundedRect(tableX, y, pageWidth, statusBoxH, 2)
+          .strokeColor('#fde68a')
+          .lineWidth(0.5)
+          .stroke();
         doc.font('Helvetica-Bold').fontSize(8).fillColor('#92400e');
-        doc.text(statusMsg, tableX + 8, y + 7, { width: pageWidth - 16, lineBreak: false });
+        doc.text(statusMsg, tableX + 8, y + 7, {
+          width: pageWidth - 16,
+          lineBreak: false,
+        });
       }
       y += statusBoxH + 6;
     }
@@ -448,24 +754,39 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     // ==========================================
     // For pagada/facturada, show only registered approvals; otherwise show all project approvers
     const aprobadoresAMostrar = esPagadaOFacturada
-      ? data.aprobaciones.map((a, i) => ({ nombre: a.usuario_nombre, orden: i + 1 }))
+      ? data.aprobaciones.map((a, i) => ({
+          nombre: a.usuario_nombre,
+          orden: i + 1,
+        }))
       : data.aprobadores_proyecto;
 
     if (aprobadoresAMostrar.length > 0) {
       const apCount = aprobadoresAMostrar.length;
       const apBoxH = 18 + apCount * 16;
 
-      if (y + apBoxH > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+      if (y + apBoxH > PAGE_BOTTOM) {
+        doc.addPage();
+        y = MARGIN;
+      }
 
       const apContainerW = (pageWidth - 16) / 2 + 16;
       const apStartY = y;
-      doc.roundedRect(tableX, y, apContainerW, apBoxH, 2).strokeColor('#e2e8f0').lineWidth(0.5).stroke();
+      doc
+        .roundedRect(tableX, y, apContainerW, apBoxH, 2)
+        .strokeColor('#e2e8f0')
+        .lineWidth(0.5)
+        .stroke();
       doc.font('Helvetica-Bold').fontSize(7.5).fillColor(NAVY);
-      doc.text('Aprobaciones', tableX + 8, y + 5, { width: apContainerW - 16, lineBreak: false });
+      doc.text('Aprobaciones', tableX + 8, y + 5, {
+        width: apContainerW - 16,
+        lineBreak: false,
+      });
 
       let apY = y + 18;
       for (const aprobador of aprobadoresAMostrar) {
-        const aprobacion = data.aprobaciones.find(a => a.usuario_nombre === aprobador.nombre);
+        const aprobacion = data.aprobaciones.find(
+          (a) => a.usuario_nombre === aprobador.nombre,
+        );
 
         let bgColor: string;
         let textColor: string;
@@ -492,53 +813,97 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
         const apRowW = (pageWidth - 16) / 2;
         doc.roundedRect(tableX + 8, apY, apRowW, 13, 2).fill(bgColor);
         doc.font('Helvetica-Bold').fontSize(7.5).fillColor(textColor);
-        doc.text(`${icon} ${aprobador.nombre}`, tableX + 14, apY + 3, { width: apRowW - 12, lineBreak: false });
+        doc.text(`${icon} ${aprobador.nombre}`, tableX + 14, apY + 3, {
+          width: apRowW - 12,
+          lineBreak: false,
+        });
         doc.font('Helvetica').fontSize(7).fillColor(textColor);
-        doc.text(statusText, tableX + 14, apY + 3, { width: apRowW - 12, align: 'right', lineBreak: false });
+        doc.text(statusText, tableX + 14, apY + 3, {
+          width: apRowW - 12,
+          align: 'right',
+          lineBreak: false,
+        });
 
         apY += 16;
       }
 
-      // Recuadro de reembolso (a la derecha de aprobaciones)
+      // Recuadro de reembolso (a la derecha de aprobaciones, same height as aprobaciones)
       if (data.solicitud.pinellas_paga) {
         const reembX = tableX + apContainerW + 8;
         const reembW = pageWidth - apContainerW - 8;
 
         if (data.reembolso) {
           const reembBoxH = 45;
-          doc.roundedRect(reembX, apStartY, reembW, reembBoxH, 2).fill('#eff6ff');
+          doc
+            .roundedRect(reembX, apStartY, reembW, reembBoxH, 2)
+            .fill('#eff6ff');
           doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#1e40af');
-          doc.text('Reembolso registrado', reembX + 8, apStartY + 5, { width: reembW - 16, lineBreak: false });
+          doc.text('Reembolso registrado', reembX + 8, apStartY + 5, {
+            width: reembW - 16,
+            lineBreak: false,
+          });
           doc.font('Helvetica').fontSize(7).fillColor('#1e40af');
-          doc.text(`Fecha: ${formatDate(data.reembolso.fecha_reembolso)}`, reembX + 8, apStartY + 19, { width: reembW - 16, lineBreak: false });
-          doc.text(`Por: ${data.reembolso.registrado_por_nombre}`, reembX + 8, apStartY + 31, { width: reembW - 16, lineBreak: false });
+          doc.text(
+            `Fecha: ${formatDate(data.reembolso.fecha_reembolso)}`,
+            reembX + 8,
+            apStartY + 19,
+            { width: reembW - 16, lineBreak: false },
+          );
+          doc.text(
+            `Por: ${data.reembolso.registrado_por_nombre}`,
+            reembX + 8,
+            apStartY + 31,
+            { width: reembW - 16, lineBreak: false },
+          );
         } else {
           const reembBoxH = 22;
-          doc.roundedRect(reembX, apStartY, reembW, reembBoxH, 2).fill('#fffbeb');
-          doc.roundedRect(reembX, apStartY, reembW, reembBoxH, 2).strokeColor('#fde68a').lineWidth(0.5).stroke();
+          doc
+            .roundedRect(reembX, apStartY, reembW, reembBoxH, 2)
+            .fill('#fffbeb');
+          doc
+            .roundedRect(reembX, apStartY, reembW, reembBoxH, 2)
+            .strokeColor('#fde68a')
+            .lineWidth(0.5)
+            .stroke();
           doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#92400e');
-          doc.text('Reembolso pendiente', reembX + 8, apStartY + 7, { width: reembW - 16, lineBreak: false });
+          doc.text('Reembolso pendiente', reembX + 8, apStartY + 7, {
+            width: reembW - 16,
+            lineBreak: false,
+          });
         }
       }
 
-      y += apBoxH + 6;
+      // Use the taller of aprobaciones or reembolso box for y advancement
+      const reembTotalH = data.solicitud.pinellas_paga ? 45 : 0;
+      y += Math.max(apBoxH, reembTotalH) + 8;
     }
 
     // ==========================================
     // 8. COMPROBANTE DE PAGO
     // ==========================================
     if (data.comprobante) {
-      if (y + 40 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+      if (y + 40 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = MARGIN;
+      }
 
       const PAYMENT_BG = '#eff6ff';
       const cpBoxH = 32;
 
       doc.roundedRect(tableX, y, pageWidth, cpBoxH, 2).fill(PAYMENT_BG);
       doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#1e40af');
-      doc.text('Comprobante de Pago', tableX + 8, y + 5, { width: pageWidth - 16, lineBreak: false });
+      doc.text('Comprobante de Pago', tableX + 8, y + 5, {
+        width: pageWidth - 16,
+        lineBreak: false,
+      });
 
       doc.font('Helvetica').fontSize(7.5).fillColor('#1e40af');
-      doc.text(`Fecha de pago: ${formatDate(data.comprobante.fecha_pago)}  —  Registrado por: ${data.comprobante.registrado_por_nombre}`, tableX + 8, y + 18, { width: pageWidth - 16, lineBreak: false });
+      doc.text(
+        `Fecha de pago: ${formatDate(data.comprobante.fecha_pago)}  —  Registrado por: ${data.comprobante.registrado_por_nombre}`,
+        tableX + 8,
+        y + 18,
+        { width: pageWidth - 16, lineBreak: false },
+      );
 
       y += cpBoxH + 6;
     }
@@ -547,7 +912,10 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     // 9. FACTURA
     // ==========================================
     if (data.factura) {
-      if (y + 40 > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+      if (y + 40 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = MARGIN;
+      }
 
       const FACTURA_BG = '#eff6ff';
       let factText = `Fecha de factura: ${formatDate(data.factura.fecha_factura)}`;
@@ -560,12 +928,66 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
       doc.roundedRect(tableX, y, pageWidth, factBoxH, 2).fill(FACTURA_BG);
       doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#1e40af');
-      doc.text('Factura', tableX + 8, y + 5, { width: pageWidth - 16, lineBreak: false });
+      doc.text('Factura', tableX + 8, y + 5, {
+        width: pageWidth - 16,
+        lineBreak: false,
+      });
 
       doc.font('Helvetica').fontSize(7.5).fillColor('#1e40af');
-      doc.text(factText, tableX + 8, y + 18, { width: pageWidth - 16, lineBreak: false });
+      doc.text(factText, tableX + 8, y + 18, {
+        width: pageWidth - 16,
+        lineBreak: false,
+      });
 
       y += factBoxH + 6;
+    }
+
+    // ==========================================
+    // 9b. DEVOLUCIÓN
+    // ==========================================
+    if (data.devolucion) {
+      if (y + 50 > PAGE_BOTTOM) {
+        doc.addPage();
+        y = MARGIN;
+      }
+
+      const devMotivo = data.devolucion.motivo || '';
+      const devMotivoH = doc
+        .font('Helvetica')
+        .fontSize(7.5)
+        .heightOfString(`Motivo: ${devMotivo}`, { width: pageWidth - 16 });
+      const devBoxH = 34 + devMotivoH;
+
+      doc.roundedRect(tableX, y, pageWidth, devBoxH, 2).fill('#fef2f2');
+      doc
+        .roundedRect(tableX, y, pageWidth, devBoxH, 2)
+        .strokeColor('#fca5a5')
+        .lineWidth(0.5)
+        .stroke();
+
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#991b1b');
+      doc.text('DEVOLUCIÓN REGISTRADA', tableX + 8, y + 5, {
+        width: pageWidth - 16,
+        lineBreak: false,
+      });
+
+      doc.font('Helvetica').fontSize(7.5).fillColor('#7f1d1d');
+      doc.text(
+        `Fecha: ${formatDate(data.devolucion.fecha_devolucion)}  —  Registrado por: ${data.devolucion.registrado_por_nombre}`,
+        tableX + 8,
+        y + 18,
+        { width: pageWidth - 16, lineBreak: false },
+      );
+
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#7f1d1d');
+      doc.text('Motivo: ', tableX + 8, y + 30, {
+        continued: true,
+        lineBreak: false,
+      });
+      doc.font('Helvetica').fontSize(7.5).fillColor('#7f1d1d');
+      doc.text(devMotivo, { width: pageWidth - 50 });
+
+      y += devBoxH + 6;
     }
 
     // ==========================================
@@ -575,14 +997,25 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       const qrSize = 60;
       const qrBlockH = qrSize + 10;
 
-      if (y + qrBlockH > PAGE_BOTTOM) { doc.addPage(); y = MARGIN; }
+      if (y + qrBlockH > PAGE_BOTTOM) {
+        doc.addPage();
+        y = MARGIN;
+      }
 
       doc.image(qrBuffer, tableX, y, { width: qrSize, height: qrSize });
 
       doc.font('Helvetica').fontSize(7).fillColor(GRAY);
-      doc.text('Escanee para verificar autenticidad', tableX + qrSize + 10, y + 18, { width: 200, lineBreak: false });
+      doc.text(
+        'Escanee para verificar autenticidad',
+        tableX + qrSize + 10,
+        y + 18,
+        { width: 200, lineBreak: false },
+      );
       doc.font('Helvetica').fontSize(6).fillColor(GRAY);
-      doc.text(verifyUrl, tableX + qrSize + 10, y + 30, { width: 250, lineBreak: false });
+      doc.text(verifyUrl, tableX + qrSize + 10, y + 30, {
+        width: 250,
+        lineBreak: false,
+      });
     }
 
     doc.end();
