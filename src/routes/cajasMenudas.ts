@@ -635,14 +635,25 @@ router.get(
     }
 
     const { id } = req.params;
+    const { solicitud_reembolso_id } = req.query;
+
+    let whereClause = 'WHERE a.caja_menuda_id = $1';
+    const params: unknown[] = [id];
+
+    if (solicitud_reembolso_id === 'null') {
+      whereClause += ' AND a.solicitud_reembolso_id IS NULL';
+    } else if (solicitud_reembolso_id) {
+      whereClause += ' AND a.solicitud_reembolso_id = $2';
+      params.push(solicitud_reembolso_id);
+    }
 
     const result = await query<AdjuntoRow>(
       `SELECT a.*, u.nombre AS subido_por_nombre
        FROM cajas_menudas_adjuntos a
        JOIN users u ON u.id = a.subido_por
-       WHERE a.caja_menuda_id = $1
+       ${whereClause}
        ORDER BY a.created_at DESC`,
-      [id],
+      params,
     );
 
     res.json({ success: true, data: result.rows });
@@ -829,6 +840,31 @@ router.post(
       // Link pending gastos to the new solicitud
       await client.query(
         `UPDATE cajas_menudas_gastos SET solicitud_reembolso_id = $1
+         WHERE caja_menuda_id = $2 AND solicitud_reembolso_id IS NULL`,
+        [solicitudId, id],
+      );
+
+      // Copy pending adjuntos to solicitud_pago_adjuntos and link them
+      const pendingAdjuntos = await client.query<{
+        nombre_original: string; r2_key: string; tipo_mime: string; tamano: number;
+      }>(
+        `SELECT nombre_original, r2_key, tipo_mime, tamano
+         FROM cajas_menudas_adjuntos
+         WHERE caja_menuda_id = $1 AND solicitud_reembolso_id IS NULL`,
+        [id],
+      );
+
+      for (const adj of pendingAdjuntos.rows) {
+        await client.query(
+          `INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [solicitudId, adj.nombre_original, adj.r2_key, adj.tipo_mime, adj.tamano, user.id],
+        );
+      }
+
+      // Mark adjuntos as linked to this reembolso
+      await client.query(
+        `UPDATE cajas_menudas_adjuntos SET solicitud_reembolso_id = $1
          WHERE caja_menuda_id = $2 AND solicitud_reembolso_id IS NULL`,
         [solicitudId, id],
       );
