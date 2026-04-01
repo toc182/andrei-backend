@@ -5,8 +5,9 @@ import crypto from 'crypto';
 import { query, pool } from '../database/config.js';
 import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { uploadFile, deleteFile, getFileSignedUrl } from '../services/storage.js';
+import { uploadFile, deleteFile, downloadFile, getFileSignedUrl } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
+import { PDFDocument } from 'pdf-lib';
 
 const router = Router();
 
@@ -870,6 +871,66 @@ router.post(
       );
 
       await client.query('COMMIT');
+
+      // Merge adjuntos into a single PDF (outside transaction — non-critical)
+      if (pendingAdjuntos.rows.length > 0) {
+        try {
+          const mergedPdf = await PDFDocument.create();
+
+          for (const adj of pendingAdjuntos.rows) {
+            try {
+              const fileBuffer = await downloadFile(adj.r2_key);
+
+              if (adj.tipo_mime === 'application/pdf') {
+                const attachedPdf = await PDFDocument.load(fileBuffer);
+                const pages = await mergedPdf.copyPages(attachedPdf, attachedPdf.getPageIndices());
+                for (const page of pages) {
+                  mergedPdf.addPage(page);
+                }
+              } else if (adj.tipo_mime === 'image/jpeg' || adj.tipo_mime === 'image/png') {
+                const img = adj.tipo_mime === 'image/jpeg'
+                  ? await mergedPdf.embedJpg(fileBuffer)
+                  : await mergedPdf.embedPng(fileBuffer);
+
+                const pageW = 612;
+                const pageH = 792;
+                const margin = 40;
+                const maxW = pageW - margin * 2;
+                const maxH = pageH - margin * 2;
+                const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+                const drawW = img.width * scale;
+                const drawH = img.height * scale;
+
+                const page = mergedPdf.addPage([pageW, pageH]);
+                page.drawImage(img, {
+                  x: (pageW - drawW) / 2,
+                  y: (pageH - drawH) / 2,
+                  width: drawW,
+                  height: drawH,
+                });
+              }
+            } catch (err) {
+              console.error(`Error procesando adjunto ${adj.nombre_original}:`, err);
+            }
+          }
+
+          if (mergedPdf.getPageCount() > 0) {
+            const pdfBytes = await mergedPdf.save();
+            const pdfBuffer = Buffer.from(pdfBytes);
+            const mergedKey = `cajas-menudas/${id}/reembolso-${solicitudId}-adjuntos.pdf`;
+
+            await uploadFile(mergedKey, pdfBuffer, 'application/pdf');
+
+            await query(
+              `INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por)
+               VALUES ($1, $2, $3, 'application/pdf', $4, $5)`,
+              [solicitudId, `Adjuntos Caja Menuda - ${caja.nombre}.pdf`, mergedKey, pdfBuffer.length, user.id],
+            );
+          }
+        } catch (err) {
+          console.error('Error generando PDF consolidado de adjuntos:', err);
+        }
+      }
 
       await registrarAudit(user.id, 'crear', 'caja_menuda_reembolso', solicitudId, {
         caja_menuda_id: Number(id),
