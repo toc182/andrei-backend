@@ -184,6 +184,7 @@ router.get(
       `SELECT cm.id, cm.proyecto_id, cm.responsable_id, cm.nombre,
               cm.monto_asignado, cm.estado, cm.created_by,
               cm.created_at, cm.updated_at,
+              cm.comprobante_cierre_r2_key, cm.comprobante_cierre_nombre,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
@@ -272,25 +273,34 @@ router.post(
   }),
 );
 
-// PUT /:id — edit (nombre, responsable_id, estado)
+// PUT /:id — edit (nombre, responsable_id, estado + comprobante if closing)
 router.put(
   '/:id',
-  [
-    param('id').isInt(),
-    body('nombre').optional().isString().trim().notEmpty(),
-    body('responsable_id').optional().isInt(),
-    body('estado').optional().isIn(['abierta', 'cerrada']),
-  ],
+  [param('id').isInt()],
+  upload.single('comprobante_cierre'),
   asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
-      return;
-    }
-
     const { id } = req.params;
     const { nombre, responsable_id, estado } = req.body;
     const user = req.user!;
+
+    // Validate estado value
+    if (estado !== undefined && estado !== 'abierta' && estado !== 'cerrada') {
+      res.status(400).json({ success: false, error: 'Estado debe ser abierta o cerrada' });
+      return;
+    }
+
+    // Require comprobante when closing
+    if (estado === 'cerrada' && !req.file) {
+      // Check if already has comprobante (re-saving without changing estado)
+      const existing = await query<{ comprobante_cierre_r2_key: string | null }>(
+        'SELECT comprobante_cierre_r2_key FROM cajas_menudas WHERE id = $1',
+        [id],
+      );
+      if (!existing.rows[0]?.comprobante_cierre_r2_key) {
+        res.status(400).json({ success: false, error: 'Se requiere un comprobante de cierre' });
+        return;
+      }
+    }
 
     const sets: string[] = ['updated_at = CURRENT_TIMESTAMP'];
     const params: unknown[] = [];
@@ -302,11 +312,23 @@ router.put(
     }
     if (responsable_id !== undefined) {
       sets.push(`responsable_id = $${paramIdx++}`);
-      params.push(responsable_id);
+      params.push(Number(responsable_id));
     }
     if (estado !== undefined) {
       sets.push(`estado = $${paramIdx++}`);
       params.push(estado);
+    }
+
+    // Handle comprobante upload
+    if (req.file) {
+      const safeName = sanitizeFilename(req.file.originalname);
+      const r2Key = `cajas-menudas/${id}/comprobante-cierre-${crypto.randomUUID()}_${safeName}`;
+      await uploadFile(r2Key, req.file.buffer, req.file.mimetype);
+
+      sets.push(`comprobante_cierre_r2_key = $${paramIdx++}`);
+      params.push(r2Key);
+      sets.push(`comprobante_cierre_nombre = $${paramIdx++}`);
+      params.push(req.file.originalname);
     }
 
     params.push(id);
