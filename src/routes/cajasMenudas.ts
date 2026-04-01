@@ -289,6 +289,18 @@ router.put(
       return;
     }
 
+    // Reject closing if there are pending gastos
+    if (estado === 'cerrada') {
+      const pendingGastos = await query<{ count: string }>(
+        'SELECT COUNT(*)::text as count FROM cajas_menudas_gastos WHERE caja_menuda_id = $1 AND solicitud_reembolso_id IS NULL',
+        [id],
+      );
+      if (Number(pendingGastos.rows[0].count) > 0) {
+        res.status(400).json({ success: false, error: 'No se puede cerrar la caja menuda con gastos pendientes de reembolso' });
+        return;
+      }
+    }
+
     // Require comprobante when closing
     if (estado === 'cerrada' && !req.file) {
       // Check if already has comprobante (re-saving without changing estado)
