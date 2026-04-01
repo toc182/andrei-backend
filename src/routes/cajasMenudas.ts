@@ -845,7 +845,7 @@ router.post(
         [solicitudId, id],
       );
 
-      // Copy pending adjuntos to solicitud_pago_adjuntos and link them
+      // Get pending adjuntos (for merge later) and mark them as linked
       const pendingAdjuntos = await client.query<{
         nombre_original: string; r2_key: string; tipo_mime: string; tamano: number;
       }>(
@@ -854,14 +854,6 @@ router.post(
          WHERE caja_menuda_id = $1 AND solicitud_reembolso_id IS NULL`,
         [id],
       );
-
-      for (const adj of pendingAdjuntos.rows) {
-        await client.query(
-          `INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [solicitudId, adj.nombre_original, adj.r2_key, adj.tipo_mime, adj.tamano, user.id],
-        );
-      }
 
       // Mark adjuntos as linked to this reembolso
       await client.query(
