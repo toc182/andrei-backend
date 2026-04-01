@@ -763,8 +763,8 @@ router.post(
       const fechaMin = gastosResult.rows[0].fecha;
       const fechaMax = gastosResult.rows[gastosResult.rows.length - 1].fecha;
 
-      const formatFecha = (f: string) => {
-        const d = new Date(f + 'T00:00:00');
+      const formatFecha = (f: string | Date) => {
+        const d = f instanceof Date ? f : new Date(f + 'T00:00:00');
         return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
       };
 
