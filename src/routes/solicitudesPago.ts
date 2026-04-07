@@ -603,8 +603,17 @@ function generateCodigoVerificacion(): string {
   return code;
 }
 
-async function generateNumero(
+/**
+ * Generates the next solicitud numero for a given project.
+ * - Regular solicitudes are numbered ET-001, ET-002, ...
+ * - Reembolso solicitudes are numbered ET-001M, ET-002M, ... in their own
+ *   independent sequence per project.
+ *
+ * Throws PREFIJO_NO_CONFIGURADO if the project has no sp_prefijo set.
+ */
+export async function generateNumero(
   projectId: number,
+  tipo: 'regular' | 'reembolso' = 'regular',
   client?: { query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
 ): Promise<string> {
   const q = client
@@ -621,13 +630,23 @@ async function generateNumero(
   const prefijo = project.rows[0].sp_prefijo;
   if (!prefijo) throw new Error('PREFIJO_NO_CONFIGURADO');
 
-  const count = await q<{ total: string }>(
-    "SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total FROM solicitudes_pago WHERE proyecto_id = $1",
-    [projectId],
-  );
-  const nextNum = parseInt(count.rows[0].total) + 1;
+  // Reembolsos: count reembolso rows only, strip the M suffix when reading the number.
+  // Regular: count regular rows only.
+  const countSql = tipo === 'reembolso'
+    ? `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
+       FROM solicitudes_pago
+       WHERE proyecto_id = $1 AND tipo = 'reembolso'`
+    : `SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total
+       FROM solicitudes_pago
+       WHERE proyecto_id = $1 AND tipo = 'regular'`;
 
-  return `${prefijo}-${String(nextNum).padStart(3, '0')}`;
+  const count = await q<{ total: string }>(countSql, [projectId]);
+  const nextNum = parseInt(count.rows[0].total) + 1;
+  const padded = String(nextNum).padStart(3, '0');
+
+  return tipo === 'reembolso'
+    ? `${prefijo}-${padded}M`
+    : `${prefijo}-${padded}`;
 }
 
 // --- GET /pending-approval-count — Contar solicitudes pendientes de aprobación del usuario actual ---
@@ -1413,7 +1432,7 @@ router.post(
 
         let numero: string;
         try {
-          numero = await generateNumero(proyecto_id, client);
+          numero = await generateNumero(proyecto_id, 'regular', client);
         } catch (err) {
           const error = err as Error;
           if (error.message === 'PREFIJO_NO_CONFIGURADO') {
@@ -2478,8 +2497,8 @@ router.post(
       }
 
       // Verificar que la solicitud existe y está aprobada
-      const solicitud = await query<SolicitudRow & { nombre_corto: string }>(
-        `SELECT sp.id, sp.numero, sp.estado, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
+      const solicitud = await query<SolicitudRow & { nombre_corto: string; tipo: 'regular' | 'reembolso' }>(
+        `SELECT sp.id, sp.numero, sp.estado, sp.tipo, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
          FROM solicitudes_pago sp
          LEFT JOIN proyectos p ON sp.proyecto_id = p.id
          WHERE sp.id = $1`,
@@ -2498,6 +2517,10 @@ router.post(
         });
         return;
       }
+
+      const isReembolso = solicitud.rows[0].tipo === 'reembolso';
+      const targetEstado = isReembolso ? 'reembolsada' : 'pagada';
+      const actionLabel = isReembolso ? 'reembolso' : 'pago';
 
       // Crear comprobante
       await query(
@@ -2525,10 +2548,10 @@ router.post(
         archivosInfo.push(file.originalname);
       }
 
-      // Cambiar estado a pagada
+      // Cambiar estado: pagada (regular) o reembolsada (reembolso)
       await query(
         'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-        ['pagada', id],
+        [targetEstado, id],
       );
 
       // Archive immutable PDF copy to R2
@@ -2544,7 +2567,7 @@ router.post(
           'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
           ['aprobada', id],
         );
-        console.error('Error archiving PDF at pagada:', archiveErr);
+        console.error(`Error archiving PDF at ${targetEstado}:`, archiveErr);
         res.status(500).json({
           success: false,
           message: 'Error al guardar copia del PDF. Intente nuevamente.',
@@ -2554,7 +2577,7 @@ router.post(
 
       await registrarAudit(
         userId,
-        'registrar_pago',
+        isReembolso ? 'registrar_reembolso' : 'registrar_pago',
         'solicitud_pago',
         parseInt(id),
         {
@@ -2564,7 +2587,12 @@ router.post(
         },
       );
 
-      res.json({ success: true, message: 'Pago registrado exitosamente' });
+      res.json({
+        success: true,
+        message: isReembolso ? 'Reembolso registrado exitosamente' : 'Pago registrado exitosamente',
+        estado: targetEstado,
+        tipo: solicitud.rows[0].tipo,
+      });
     },
   ),
 );

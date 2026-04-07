@@ -8,6 +8,7 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { uploadFile, deleteFile, downloadFile, getFileSignedUrl } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { PDFDocument } from 'pdf-lib';
+import { generateNumero } from './solicitudesPago.js';
 
 const router = Router();
 
@@ -814,25 +815,18 @@ router.post(
         return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
       };
 
-      // Generate solicitud numero
-      const projectResult = await client.query<{ sp_prefijo: string | null }>(
-        'SELECT sp_prefijo FROM proyectos WHERE id = $1',
-        [caja.proyecto_id],
-      );
-
-      const prefijo = projectResult.rows[0]?.sp_prefijo;
-      if (!prefijo) {
+      // Generate solicitud numero (reembolso → uses M-suffixed sequence)
+      let numero: string;
+      try {
+        numero = await generateNumero(caja.proyecto_id, 'reembolso', client);
+      } catch (err) {
         await client.query('ROLLBACK');
-        res.status(400).json({ success: false, error: 'El proyecto no tiene prefijo de solicitud configurado' });
-        return;
+        if ((err as Error).message === 'PREFIJO_NO_CONFIGURADO') {
+          res.status(400).json({ success: false, error: 'El proyecto no tiene prefijo de solicitud configurado' });
+          return;
+        }
+        throw err;
       }
-
-      const countResult = await client.query<{ total: string }>(
-        "SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total FROM solicitudes_pago WHERE proyecto_id = $1",
-        [caja.proyecto_id],
-      );
-      const nextNum = parseInt(countResult.rows[0].total) + 1;
-      const numero = `${prefijo}-${String(nextNum).padStart(3, '0')}`;
 
       // Generate verification code
       const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -849,8 +843,8 @@ router.post(
         `INSERT INTO solicitudes_pago (
           proyecto_id, numero, fecha, proveedor, preparado_por,
           subtotal, descuentos, impuestos, monto_total,
-          estado, observaciones, codigo_verificacion
-        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 0, 0, $5, 'pendiente', $6, $7)
+          estado, observaciones, codigo_verificacion, tipo
+        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 0, 0, $5, 'pendiente', $6, $7, 'reembolso')
         RETURNING id`,
         [
           caja.proyecto_id,
