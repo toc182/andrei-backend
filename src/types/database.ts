@@ -3,7 +3,9 @@ import { QueryResult, QueryResultRow } from 'pg';
 /**
  * Resultado de una query a la base de datos
  */
-export interface DatabaseQueryResult<T extends QueryResultRow = QueryResultRow> {
+export interface DatabaseQueryResult<
+  T extends QueryResultRow = QueryResultRow,
+> {
   rows: T[];
   rowCount: number | null;
   command: string;
@@ -16,7 +18,7 @@ export interface DatabaseQueryResult<T extends QueryResultRow = QueryResultRow> 
  */
 export type QueryFunction = <T extends QueryResultRow = QueryResultRow>(
   text: string,
-  params?: unknown[]
+  params?: unknown[],
 ) => Promise<DatabaseQueryResult<T>>;
 
 /**

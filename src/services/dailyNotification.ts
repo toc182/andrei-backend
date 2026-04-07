@@ -22,8 +22,13 @@ function formatMoney(amount: number): string {
   return `B/. ${Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function buildEmailHtml(nombre: string, solicitudes: PendingSolicitud[]): string {
-  const rows = solicitudes.map(s => `
+function buildEmailHtml(
+  nombre: string,
+  solicitudes: PendingSolicitud[],
+): string {
+  const rows = solicitudes
+    .map(
+      (s) => `
     <tr>
       <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 14px;">
         ${s.numero}${s.urgente ? ' <span style="background: #e53e3e; color: white; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: bold;">URGENTE</span>' : ''}
@@ -32,12 +37,15 @@ function buildEmailHtml(nombre: string, solicitudes: PendingSolicitud[]): string
       <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 14px; text-align: right; font-weight: 600;">${formatMoney(s.monto_total)}</td>
       <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; font-size: 14px;">${s.proyecto_nombre}</td>
     </tr>
-  `).join('');
+  `,
+    )
+    .join('');
 
-  const urgentCount = solicitudes.filter(s => s.urgente).length;
-  const urgentNote = urgentCount > 0
-    ? `<p style="color: #e53e3e; font-weight: 600; margin: 0 0 16px 0;">⚠ ${urgentCount} solicitud${urgentCount > 1 ? 'es' : ''} marcada${urgentCount > 1 ? 's' : ''} como urgente${urgentCount > 1 ? 's' : ''}</p>`
-    : '';
+  const urgentCount = solicitudes.filter((s) => s.urgente).length;
+  const urgentNote =
+    urgentCount > 0
+      ? `<p style="color: #e53e3e; font-weight: 600; margin: 0 0 16px 0;">⚠ ${urgentCount} solicitud${urgentCount > 1 ? 'es' : ''} marcada${urgentCount > 1 ? 's' : ''} como urgente${urgentCount > 1 ? 's' : ''}</p>`
+      : '';
 
   return `
     <!DOCTYPE html>
@@ -148,12 +156,16 @@ export async function sendDailyNotifications(): Promise<NotificationResult> {
     try {
       await sendEmail(aprobador.aprobador_email, subject, html);
       enviados.push(aprobador.aprobador_nombre);
-      console.log(`📧 Notification sent to ${aprobador.aprobador_nombre} (${aprobador.aprobador_email}) — ${solicitudes.length} solicitud(es)`);
+      console.log(
+        `📧 Notification sent to ${aprobador.aprobador_nombre} (${aprobador.aprobador_email}) — ${solicitudes.length} solicitud(es)`,
+      );
     } catch (err) {
       console.error(`📧 Error sending to ${aprobador.aprobador_nombre}:`, err);
     }
   }
 
-  console.log(`📧 Daily notifications complete: ${enviados.length} email(s) sent`);
+  console.log(
+    `📧 Daily notifications complete: ${enviados.length} email(s) sent`,
+  );
   return { enviados: enviados.length, usuarios: enviados };
 }

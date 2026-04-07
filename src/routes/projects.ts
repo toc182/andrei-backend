@@ -1,13 +1,23 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult, param } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken, requireManager, checkPermission, checkProjectAccess } from '../middleware/auth.js';
+import {
+  authenticateToken,
+  requireManager,
+  checkPermission,
+  checkProjectAccess,
+} from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
 
-type ProjectState = 'planificacion' | 'en_curso' | 'pausado' | 'completado' | 'cancelado';
+type ProjectState =
+  | 'planificacion'
+  | 'en_curso'
+  | 'pausado'
+  | 'completado'
+  | 'cancelado';
 
 interface ProjectRow {
   id: number;
@@ -32,7 +42,12 @@ interface ProjectRow {
   cliente_contacto?: string;
   cliente_telefono?: string;
   cliente_email?: string;
-  usuarios_asignados?: Array<{ id: number; nombre: string; email: string; rol_proyecto: string }>;
+  usuarios_asignados?: Array<{
+    id: number;
+    nombre: string;
+    email: string;
+    rol_proyecto: string;
+  }>;
   created_at: Date;
   updated_at: Date;
 }
@@ -73,48 +88,65 @@ interface StatsRow {
 }
 
 // Obtener todos los proyectos
-router.get('/', authenticateToken, asyncHandler(async (req: Request<object, object, object, QueryParams>, res: Response): Promise<void> => {
-  const { page = '1', limit = '10', estado, search, tipo_origen } = req.query;
-  const offset = (parseInt(page) - 1) * parseInt(limit);
+router.get(
+  '/',
+  authenticateToken,
+  asyncHandler(
+    async (
+      req: Request<object, object, object, QueryParams>,
+      res: Response,
+    ): Promise<void> => {
+      const {
+        page = '1',
+        limit = '10',
+        estado,
+        search,
+        tipo_origen,
+      } = req.query;
+      const offset = (parseInt(page) - 1) * parseInt(limit);
 
-  let whereClause = 'WHERE 1=1';
-  const queryParams: unknown[] = [];
-  let paramCounter = 1;
+      let whereClause = 'WHERE 1=1';
+      const queryParams: unknown[] = [];
+      let paramCounter = 1;
 
-  // Filtrar por acceso a proyectos si es usuario sin acceso_global
-  if (req.user?.rol === 'usuario' && !req.user?.permissions?.acceso_global) {
-    whereClause += ` AND p.id IN (SELECT proyecto_id FROM user_project_access WHERE user_id = $${paramCounter})`;
-    queryParams.push(req.user.id);
-    paramCounter++;
-  }
+      // Filtrar por acceso a proyectos si es usuario sin acceso_global
+      if (
+        req.user?.rol === 'usuario' &&
+        !req.user?.permissions?.acceso_global
+      ) {
+        whereClause += ` AND p.id IN (SELECT proyecto_id FROM user_project_access WHERE user_id = $${paramCounter})`;
+        queryParams.push(req.user.id);
+        paramCounter++;
+      }
 
-  if (tipo_origen) {
-    whereClause += ` AND p.tipo_origen = $${paramCounter}`;
-    queryParams.push(tipo_origen);
-    paramCounter++;
-  }
+      if (tipo_origen) {
+        whereClause += ` AND p.tipo_origen = $${paramCounter}`;
+        queryParams.push(tipo_origen);
+        paramCounter++;
+      }
 
-  if (estado) {
-    whereClause += ` AND p.estado = $${paramCounter}`;
-    queryParams.push(estado);
-    paramCounter++;
-  }
+      if (estado) {
+        whereClause += ` AND p.estado = $${paramCounter}`;
+        queryParams.push(estado);
+        paramCounter++;
+      }
 
-  if (search) {
-    whereClause += ` AND (
+      if (search) {
+        whereClause += ` AND (
       p.nombre ILIKE $${paramCounter} OR
       p.nombre_corto ILIKE $${paramCounter} OR
       p.codigo_proyecto ILIKE $${paramCounter} OR
       p.contratista ILIKE $${paramCounter} OR
       c.nombre ILIKE $${paramCounter}
     )`;
-    queryParams.push(`%${search}%`);
-    paramCounter++;
-  }
+        queryParams.push(`%${search}%`);
+        paramCounter++;
+      }
 
-  let result;
-  try {
-    result = await query<ProjectRow>(`
+      let result;
+      try {
+        result = await query<ProjectRow>(
+          `
       SELECT
         p.id, p.nombre, p.nombre_corto, p.cliente_id, p.fecha_inicio, p.fecha_fin_estimada,
         p.estado, p.contratista, p.ingeniero_residente, p.codigo_proyecto, p.contrato,
@@ -129,9 +161,12 @@ router.get('/', authenticateToken, asyncHandler(async (req: Request<object, obje
       ${whereClause}
       ORDER BY p.created_at DESC
       LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
-    `, [...queryParams, limit, offset]);
-  } catch {
-    result = await query<ProjectRow>(`
+    `,
+          [...queryParams, limit, offset],
+        );
+      } catch {
+        result = await query<ProjectRow>(
+          `
       SELECT
         p.id, p.nombre, p.nombre_corto, p.cliente_id, p.fecha_inicio, p.fecha_fin_estimada,
         p.estado, p.contratista, p.ingeniero_residente, p.codigo_proyecto, p.contrato,
@@ -143,250 +178,442 @@ router.get('/', authenticateToken, asyncHandler(async (req: Request<object, obje
       ${whereClause}
       ORDER BY p.created_at DESC
       LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
-    `, [...queryParams, limit, offset]);
-  }
+    `,
+          [...queryParams, limit, offset],
+        );
+      }
 
-  const countResult = await query<{ total: string }>(`
+      const countResult = await query<{ total: string }>(
+        `
     SELECT COUNT(*) as total FROM proyectos p LEFT JOIN clientes c ON p.cliente_id = c.id ${whereClause}
-  `, queryParams);
+  `,
+        queryParams,
+      );
 
-  const total = parseInt(countResult.rows[0].total);
+      const total = parseInt(countResult.rows[0].total);
 
-  res.json({
-    success: true,
-    proyectos: result.rows,
-    pagination: {
-      current_page: parseInt(page),
-      total_pages: Math.ceil(total / parseInt(limit)),
-      total_records: total,
-      per_page: parseInt(limit)
-    }
-  });
-}, {
-  tableNotExistsDefault: {
-    proyectos: [],
-    pagination: { current_page: 1, total_pages: 0, total_records: 0, per_page: 10 }
-  }
-}));
+      res.json({
+        success: true,
+        proyectos: result.rows,
+        pagination: {
+          current_page: parseInt(page),
+          total_pages: Math.ceil(total / parseInt(limit)),
+          total_records: total,
+          per_page: parseInt(limit),
+        },
+      });
+    },
+    {
+      tableNotExistsDefault: {
+        proyectos: [],
+        pagination: {
+          current_page: 1,
+          total_pages: 0,
+          total_records: 0,
+          per_page: 10,
+        },
+      },
+    },
+  ),
+);
 
 // Obtener proyecto específico
-router.get('/:id', [
-  param('id').isInt().withMessage('ID debe ser un número'),
-  authenticateToken,
-  checkProjectAccess('id')
-], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(400).json({ success: false, message: 'ID inválido', errors: errors.array() });
-    return;
-  }
+router.get(
+  '/:id',
+  [
+    param('id').isInt().withMessage('ID debe ser un número'),
+    authenticateToken,
+    checkProjectAccess('id'),
+  ],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'ID inválido',
+          errors: errors.array(),
+        });
+        return;
+      }
 
-  const { id } = req.params;
+      const { id } = req.params;
 
-  const result = await query<ProjectRow>(`
+      const result = await query<ProjectRow>(
+        `
     SELECT p.*, c.nombre as cliente_nombre, c.contacto as cliente_contacto,
            c.telefono as cliente_telefono, c.email as cliente_email
     FROM proyectos p LEFT JOIN clientes c ON p.cliente_id = c.id
     WHERE p.id = $1
-  `, [id]);
+  `,
+        [id],
+      );
 
-  if (result.rows.length === 0) {
-    res.status(404).json({ success: false, message: 'Proyecto no encontrado' });
-    return;
-  }
+      if (result.rows.length === 0) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Proyecto no encontrado' });
+        return;
+      }
 
-  const proyecto = result.rows[0] as ProjectRow & { usuarios_asignados: Array<{ id: number; nombre: string; email: string; rol_proyecto: string }> };
+      const proyecto = result.rows[0] as ProjectRow & {
+        usuarios_asignados: Array<{
+          id: number;
+          nombre: string;
+          email: string;
+          rol_proyecto: string;
+        }>;
+      };
 
-  // Try-catch interno preservado - tabla puede no existir en algunas instalaciones
-  try {
-    const usuariosResult = await query<{ id: number; nombre: string; email: string; rol_proyecto: string }>(`
+      // Try-catch interno preservado - tabla puede no existir en algunas instalaciones
+      try {
+        const usuariosResult = await query<{
+          id: number;
+          nombre: string;
+          email: string;
+          rol_proyecto: string;
+        }>(
+          `
       SELECT u.id, u.nombre, u.email, pu.rol_proyecto
       FROM proyecto_usuarios pu JOIN users u ON pu.user_id = u.id
       WHERE pu.proyecto_id = $1
-    `, [id]);
-    proyecto.usuarios_asignados = usuariosResult.rows;
-  } catch {
-    proyecto.usuarios_asignados = [];
-  }
+    `,
+          [id],
+        );
+        proyecto.usuarios_asignados = usuariosResult.rows;
+      } catch {
+        proyecto.usuarios_asignados = [];
+      }
 
-  res.json({ success: true, proyecto });
-}));
+      res.json({ success: true, proyecto });
+    },
+  ),
+);
 
 // Crear nuevo proyecto
-router.post('/', [
-  body('nombre').trim().isLength({ min: 2 }).withMessage('Nombre debe tener al menos 2 caracteres'),
-  body('nombre_corto').optional().trim().isLength({ max: 255 }),
-  body('cliente_id').optional({ nullable: true }).isInt(),
-  body('fecha_inicio').optional({ nullable: true }).isISO8601(),
-  body('fecha_fin_estimada').optional({ nullable: true }).isISO8601(),
-  body('estado').optional().isIn(['planificacion', 'en_curso', 'pausado', 'completado', 'cancelado']),
-  body('monto_contrato_original').optional({ nullable: true }).isNumeric(),
-  body('presupuesto_base').optional({ nullable: true }).isNumeric(),
-  body('itbms').optional({ nullable: true }).isNumeric(),
-  body('monto_total').optional({ nullable: true }).isNumeric(),
-  body('datos_adicionales').optional().isObject(),
-  authenticateToken,
-  checkPermission('proyectos_crear')
-], asyncHandler(async (req: Request<object, object, CreateProjectBody>, res: Response): Promise<void> => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(400).json({ success: false, message: 'Datos inválidos', errors: errors.array() });
-    return;
-  }
+router.post(
+  '/',
+  [
+    body('nombre')
+      .trim()
+      .isLength({ min: 2 })
+      .withMessage('Nombre debe tener al menos 2 caracteres'),
+    body('nombre_corto').optional().trim().isLength({ max: 255 }),
+    body('cliente_id').optional({ nullable: true }).isInt(),
+    body('fecha_inicio').optional({ nullable: true }).isISO8601(),
+    body('fecha_fin_estimada').optional({ nullable: true }).isISO8601(),
+    body('estado')
+      .optional()
+      .isIn([
+        'planificacion',
+        'en_curso',
+        'pausado',
+        'completado',
+        'cancelado',
+      ]),
+    body('monto_contrato_original').optional({ nullable: true }).isNumeric(),
+    body('presupuesto_base').optional({ nullable: true }).isNumeric(),
+    body('itbms').optional({ nullable: true }).isNumeric(),
+    body('monto_total').optional({ nullable: true }).isNumeric(),
+    body('datos_adicionales').optional().isObject(),
+    authenticateToken,
+    checkPermission('proyectos_crear'),
+  ],
+  asyncHandler(
+    async (
+      req: Request<object, object, CreateProjectBody>,
+      res: Response,
+    ): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Datos inválidos',
+          errors: errors.array(),
+        });
+        return;
+      }
 
-  const {
-    nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
-    estado = 'planificacion', contratista, ingeniero_residente, codigo_proyecto,
-    contrato, acto_publico, monto_contrato_original, presupuesto_base,
-    itbms, monto_total, datos_adicionales = {}
-  } = req.body;
+      const {
+        nombre,
+        nombre_corto,
+        cliente_id,
+        fecha_inicio,
+        fecha_fin_estimada,
+        estado = 'planificacion',
+        contratista,
+        ingeniero_residente,
+        codigo_proyecto,
+        contrato,
+        acto_publico,
+        monto_contrato_original,
+        presupuesto_base,
+        itbms,
+        monto_total,
+        datos_adicionales = {},
+      } = req.body;
 
-  let result;
-  // Try-catch interno preservado - fallback para esquemas sin columnas de presupuesto
-  try {
-    result = await query<ProjectRow>(`
+      let result;
+      // Try-catch interno preservado - fallback para esquemas sin columnas de presupuesto
+      try {
+        result = await query<ProjectRow>(
+          `
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
         estado, contratista, ingeniero_residente, codigo_proyecto,
         contrato, acto_publico, monto_contrato_original, presupuesto_base, itbms, monto_total, datos_adicionales
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *
-    `, [
-      nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
-      estado, contratista, ingeniero_residente, codigo_proyecto,
-      contrato, acto_publico, monto_contrato_original, presupuesto_base, itbms, monto_total, JSON.stringify(datos_adicionales)
-    ]);
-  } catch (innerError) {
-    const innerDbError = innerError as { code?: string };
-    // Si es error de duplicado, re-lanzar para que asyncHandler lo maneje
-    if (innerDbError.code === '23505') {
-      throw innerError;
-    }
-    // Si no es duplicado, es probablemente schema issue - usar fallback
-    result = await query<ProjectRow>(`
+    `,
+          [
+            nombre,
+            nombre_corto,
+            cliente_id,
+            fecha_inicio,
+            fecha_fin_estimada,
+            estado,
+            contratista,
+            ingeniero_residente,
+            codigo_proyecto,
+            contrato,
+            acto_publico,
+            monto_contrato_original,
+            presupuesto_base,
+            itbms,
+            monto_total,
+            JSON.stringify(datos_adicionales),
+          ],
+        );
+      } catch (innerError) {
+        const innerDbError = innerError as { code?: string };
+        // Si es error de duplicado, re-lanzar para que asyncHandler lo maneje
+        if (innerDbError.code === '23505') {
+          throw innerError;
+        }
+        // Si no es duplicado, es probablemente schema issue - usar fallback
+        result = await query<ProjectRow>(
+          `
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
         estado, contratista, ingeniero_residente, codigo_proyecto,
         contrato, acto_publico, monto_contrato_original, datos_adicionales
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
-    `, [
-      nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
-      estado, contratista, ingeniero_residente, codigo_proyecto,
-      contrato, acto_publico, monto_contrato_original, JSON.stringify(datos_adicionales)
-    ]);
-  }
+    `,
+          [
+            nombre,
+            nombre_corto,
+            cliente_id,
+            fecha_inicio,
+            fecha_fin_estimada,
+            estado,
+            contratista,
+            ingeniero_residente,
+            codigo_proyecto,
+            contrato,
+            acto_publico,
+            monto_contrato_original,
+            JSON.stringify(datos_adicionales),
+          ],
+        );
+      }
 
-  res.status(201).json({ success: true, message: 'Proyecto creado exitosamente', proyecto: result.rows[0] });
-}, {
-  duplicateMessage: 'El código de proyecto ya existe'
-}));
+      res.status(201).json({
+        success: true,
+        message: 'Proyecto creado exitosamente',
+        proyecto: result.rows[0],
+      });
+    },
+    {
+      duplicateMessage: 'El código de proyecto ya existe',
+    },
+  ),
+);
 
 // Actualizar proyecto
-router.put('/:id', [
-  param('id').isInt().withMessage('ID debe ser un número'),
-  body('nombre').optional().trim().isLength({ min: 2 }),
-  body('estado').optional().isIn(['planificacion', 'en_curso', 'pausado', 'completado', 'cancelado']),
-  authenticateToken,
-  checkPermission('proyectos_editar'),
-  checkProjectAccess('id')
-], asyncHandler(async (req: Request<{ id: string }, object, Partial<CreateProjectBody>>, res: Response): Promise<void> => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(400).json({ success: false, message: 'Datos inválidos', errors: errors.array() });
-    return;
-  }
-
-  const { id } = req.params;
-  const updateData = req.body;
-
-  const projectResult = await query<{ id: number }>('SELECT * FROM proyectos WHERE id = $1', [id]);
-  if (projectResult.rows.length === 0) {
-    res.status(404).json({ success: false, message: 'Proyecto no encontrado' });
-    return;
-  }
-
-  const allowedFields = [
-    'nombre', 'nombre_corto', 'cliente_id', 'fecha_inicio', 'fecha_fin_estimada',
-    'estado', 'contratista', 'ingeniero_residente', 'codigo_proyecto', 'contrato',
-    'acto_publico', 'monto_contrato_original', 'presupuesto_base', 'itbms',
-    'monto_total', 'datos_adicionales'
-  ];
-
-  const updateFields: string[] = [];
-  const updateValues: unknown[] = [];
-  let paramCounter = 1;
-
-  Object.keys(updateData).forEach(key => {
-    if (updateData[key as keyof typeof updateData] !== undefined && allowedFields.includes(key)) {
-      if (key === 'datos_adicionales') {
-        updateFields.push(`${key} = $${paramCounter}`);
-        updateValues.push(JSON.stringify(updateData[key as keyof typeof updateData]));
-      } else {
-        updateFields.push(`${key} = $${paramCounter}`);
-        updateValues.push(updateData[key as keyof typeof updateData]);
+router.put(
+  '/:id',
+  [
+    param('id').isInt().withMessage('ID debe ser un número'),
+    body('nombre').optional().trim().isLength({ min: 2 }),
+    body('estado')
+      .optional()
+      .isIn([
+        'planificacion',
+        'en_curso',
+        'pausado',
+        'completado',
+        'cancelado',
+      ]),
+    authenticateToken,
+    checkPermission('proyectos_editar'),
+    checkProjectAccess('id'),
+  ],
+  asyncHandler(
+    async (
+      req: Request<{ id: string }, object, Partial<CreateProjectBody>>,
+      res: Response,
+    ): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Datos inválidos',
+          errors: errors.array(),
+        });
+        return;
       }
-      paramCounter++;
-    }
-  });
 
-  if (updateFields.length === 0) {
-    res.status(400).json({ success: false, message: 'No hay datos para actualizar' });
-    return;
-  }
+      const { id } = req.params;
+      const updateData = req.body;
 
-  updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
-  updateValues.push(id);
+      const projectResult = await query<{ id: number }>(
+        'SELECT * FROM proyectos WHERE id = $1',
+        [id],
+      );
+      if (projectResult.rows.length === 0) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Proyecto no encontrado' });
+        return;
+      }
 
-  const result = await query<ProjectRow>(`
+      const allowedFields = [
+        'nombre',
+        'nombre_corto',
+        'cliente_id',
+        'fecha_inicio',
+        'fecha_fin_estimada',
+        'estado',
+        'contratista',
+        'ingeniero_residente',
+        'codigo_proyecto',
+        'contrato',
+        'acto_publico',
+        'monto_contrato_original',
+        'presupuesto_base',
+        'itbms',
+        'monto_total',
+        'datos_adicionales',
+      ];
+
+      const updateFields: string[] = [];
+      const updateValues: unknown[] = [];
+      let paramCounter = 1;
+
+      Object.keys(updateData).forEach((key) => {
+        if (
+          updateData[key as keyof typeof updateData] !== undefined &&
+          allowedFields.includes(key)
+        ) {
+          if (key === 'datos_adicionales') {
+            updateFields.push(`${key} = $${paramCounter}`);
+            updateValues.push(
+              JSON.stringify(updateData[key as keyof typeof updateData]),
+            );
+          } else {
+            updateFields.push(`${key} = $${paramCounter}`);
+            updateValues.push(updateData[key as keyof typeof updateData]);
+          }
+          paramCounter++;
+        }
+      });
+
+      if (updateFields.length === 0) {
+        res
+          .status(400)
+          .json({ success: false, message: 'No hay datos para actualizar' });
+        return;
+      }
+
+      updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
+      updateValues.push(id);
+
+      const result = await query<ProjectRow>(
+        `
     UPDATE proyectos SET ${updateFields.join(', ')} WHERE id = $${paramCounter} RETURNING *
-  `, updateValues);
+  `,
+        updateValues,
+      );
 
-  await registrarAudit(req.user!.id, 'editar', 'proyecto', parseInt(id), {
-    nombre: result.rows[0].nombre,
-    campos_modificados: Object.keys(updateData).filter(k => allowedFields.includes(k))
-  });
+      await registrarAudit(req.user!.id, 'editar', 'proyecto', parseInt(id), {
+        nombre: result.rows[0].nombre,
+        campos_modificados: Object.keys(updateData).filter((k) =>
+          allowedFields.includes(k),
+        ),
+      });
 
-  res.json({ success: true, message: 'Proyecto actualizado exitosamente', proyecto: result.rows[0] });
-}, {
-  duplicateMessage: 'El código de proyecto ya existe'
-}));
+      res.json({
+        success: true,
+        message: 'Proyecto actualizado exitosamente',
+        proyecto: result.rows[0],
+      });
+    },
+    {
+      duplicateMessage: 'El código de proyecto ya existe',
+    },
+  ),
+);
 
 // Eliminar proyecto
-router.delete('/:id', [
-  param('id').isInt().withMessage('ID debe ser un número'),
-  authenticateToken,
-  checkPermission('proyectos_eliminar')
-], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(400).json({ success: false, message: 'ID inválido', errors: errors.array() });
-    return;
-  }
+router.delete(
+  '/:id',
+  [
+    param('id').isInt().withMessage('ID debe ser un número'),
+    authenticateToken,
+    checkPermission('proyectos_eliminar'),
+  ],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'ID inválido',
+          errors: errors.array(),
+        });
+        return;
+      }
 
-  const { id } = req.params;
+      const { id } = req.params;
 
-  const projectResult = await query<{ id: number; nombre: string }>('SELECT id, nombre FROM proyectos WHERE id = $1', [id]);
-  if (projectResult.rows.length === 0) {
-    res.status(404).json({ success: false, message: 'Proyecto no encontrado' });
-    return;
-  }
+      const projectResult = await query<{ id: number; nombre: string }>(
+        'SELECT id, nombre FROM proyectos WHERE id = $1',
+        [id],
+      );
+      if (projectResult.rows.length === 0) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Proyecto no encontrado' });
+        return;
+      }
 
-  if (req.user!.rol !== 'admin') {
-    res.status(403).json({ success: false, message: 'Solo administradores pueden eliminar proyectos' });
-    return;
-  }
+      if (req.user!.rol !== 'admin') {
+        res.status(403).json({
+          success: false,
+          message: 'Solo administradores pueden eliminar proyectos',
+        });
+        return;
+      }
 
-  const { nombre } = projectResult.rows[0];
-  await query('DELETE FROM proyectos WHERE id = $1', [id]);
-  await registrarAudit(req.user!.id, 'eliminar', 'proyecto', parseInt(id), { nombre });
+      const { nombre } = projectResult.rows[0];
+      await query('DELETE FROM proyectos WHERE id = $1', [id]);
+      await registrarAudit(req.user!.id, 'eliminar', 'proyecto', parseInt(id), {
+        nombre,
+      });
 
-  res.json({ success: true, message: 'Proyecto eliminado exitosamente' });
-}));
+      res.json({ success: true, message: 'Proyecto eliminado exitosamente' });
+    },
+  ),
+);
 
 // Estadísticas básicas
-router.get('/stats/dashboard', authenticateToken, asyncHandler(async (_req: Request, res: Response): Promise<void> => {
-  const statsResult = await query<StatsRow>(`
+router.get(
+  '/stats/dashboard',
+  authenticateToken,
+  asyncHandler(
+    async (_req: Request, res: Response): Promise<void> => {
+      const statsResult = await query<StatsRow>(`
     SELECT
       COUNT(CASE WHEN estado = 'en_curso' THEN 1 END) as proyectos_activos,
       COUNT(CASE WHEN estado = 'planificacion' THEN 1 END) as proyectos_planificacion,
@@ -396,46 +623,79 @@ router.get('/stats/dashboard', authenticateToken, asyncHandler(async (_req: Requ
     FROM proyectos
   `);
 
-  res.json({ success: true, stats: statsResult.rows[0] });
-}, {
-  tableNotExistsDefault: {
-    stats: { proyectos_activos: 0, proyectos_planificacion: 0, proyectos_completados: 0, total_proyectos: 0, monto_contratos_total: 0 }
-  }
-}));
+      res.json({ success: true, stats: statsResult.rows[0] });
+    },
+    {
+      tableNotExistsDefault: {
+        stats: {
+          proyectos_activos: 0,
+          proyectos_planificacion: 0,
+          proyectos_completados: 0,
+          total_proyectos: 0,
+          monto_contratos_total: 0,
+        },
+      },
+    },
+  ),
+);
 
 // Actualizar datos adicionales
-router.patch('/:id/datos-adicionales', [
-  param('id').isInt().withMessage('ID debe ser un número'),
-  body('datos').isObject().withMessage('Datos debe ser un objeto JSON'),
-  authenticateToken,
-  requireManager
-], asyncHandler(async (req: Request<{ id: string }, object, { datos: Record<string, unknown> }>, res: Response): Promise<void> => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(400).json({ success: false, message: 'Datos inválidos', errors: errors.array() });
-    return;
-  }
+router.patch(
+  '/:id/datos-adicionales',
+  [
+    param('id').isInt().withMessage('ID debe ser un número'),
+    body('datos').isObject().withMessage('Datos debe ser un objeto JSON'),
+    authenticateToken,
+    requireManager,
+  ],
+  asyncHandler(
+    async (
+      req: Request<{ id: string }, object, { datos: Record<string, unknown> }>,
+      res: Response,
+    ): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Datos inválidos',
+          errors: errors.array(),
+        });
+        return;
+      }
 
-  const { id } = req.params;
-  const { datos } = req.body;
+      const { id } = req.params;
+      const { datos } = req.body;
 
-  const currentResult = await query<{ datos_adicionales: Record<string, unknown> | null }>(
-    'SELECT datos_adicionales FROM proyectos WHERE id = $1', [id]
-  );
+      const currentResult = await query<{
+        datos_adicionales: Record<string, unknown> | null;
+      }>('SELECT datos_adicionales FROM proyectos WHERE id = $1', [id]);
 
-  if (currentResult.rows.length === 0) {
-    res.status(404).json({ success: false, message: 'Proyecto no encontrado' });
-    return;
-  }
+      if (currentResult.rows.length === 0) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Proyecto no encontrado' });
+        return;
+      }
 
-  const currentData = currentResult.rows[0].datos_adicionales || {};
-  const mergedData = { ...currentData, ...datos };
+      const currentData = currentResult.rows[0].datos_adicionales || {};
+      const mergedData = { ...currentData, ...datos };
 
-  const result = await query<{ datos_adicionales: Record<string, unknown> }>(`
+      const result = await query<{
+        datos_adicionales: Record<string, unknown>;
+      }>(
+        `
     UPDATE proyectos SET datos_adicionales = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING datos_adicionales
-  `, [JSON.stringify(mergedData), id]);
+  `,
+        [JSON.stringify(mergedData), id],
+      );
 
-  res.json({ success: true, message: 'Datos adicionales actualizados', datos_adicionales: result.rows[0].datos_adicionales });
-}));
+      res.json({
+        success: true,
+        message: 'Datos adicionales actualizados',
+        datos_adicionales: result.rows[0].datos_adicionales,
+      });
+    },
+  ),
+);
 
 export default router;

@@ -14,7 +14,14 @@ async function runMigration(migrationFile: string): Promise<void> {
   try {
     console.log(`🚀 Ejecutando migración: ${migrationFile}`);
 
-    const migrationPath = path.join(__dirname, '..', '..', 'database', 'migrations', migrationFile);
+    const migrationPath = path.join(
+      __dirname,
+      '..',
+      '..',
+      'database',
+      'migrations',
+      migrationFile,
+    );
     const sqlContent = fs.readFileSync(migrationPath, 'utf8');
 
     // Execute the SQL as a single statement
@@ -25,7 +32,6 @@ async function runMigration(migrationFile: string): Promise<void> {
     }
 
     console.log(`✅ Migración completada: ${migrationFile}`);
-
   } catch (error) {
     const dbError = error as Error;
     console.error(`❌ Error en migración ${migrationFile}:`, dbError.message);
@@ -46,14 +52,24 @@ export async function runAllMigrations(): Promise<void> {
       );
     `);
 
-    const migrationsDir = path.join(__dirname, '..', '..', 'database', 'migrations');
-    const migrationFiles = fs.readdirSync(migrationsDir)
-      .filter(file => file.endsWith('.sql'))
+    const migrationsDir = path.join(
+      __dirname,
+      '..',
+      '..',
+      'database',
+      'migrations',
+    );
+    const migrationFiles = fs
+      .readdirSync(migrationsDir)
+      .filter((file) => file.endsWith('.sql'))
       .sort();
 
     for (const file of migrationFiles) {
       // Check if migration already executed
-      const result = await query<MigrationRow>('SELECT filename FROM migrations WHERE filename = $1', [file]);
+      const result = await query<MigrationRow>(
+        'SELECT filename FROM migrations WHERE filename = $1',
+        [file],
+      );
 
       if (result.rows.length === 0) {
         await runMigration(file);
@@ -65,7 +81,6 @@ export async function runAllMigrations(): Promise<void> {
     }
 
     console.log('🎉 Todas las migraciones completadas!');
-
   } catch (error) {
     console.error('💥 Error ejecutando migraciones:', error);
     process.exit(1);

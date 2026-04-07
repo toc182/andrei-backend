@@ -56,7 +56,9 @@ export class QueryBuilder {
   whereILike(value: string | undefined | null, columns: string[]): this {
     if (!value) return this;
 
-    const likeConditions = columns.map(col => `${col} ILIKE $${this.paramCounter}`);
+    const likeConditions = columns.map(
+      (col) => `${col} ILIKE $${this.paramCounter}`,
+    );
     this.conditions.push(`(${likeConditions.join(' OR ')})`);
     this._params.push(`%${value}%`);
     this.paramCounter++;
@@ -69,7 +71,9 @@ export class QueryBuilder {
   whereIn(column: string, values: ParamValue[]): this {
     if (!values || values.length === 0) return this;
 
-    const placeholders = values.map((_, i) => `$${this.paramCounter + i}`).join(', ');
+    const placeholders = values
+      .map((_, i) => `$${this.paramCounter + i}`)
+      .join(', ');
     this.conditions.push(`${column} IN (${placeholders})`);
     this._params.push(...values);
     this.paramCounter += values.length;
@@ -93,7 +97,10 @@ export class QueryBuilder {
   whereRaw(condition: string, ...values: ParamValue[]): this {
     let processedCondition = condition;
     for (const value of values) {
-      processedCondition = processedCondition.replace('$NEXT', `$${this.paramCounter}`);
+      processedCondition = processedCondition.replace(
+        '$NEXT',
+        `$${this.paramCounter}`,
+      );
       this._params.push(value);
       this.paramCounter++;
     }
@@ -114,7 +121,11 @@ export class QueryBuilder {
   /**
    * Add comparison condition (>, <, >=, <=, !=)
    */
-  whereCompare(column: string, operator: '>' | '<' | '>=' | '<=' | '!=' | '<>', value: ParamValue): this {
+  whereCompare(
+    column: string,
+    operator: '>' | '<' | '>=' | '<=' | '!=' | '<>',
+    value: ParamValue,
+  ): this {
     this.conditions.push(`${column} ${operator} $${this.paramCounter}`);
     this._params.push(value);
     this.paramCounter++;
@@ -124,7 +135,12 @@ export class QueryBuilder {
   /**
    * Add comparison only if value is truthy
    */
-  whereCompareIf(condition: unknown, column: string, operator: '>' | '<' | '>=' | '<=' | '!=' | '<>', value: ParamValue): this {
+  whereCompareIf(
+    condition: unknown,
+    column: string,
+    operator: '>' | '<' | '>=' | '<=' | '!=' | '<>',
+    value: ParamValue,
+  ): this {
     if (condition) {
       this.whereCompare(column, operator, value);
     }
@@ -151,7 +167,9 @@ export class QueryBuilder {
    * Add BETWEEN condition
    */
   whereBetween(column: string, min: ParamValue, max: ParamValue): this {
-    this.conditions.push(`${column} BETWEEN $${this.paramCounter} AND $${this.paramCounter + 1}`);
+    this.conditions.push(
+      `${column} BETWEEN $${this.paramCounter} AND $${this.paramCounter + 1}`,
+    );
     this._params.push(min, max);
     this.paramCounter += 2;
     return this;

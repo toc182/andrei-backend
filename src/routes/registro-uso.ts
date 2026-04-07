@@ -26,94 +26,150 @@ interface CreateRegistroBody {
 }
 
 // Crear nuevo registro de uso
-router.post('/', [
-  body('asignacion_id').isInt().withMessage('ID de asignación requerido'),
-  body('fecha_inicio').isISO8601().withMessage('Fecha de inicio requerida'),
-  body('fecha_fin').isISO8601().withMessage('Fecha de fin requerida'),
-  body('cantidad').isNumeric().withMessage('Cantidad debe ser numérica')
-], authenticateToken, checkPermission('equipos_uso'), asyncHandler(async (req: Request<object, object, CreateRegistroBody>, res: Response): Promise<void> => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(400).json({
-      success: false,
-      message: 'Datos inválidos',
-      errors: errors.array()
-    });
-    return;
-  }
+router.post(
+  '/',
+  [
+    body('asignacion_id').isInt().withMessage('ID de asignación requerido'),
+    body('fecha_inicio').isISO8601().withMessage('Fecha de inicio requerida'),
+    body('fecha_fin').isISO8601().withMessage('Fecha de fin requerida'),
+    body('cantidad').isNumeric().withMessage('Cantidad debe ser numérica'),
+  ],
+  authenticateToken,
+  checkPermission('equipos_uso'),
+  asyncHandler(
+    async (
+      req: Request<object, object, CreateRegistroBody>,
+      res: Response,
+    ): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Datos inválidos',
+          errors: errors.array(),
+        });
+        return;
+      }
 
-  const {
-    asignacion_id,
-    fecha_inicio,
-    fecha_fin,
-    cantidad,
-    observaciones
-  } = req.body;
+      const {
+        asignacion_id,
+        fecha_inicio,
+        fecha_fin,
+        cantidad,
+        observaciones,
+      } = req.body;
 
-  // Si fecha_inicio == fecha_fin (tipo hora), verificar si ya existe un registro para esa fecha
-  let result;
-  if (fecha_inicio === fecha_fin) {
-    const existingRecord = await query<{ id: number }>(`
+      // Si fecha_inicio == fecha_fin (tipo hora), verificar si ya existe un registro para esa fecha
+      let result;
+      if (fecha_inicio === fecha_fin) {
+        const existingRecord = await query<{ id: number }>(
+          `
       SELECT id FROM registro_uso_equipos
       WHERE asignacion_id = $1 AND fecha_inicio = $2
-    `, [asignacion_id, fecha_inicio]);
+    `,
+          [asignacion_id, fecha_inicio],
+        );
 
-    if (existingRecord.rows.length > 0) {
-      // Actualizar registro existente
-      result = await query<RegistroUsoRow>(`
+        if (existingRecord.rows.length > 0) {
+          // Actualizar registro existente
+          result = await query<RegistroUsoRow>(
+            `
         UPDATE registro_uso_equipos
         SET cantidad = $1, observaciones = $2
         WHERE id = $3
         RETURNING *
-      `, [cantidad, observaciones || null, existingRecord.rows[0].id]);
+      `,
+            [cantidad, observaciones || null, existingRecord.rows[0].id],
+          );
 
-      await registrarAudit(req.user!.id, 'editar', 'registro_uso', result.rows[0].id, {
-        asignacion_id, fecha_inicio, cantidad
-      });
+          await registrarAudit(
+            req.user!.id,
+            'editar',
+            'registro_uso',
+            result.rows[0].id,
+            {
+              asignacion_id,
+              fecha_inicio,
+              cantidad,
+            },
+          );
 
-      res.json({
-        success: true,
-        message: 'Registro de uso actualizado exitosamente',
-        data: result.rows[0]
-      });
-      return;
-    }
-  }
+          res.json({
+            success: true,
+            message: 'Registro de uso actualizado exitosamente',
+            data: result.rows[0],
+          });
+          return;
+        }
+      }
 
-  // Crear nuevo registro
-  result = await query<RegistroUsoRow>(`
+      // Crear nuevo registro
+      result = await query<RegistroUsoRow>(
+        `
     INSERT INTO registro_uso_equipos (
       asignacion_id, fecha_inicio, fecha_fin, cantidad, observaciones, created_at
     ) VALUES (
       $1, $2, $3, $4, $5, NOW()
     ) RETURNING *
-  `, [asignacion_id, fecha_inicio, fecha_fin, cantidad, observaciones || null]);
+  `,
+        [
+          asignacion_id,
+          fecha_inicio,
+          fecha_fin,
+          cantidad,
+          observaciones || null,
+        ],
+      );
 
-  await registrarAudit(req.user!.id, 'crear', 'registro_uso', result.rows[0].id, {
-    asignacion_id, fecha_inicio, fecha_fin, cantidad
-  });
+      await registrarAudit(
+        req.user!.id,
+        'crear',
+        'registro_uso',
+        result.rows[0].id,
+        {
+          asignacion_id,
+          fecha_inicio,
+          fecha_fin,
+          cantidad,
+        },
+      );
 
-  res.json({
-    success: true,
-    message: 'Registro de uso creado exitosamente',
-    data: result.rows[0]
-  });
-}));
+      res.json({
+        success: true,
+        message: 'Registro de uso creado exitosamente',
+        data: result.rows[0],
+      });
+    },
+  ),
+);
 
 // Obtener registros de uso por asignación
-router.get('/asignacion/:asignacion_id', authenticateToken, checkPermission('equipos_uso'), asyncHandler(async (req: Request<{ asignacion_id: string }>, res: Response): Promise<void> => {
-  const { asignacion_id } = req.params;
+router.get(
+  '/asignacion/:asignacion_id',
+  authenticateToken,
+  checkPermission('equipos_uso'),
+  asyncHandler(
+    async (
+      req: Request<{ asignacion_id: string }>,
+      res: Response,
+    ): Promise<void> => {
+      const { asignacion_id } = req.params;
 
-  const result = await query<RegistroUsoRow>(`
+      const result = await query<RegistroUsoRow>(
+        `
     SELECT * FROM registro_uso_equipos
     WHERE asignacion_id = $1
     ORDER BY fecha_inicio DESC
-  `, [asignacion_id]);
+  `,
+        [asignacion_id],
+      );
 
-  res.json({
-    success: true,
-    data: result.rows
-  });
-}));
+      res.json({
+        success: true,
+        data: result.rows,
+      });
+    },
+  ),
+);
 
 export default router;

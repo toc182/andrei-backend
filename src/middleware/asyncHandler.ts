@@ -33,7 +33,7 @@ interface AsyncHandlerOptions {
 type AsyncFunction = (
   req: Request<any, any, any, any>,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => Promise<void>;
 
 /**
@@ -41,13 +41,17 @@ type AsyncFunction = (
  */
 const getDuplicateMessage = (
   detail: string | undefined,
-  messages: Record<string, string>
+  messages: Record<string, string>,
 ): string => {
-  if (!detail) return messages.default || 'Ya existe un registro con esos datos';
+  if (!detail)
+    return messages.default || 'Ya existe un registro con esos datos';
 
   // Buscar qué campo causó el duplicado
   for (const [field, message] of Object.entries(messages)) {
-    if (field !== 'default' && detail.toLowerCase().includes(field.toLowerCase())) {
+    if (
+      field !== 'default' &&
+      detail.toLowerCase().includes(field.toLowerCase())
+    ) {
       return message;
     }
   }
@@ -101,9 +105,13 @@ const getDuplicateMessage = (
  */
 export const asyncHandler = (
   fn: AsyncFunction,
-  options?: AsyncHandlerOptions
+  options?: AsyncHandlerOptions,
 ) => {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  return async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
       await fn(req, res, next);
     } catch (error) {
@@ -111,13 +119,14 @@ export const asyncHandler = (
 
       // Código 23505 - Unique violation (duplicado)
       if (dbError.code === '23505' && options?.duplicateMessage) {
-        const message = typeof options.duplicateMessage === 'string'
-          ? options.duplicateMessage
-          : getDuplicateMessage(dbError.detail, options.duplicateMessage);
+        const message =
+          typeof options.duplicateMessage === 'string'
+            ? options.duplicateMessage
+            : getDuplicateMessage(dbError.detail, options.duplicateMessage);
 
         res.status(400).json({
           success: false,
-          message
+          message,
         });
         return;
       }
@@ -126,7 +135,7 @@ export const asyncHandler = (
       if (dbError.code === '23503' && options?.foreignKeyMessage) {
         res.status(400).json({
           success: false,
-          message: options.foreignKeyMessage
+          message: options.foreignKeyMessage,
         });
         return;
       }
@@ -138,7 +147,7 @@ export const asyncHandler = (
       ) {
         res.json({
           success: true,
-          ...options.tableNotExistsDefault
+          ...options.tableNotExistsDefault,
         });
         return;
       }
@@ -149,8 +158,12 @@ export const asyncHandler = (
         success: false,
         message: 'Error interno del servidor',
         ...(process.env.NODE_ENV !== 'production' && {
-          debug: { error: dbError.message, stack: dbError.stack, code: dbError.code }
-        })
+          debug: {
+            error: dbError.message,
+            stack: dbError.stack,
+            code: dbError.code,
+          },
+        }),
       });
     }
   };

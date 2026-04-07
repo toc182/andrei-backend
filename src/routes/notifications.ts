@@ -7,32 +7,42 @@ import { sendEmail } from '../services/emailService.js';
 const router = Router();
 
 // POST /test-daily — Ejecutar notificación diaria manualmente (solo admin)
-router.post('/test-daily', authenticateToken, asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  if (req.user!.rol !== 'admin') {
-    res.status(403).json({ success: false, message: 'Solo administradores pueden ejecutar esta acción' });
-    return;
-  }
+router.post(
+  '/test-daily',
+  authenticateToken,
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    if (req.user!.rol !== 'admin') {
+      res.status(403).json({
+        success: false,
+        message: 'Solo administradores pueden ejecutar esta acción',
+      });
+      return;
+    }
 
-  const result = await sendDailyNotifications();
+    const result = await sendDailyNotifications();
 
-  res.json({
-    success: true,
-    message: `Notificaciones enviadas: ${result.enviados}`,
-    ...result
-  });
-}));
+    res.json({
+      success: true,
+      message: `Notificaciones enviadas: ${result.enviados}`,
+      ...result,
+    });
+  }),
+);
 
 // POST /test-email — Enviar email de prueba al usuario actual (solo admin, temporal)
-router.post('/test-email', authenticateToken, asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  if (req.user!.rol !== 'admin') {
-    res.status(403).json({ success: false, message: 'Solo administradores' });
-    return;
-  }
+router.post(
+  '/test-email',
+  authenticateToken,
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    if (req.user!.rol !== 'admin') {
+      res.status(403).json({ success: false, message: 'Solo administradores' });
+      return;
+    }
 
-  const userEmail = req.user!.email;
-  const userName = req.user!.nombre || 'Admin';
+    const userEmail = req.user!.email;
+    const userName = req.user!.nombre || 'Admin';
 
-  const html = `
+    const html = `
     <div style="max-width: 600px; margin: 0 auto; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
       <div style="background: #1a365d; padding: 20px 24px; border-radius: 8px 8px 0 0;">
         <h1 style="margin: 0; color: white; font-size: 18px;">Pinellas, S.A.</h1>
@@ -46,12 +56,13 @@ router.post('/test-email', authenticateToken, asyncHandler(async (req: Request, 
     </div>
   `;
 
-  await sendEmail(userEmail, 'Prueba de email — Sistema Andrei', html);
+    await sendEmail(userEmail, 'Prueba de email — Sistema Andrei', html);
 
-  res.json({
-    success: true,
-    message: `Email de prueba enviado a ${userEmail}`
-  });
-}));
+    res.json({
+      success: true,
+      message: `Email de prueba enviado a ${userEmail}`,
+    });
+  }),
+);
 
 export default router;

@@ -29,17 +29,20 @@ interface CreateContactBody {
 }
 
 // GET - Obtener todos los contactos externos
-router.get('/', authenticateToken, asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  const { activo } = req.query;
+router.get(
+  '/',
+  authenticateToken,
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const { activo } = req.query;
 
-  let whereClause = '';
-  if (activo === 'true') {
-    whereClause = 'WHERE ec.activo = true';
-  } else if (activo === 'false') {
-    whereClause = 'WHERE ec.activo = false';
-  }
+    let whereClause = '';
+    if (activo === 'true') {
+      whereClause = 'WHERE ec.activo = true';
+    } else if (activo === 'false') {
+      whereClause = 'WHERE ec.activo = false';
+    }
 
-  const result = await query<ExternalContactRow>(`
+    const result = await query<ExternalContactRow>(`
     SELECT
       ec.id,
       ec.nombre,
@@ -58,26 +61,33 @@ router.get('/', authenticateToken, asyncHandler(async (req: Request, res: Respon
     ORDER BY ec.nombre
   `);
 
-  res.json({
-    success: true,
-    contacts: result.rows
-  });
-}));
+    res.json({
+      success: true,
+      contacts: result.rows,
+    });
+  }),
+);
 
 // GET - Obtener un contacto externo por ID
-router.get('/:id', [
-  param('id').isInt().withMessage('ID debe ser un número'),
-  authenticateToken
-], asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(400).json({ success: false, message: 'ID inválido', errors: errors.array() });
-    return;
-  }
+router.get(
+  '/:id',
+  [param('id').isInt().withMessage('ID debe ser un número'), authenticateToken],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'ID inválido',
+          errors: errors.array(),
+        });
+        return;
+      }
 
-  const { id } = req.params;
+      const { id } = req.params;
 
-  const result = await query<ExternalContactRow>(`
+      const result = await query<ExternalContactRow>(
+        `
     SELECT
       ec.id,
       ec.nombre,
@@ -93,62 +103,93 @@ router.get('/:id', [
     FROM external_contacts ec
     LEFT JOIN users u ON ec.created_by = u.id
     WHERE ec.id = $1
-  `, [id]);
+  `,
+        [id],
+      );
 
-  if (result.rows.length === 0) {
-    res.status(404).json({
-      success: false,
-      message: 'Contacto no encontrado'
-    });
-    return;
-  }
+      if (result.rows.length === 0) {
+        res.status(404).json({
+          success: false,
+          message: 'Contacto no encontrado',
+        });
+        return;
+      }
 
-  res.json({
-    success: true,
-    contact: result.rows[0]
-  });
-}));
+      res.json({
+        success: true,
+        contact: result.rows[0],
+      });
+    },
+  ),
+);
 
 // POST - Crear nuevo contacto externo
-router.post('/', authenticateToken, asyncHandler(async (req: Request<object, object, CreateContactBody>, res: Response): Promise<void> => {
-  const { nombre, cargo, telefono, email, notas } = req.body;
-  const created_by = req.user!.id;
+router.post(
+  '/',
+  authenticateToken,
+  asyncHandler(
+    async (
+      req: Request<object, object, CreateContactBody>,
+      res: Response,
+    ): Promise<void> => {
+      const { nombre, cargo, telefono, email, notas } = req.body;
+      const created_by = req.user!.id;
 
-  if (!nombre || nombre.trim() === '') {
-    res.status(400).json({
-      success: false,
-      message: 'El nombre es requerido'
-    });
-    return;
-  }
+      if (!nombre || nombre.trim() === '') {
+        res.status(400).json({
+          success: false,
+          message: 'El nombre es requerido',
+        });
+        return;
+      }
 
-  const result = await query<ExternalContactRow>(`
+      const result = await query<ExternalContactRow>(
+        `
     INSERT INTO external_contacts (nombre, cargo, telefono, email, notas, created_by)
     VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *
-  `, [nombre.trim(), cargo?.trim() || null, telefono?.trim() || null, email?.trim() || null, notas?.trim() || null, created_by]);
+  `,
+        [
+          nombre.trim(),
+          cargo?.trim() || null,
+          telefono?.trim() || null,
+          email?.trim() || null,
+          notas?.trim() || null,
+          created_by,
+        ],
+      );
 
-  res.status(201).json({
-    success: true,
-    contact: result.rows[0],
-    message: 'Contacto creado exitosamente'
-  });
-}));
+      res.status(201).json({
+        success: true,
+        contact: result.rows[0],
+        message: 'Contacto creado exitosamente',
+      });
+    },
+  ),
+);
 
 // PUT - Actualizar contacto externo
-router.put('/:id', authenticateToken, asyncHandler(async (req: Request<{ id: string }, object, CreateContactBody>, res: Response): Promise<void> => {
-  const { id } = req.params;
-  const { nombre, cargo, telefono, email, notas } = req.body;
+router.put(
+  '/:id',
+  authenticateToken,
+  asyncHandler(
+    async (
+      req: Request<{ id: string }, object, CreateContactBody>,
+      res: Response,
+    ): Promise<void> => {
+      const { id } = req.params;
+      const { nombre, cargo, telefono, email, notas } = req.body;
 
-  if (!nombre || nombre.trim() === '') {
-    res.status(400).json({
-      success: false,
-      message: 'El nombre es requerido'
-    });
-    return;
-  }
+      if (!nombre || nombre.trim() === '') {
+        res.status(400).json({
+          success: false,
+          message: 'El nombre es requerido',
+        });
+        return;
+      }
 
-  const result = await query<ExternalContactRow>(`
+      const result = await query<ExternalContactRow>(
+        `
     UPDATE external_contacts
     SET
       nombre = $1,
@@ -159,87 +200,120 @@ router.put('/:id', authenticateToken, asyncHandler(async (req: Request<{ id: str
       updated_at = CURRENT_TIMESTAMP
     WHERE id = $6
     RETURNING *
-  `, [nombre.trim(), cargo?.trim() || null, telefono?.trim() || null, email?.trim() || null, notas?.trim() || null, id]);
+  `,
+        [
+          nombre.trim(),
+          cargo?.trim() || null,
+          telefono?.trim() || null,
+          email?.trim() || null,
+          notas?.trim() || null,
+          id,
+        ],
+      );
 
-  if (result.rows.length === 0) {
-    res.status(404).json({
-      success: false,
-      message: 'Contacto no encontrado'
-    });
-    return;
-  }
+      if (result.rows.length === 0) {
+        res.status(404).json({
+          success: false,
+          message: 'Contacto no encontrado',
+        });
+        return;
+      }
 
-  res.json({
-    success: true,
-    contact: result.rows[0],
-    message: 'Contacto actualizado exitosamente'
-  });
-}));
+      res.json({
+        success: true,
+        contact: result.rows[0],
+        message: 'Contacto actualizado exitosamente',
+      });
+    },
+  ),
+);
 
 // DELETE - Eliminar contacto externo (soft delete)
-router.delete('/:id', authenticateToken, asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-  const { id } = req.params;
+router.delete(
+  '/:id',
+  authenticateToken,
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const { id } = req.params;
 
-  // Verificar si el contacto tiene asignaciones activas
-  const assignmentsCheck = await query<{ count: string }>(`
+      // Verificar si el contacto tiene asignaciones activas
+      const assignmentsCheck = await query<{ count: string }>(
+        `
     SELECT COUNT(*) as count
     FROM project_members
     WHERE external_contact_id = $1 AND activo = true
-  `, [id]);
+  `,
+        [id],
+      );
 
-  if (parseInt(assignmentsCheck.rows[0].count) > 0) {
-    res.status(400).json({
-      success: false,
-      message: 'No se puede eliminar: el contacto tiene asignaciones activas en proyectos'
-    });
-    return;
-  }
+      if (parseInt(assignmentsCheck.rows[0].count) > 0) {
+        res.status(400).json({
+          success: false,
+          message:
+            'No se puede eliminar: el contacto tiene asignaciones activas en proyectos',
+        });
+        return;
+      }
 
-  const result = await query<ExternalContactRow>(`
+      const result = await query<ExternalContactRow>(
+        `
     UPDATE external_contacts
     SET activo = false, updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
     RETURNING *
-  `, [id]);
+  `,
+        [id],
+      );
 
-  if (result.rows.length === 0) {
-    res.status(404).json({
-      success: false,
-      message: 'Contacto no encontrado'
-    });
-    return;
-  }
+      if (result.rows.length === 0) {
+        res.status(404).json({
+          success: false,
+          message: 'Contacto no encontrado',
+        });
+        return;
+      }
 
-  res.json({
-    success: true,
-    message: 'Contacto eliminado exitosamente'
-  });
-}));
+      res.json({
+        success: true,
+        message: 'Contacto eliminado exitosamente',
+      });
+    },
+  ),
+);
 
 // PATCH - Restaurar contacto externo
-router.patch('/:id/restaurar', authenticateToken, asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-  const { id } = req.params;
+router.patch(
+  '/:id/restaurar',
+  authenticateToken,
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const { id } = req.params;
 
-  const result = await query<ExternalContactRow>(`
+      const result = await query<ExternalContactRow>(
+        `
     UPDATE external_contacts
     SET activo = true, updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
     RETURNING *
-  `, [id]);
+  `,
+        [id],
+      );
 
-  if (result.rows.length === 0) {
-    res.status(404).json({
-      success: false,
-      message: 'Contacto no encontrado'
-    });
-    return;
-  }
+      if (result.rows.length === 0) {
+        res.status(404).json({
+          success: false,
+          message: 'Contacto no encontrado',
+        });
+        return;
+      }
 
-  res.json({
-    success: true,
-    contact: result.rows[0],
-    message: 'Contacto restaurado exitosamente'
-  });
-}));
+      res.json({
+        success: true,
+        contact: result.rows[0],
+        message: 'Contacto restaurado exitosamente',
+      });
+    },
+  ),
+);
 
 export default router;

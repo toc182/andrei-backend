@@ -7,7 +7,10 @@ dotenv.config();
 // Configuración para Railway (usa DATABASE_URL) o local (variables separadas)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  ssl:
+    process.env.NODE_ENV === 'production'
+      ? { rejectUnauthorized: false }
+      : false,
 });
 
 // Si no hay DATABASE_URL, usar variables separadas (desarrollo local)
@@ -16,7 +19,9 @@ if (!process.env.DATABASE_URL) {
   pool.options.host = process.env.DB_HOST;
   pool.options.database = process.env.DB_NAME;
   pool.options.password = process.env.DB_PASSWORD;
-  pool.options.port = process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 5432;
+  pool.options.port = process.env.DB_PORT
+    ? parseInt(process.env.DB_PORT, 10)
+    : 5432;
 }
 
 /**
@@ -24,7 +29,7 @@ if (!process.env.DATABASE_URL) {
  */
 export async function query<T extends QueryResultRow = QueryResultRow>(
   text: string,
-  params?: unknown[]
+  params?: unknown[],
 ): Promise<DatabaseQueryResult<T>> {
   try {
     const result = await pool.query<T>(text, params);
@@ -54,12 +59,21 @@ export async function testConnection(): Promise<void> {
       pg_version: string;
     }
 
-    const result = await pool.query<ConnectionResult>('SELECT NOW() as current_time, version() as pg_version');
+    const result = await pool.query<ConnectionResult>(
+      'SELECT NOW() as current_time, version() as pg_version',
+    );
     console.log('✅ Database connection successful');
     console.log('📅 Current time:', result.rows[0].current_time);
-    console.log('🔢 PostgreSQL version:', result.rows[0].pg_version.split(' ')[0]);
+    console.log(
+      '🔢 PostgreSQL version:',
+      result.rows[0].pg_version.split(' ')[0],
+    );
   } catch (error) {
-    const dbError = error as { code?: string; message?: string; detail?: string };
+    const dbError = error as {
+      code?: string;
+      message?: string;
+      detail?: string;
+    };
     console.error('💥 Database connection failed');
     console.error('❌ Error code:', dbError.code);
     console.error('❌ Error message:', dbError.message);
@@ -70,7 +84,7 @@ export async function testConnection(): Promise<void> {
       host: pool.options.host,
       database: pool.options.database,
       user: pool.options.user,
-      port: pool.options.port
+      port: pool.options.port,
     });
     throw error;
   }

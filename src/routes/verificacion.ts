@@ -6,27 +6,33 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 const router = Router();
 
 // --- GET /:codigo — Verificar solicitud de pago (público, sin auth) ---
-router.get('/:codigo', [
-  param('codigo').isAlphanumeric().isLength({ min: 8, max: 10 })
-], asyncHandler(async (req: Request<{ codigo: string }>, res: Response): Promise<void> => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    res.status(400).json({ success: false, message: 'Código de verificación no válido' });
-    return;
-  }
+router.get(
+  '/:codigo',
+  [param('codigo').isAlphanumeric().isLength({ min: 8, max: 10 })],
+  asyncHandler(
+    async (req: Request<{ codigo: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Código de verificación no válido',
+        });
+        return;
+      }
 
-  const { codigo } = req.params;
+      const { codigo } = req.params;
 
-  const result = await query<{
-    numero: string;
-    fecha: string;
-    beneficiario: string | null;
-    proveedor: string;
-    concepto: string | null;
-    monto_total: number;
-    estado: string;
-    proyecto_nombre: string | null;
-  }>(`
+      const result = await query<{
+        numero: string;
+        fecha: string;
+        beneficiario: string | null;
+        proveedor: string;
+        concepto: string | null;
+        monto_total: number;
+        estado: string;
+        proyecto_nombre: string | null;
+      }>(
+        `
     SELECT
       sp.numero,
       sp.fecha,
@@ -39,39 +45,52 @@ router.get('/:codigo', [
     FROM solicitudes_pago sp
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
     WHERE sp.codigo_verificacion = $1
-  `, [codigo.toUpperCase()]);
+  `,
+        [codigo.toUpperCase()],
+      );
 
-  if (result.rows.length === 0) {
-    res.status(404).json({ success: false, message: 'Código de verificación no válido' });
-    return;
-  }
+      if (result.rows.length === 0) {
+        res.status(404).json({
+          success: false,
+          message: 'Código de verificación no válido',
+        });
+        return;
+      }
 
-  // Obtener aprobaciones
-  const aprobaciones = await query<{ usuario_nombre: string; fecha: string }>(`
+      // Obtener aprobaciones
+      const aprobaciones = await query<{
+        usuario_nombre: string;
+        fecha: string;
+      }>(
+        `
     SELECT u.nombre as usuario_nombre, sa.fecha
     FROM solicitud_aprobaciones sa
     JOIN users u ON sa.user_id = u.id
     JOIN solicitudes_pago sp ON sp.id = sa.solicitud_pago_id
     WHERE sp.codigo_verificacion = $1 AND sa.accion = 'aprobado'
     ORDER BY sa.orden
-  `, [codigo.toUpperCase()]);
+  `,
+        [codigo.toUpperCase()],
+      );
 
-  const sol = result.rows[0];
+      const sol = result.rows[0];
 
-  res.json({
-    success: true,
-    data: {
-      numero: sol.numero,
-      fecha: sol.fecha,
-      beneficiario: sol.beneficiario || sol.proveedor,
-      concepto: sol.concepto,
-      monto_total: sol.monto_total,
-      estado: sol.estado,
-      proyecto_nombre: sol.proyecto_nombre,
-      verificado: true,
-      aprobaciones: aprobaciones.rows
-    }
-  });
-}));
+      res.json({
+        success: true,
+        data: {
+          numero: sol.numero,
+          fecha: sol.fecha,
+          beneficiario: sol.beneficiario || sol.proveedor,
+          concepto: sol.concepto,
+          monto_total: sol.monto_total,
+          estado: sol.estado,
+          proyecto_nombre: sol.proyecto_nombre,
+          verificado: true,
+          aprobaciones: aprobaciones.rows,
+        },
+      });
+    },
+  ),
+);
 
 export default router;

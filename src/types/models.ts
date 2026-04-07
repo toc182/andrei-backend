@@ -14,8 +14,12 @@ export interface User {
 }
 
 export type UserWithoutPassword = Omit<User, 'password'>;
-export type CreateUserDTO = Pick<User, 'nombre' | 'email' | 'password'> & { rol?: UserRole };
-export type UpdateUserDTO = Partial<Omit<User, 'id' | 'created_at' | 'updated_at'>>;
+export type CreateUserDTO = Pick<User, 'nombre' | 'email' | 'password'> & {
+  rol?: UserRole;
+};
+export type UpdateUserDTO = Partial<
+  Omit<User, 'id' | 'created_at' | 'updated_at'>
+>;
 
 // ==================== CLIENT ====================
 export type ClientType = 'privado' | 'gobierno';
@@ -34,11 +38,19 @@ export interface Client {
   updated_at: Date;
 }
 
-export type CreateClientDTO = Omit<Client, 'id' | 'activo' | 'created_at' | 'updated_at'>;
+export type CreateClientDTO = Omit<
+  Client,
+  'id' | 'activo' | 'created_at' | 'updated_at'
+>;
 export type UpdateClientDTO = Partial<CreateClientDTO>;
 
 // ==================== PROJECT ====================
-export type ProjectStatus = 'planificacion' | 'en_curso' | 'pausado' | 'completado' | 'cancelado';
+export type ProjectStatus =
+  | 'planificacion'
+  | 'en_curso'
+  | 'pausado'
+  | 'completado'
+  | 'cancelado';
 export type ProjectCurrency = 'USD' | 'PAB';
 
 export interface Project {
@@ -67,11 +79,18 @@ export interface Project {
   updated_at: Date;
 }
 
-export type CreateProjectDTO = Omit<Project, 'id' | 'activo' | 'created_at' | 'updated_at' | 'cliente_nombre'>;
+export type CreateProjectDTO = Omit<
+  Project,
+  'id' | 'activo' | 'created_at' | 'updated_at' | 'cliente_nombre'
+>;
 export type UpdateProjectDTO = Partial<CreateProjectDTO>;
 
 // ==================== EQUIPMENT ====================
-export type EquipmentStatus = 'operativo' | 'en_reparacion' | 'fuera_de_servicio' | 'en_mantenimiento';
+export type EquipmentStatus =
+  | 'operativo'
+  | 'en_reparacion'
+  | 'fuera_de_servicio'
+  | 'en_mantenimiento';
 export type EquipmentOwner = 'Pinellas' | 'COCP';
 
 export interface Equipment {
@@ -96,7 +115,10 @@ export interface Equipment {
   updated_at: Date;
 }
 
-export type CreateEquipmentDTO = Omit<Equipment, 'id' | 'activo' | 'created_at' | 'updated_at'>;
+export type CreateEquipmentDTO = Omit<
+  Equipment,
+  'id' | 'activo' | 'created_at' | 'updated_at'
+>;
 export type UpdateEquipmentDTO = Partial<CreateEquipmentDTO>;
 
 // ==================== EXPENSE ====================
@@ -125,10 +147,19 @@ export interface ProjectExpense {
   updated_at: Date;
 }
 
-export type CreateExpenseDTO = Omit<ProjectExpense, 'id' | 'created_at' | 'updated_at'>;
+export type CreateExpenseDTO = Omit<
+  ProjectExpense,
+  'id' | 'created_at' | 'updated_at'
+>;
 
 // ==================== REQUISICION ====================
-export type RequisicionStatus = 'pendiente' | 'en_cotizacion' | 'por_aprobar' | 'aprobada' | 'pagada' | 'rechazada';
+export type RequisicionStatus =
+  | 'pendiente'
+  | 'en_cotizacion'
+  | 'por_aprobar'
+  | 'aprobada'
+  | 'pagada'
+  | 'rechazada';
 
 export interface Requisicion {
   id: number;
@@ -161,7 +192,15 @@ export interface RequisicionItem {
   orden: number;
 }
 
-export type CreateRequisicionDTO = Omit<Requisicion, 'id' | 'archivada' | 'fecha_archivado' | 'archivado_por' | 'created_at' | 'updated_at'>;
+export type CreateRequisicionDTO = Omit<
+  Requisicion,
+  | 'id'
+  | 'archivada'
+  | 'fecha_archivado'
+  | 'archivado_por'
+  | 'created_at'
+  | 'updated_at'
+>;
 
 // ==================== PROJECT MEMBERS ====================
 export type MemberType = 'usuario' | 'externo';
@@ -260,8 +299,19 @@ export interface ProjectLogAttachment {
 }
 
 // ==================== LICITACIONES Y OPORTUNIDADES ====================
-export type LicitacionStatus = 'activa' | 'adjudicada' | 'perdida' | 'cancelada' | 'vencida';
-export type OportunidadStatus = 'identificada' | 'en_seguimiento' | 'propuesta_enviada' | 'ganada' | 'perdida' | 'descartada';
+export type LicitacionStatus =
+  | 'activa'
+  | 'adjudicada'
+  | 'perdida'
+  | 'cancelada'
+  | 'vencida';
+export type OportunidadStatus =
+  | 'identificada'
+  | 'en_seguimiento'
+  | 'propuesta_enviada'
+  | 'ganada'
+  | 'perdida'
+  | 'descartada';
 
 export interface Licitacion {
   id: number;

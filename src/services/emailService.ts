@@ -11,9 +11,15 @@ if (RESEND_API_KEY) {
   console.log('⚠️  Email service not configured (missing RESEND_API_KEY)');
 }
 
-export async function sendEmail(to: string, subject: string, html: string): Promise<void> {
+export async function sendEmail(
+  to: string,
+  subject: string,
+  html: string,
+): Promise<void> {
   if (!resend) {
-    console.log(`📧 Email skipped (no Resend config): to=${to}, subject="${subject}"`);
+    console.log(
+      `📧 Email skipped (no Resend config): to=${to}, subject="${subject}"`,
+    );
     return;
   }
 
@@ -21,6 +27,6 @@ export async function sendEmail(to: string, subject: string, html: string): Prom
     from: 'Pinellas <info@pinellaspanama.com>',
     to,
     subject,
-    html
+    html,
   });
 }
