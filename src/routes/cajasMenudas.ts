@@ -104,6 +104,12 @@ router.get(
     const result = await query<CajaMenudaRow>(
       `SELECT cm.id, cm.proyecto_id, cm.responsable_id, cm.nombre,
               cm.monto_asignado, cm.estado, cm.created_at,
+              cm.comprobante_apertura_r2_key IS NOT NULL AS tiene_comprobante_apertura,
+              EXISTS (
+                SELECT 1 FROM cajas_menudas_historial_monto h
+                WHERE h.caja_menuda_id = cm.id
+                  AND h.comprobante_r2_key IS NULL
+              ) AS historial_sin_comprobante,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
@@ -152,6 +158,12 @@ router.get(
     const result = await query<CajaMenudaRow>(
       `SELECT cm.id, cm.proyecto_id, cm.responsable_id, cm.nombre,
               cm.monto_asignado, cm.estado, cm.created_at,
+              cm.comprobante_apertura_r2_key IS NOT NULL AS tiene_comprobante_apertura,
+              EXISTS (
+                SELECT 1 FROM cajas_menudas_historial_monto h
+                WHERE h.caja_menuda_id = cm.id
+                  AND h.comprobante_r2_key IS NULL
+              ) AS historial_sin_comprobante,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
                 (SELECT SUM(g.monto_total) FROM cajas_menudas_gastos g
@@ -186,6 +198,13 @@ router.get(
               cm.monto_asignado, cm.estado, cm.created_by,
               cm.created_at, cm.updated_at,
               cm.comprobante_cierre_r2_key, cm.comprobante_cierre_nombre,
+              cm.comprobante_apertura_r2_key, cm.comprobante_apertura_nombre,
+              cm.comprobante_apertura_r2_key IS NOT NULL AS tiene_comprobante_apertura,
+              EXISTS (
+                SELECT 1 FROM cajas_menudas_historial_monto h
+                WHERE h.caja_menuda_id = cm.id
+                  AND h.comprobante_r2_key IS NULL
+              ) AS historial_sin_comprobante,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
@@ -240,9 +259,10 @@ router.get(
   }),
 );
 
-// POST / — create caja menuda
+// POST / — create caja menuda (opening comprobante optional)
 router.post(
   '/',
+  upload.single('comprobante_apertura'),
   [
     body('proyecto_id').isInt(),
     body('responsable_id').isInt(),
@@ -266,23 +286,49 @@ router.post(
       [proyecto_id, responsable_id, nombre, monto_asignado, user.id],
     );
 
-    await registrarAudit(user.id, 'crear', 'caja_menuda', result.rows[0].id, {
+    const cajaId = result.rows[0].id;
+
+    // Handle optional opening comprobante
+    if (req.file) {
+      const safeName = sanitizeFilename(req.file.originalname);
+      const r2Key = `cajas-menudas/${cajaId}/comprobante-apertura-${crypto.randomUUID()}_${safeName}`;
+      await uploadFile(r2Key, req.file.buffer, req.file.mimetype);
+      await query(
+        `UPDATE cajas_menudas
+         SET comprobante_apertura_r2_key = $1, comprobante_apertura_nombre = $2
+         WHERE id = $3`,
+        [r2Key, req.file.originalname, cajaId],
+      );
+    }
+
+    await registrarAudit(user.id, 'crear', 'caja_menuda', cajaId, {
       proyecto_id, responsable_id, nombre, monto_asignado,
+      con_comprobante_apertura: !!req.file,
     });
 
-    res.status(201).json({ success: true, data: { id: result.rows[0].id } });
+    res.status(201).json({ success: true, data: { id: cajaId } });
   }),
 );
 
-// PUT /:id — edit (nombre, responsable_id, estado + comprobante if closing)
+// PUT /:id — edit (nombre, responsable_id, estado + optional comprobantes)
+// Accepts two optional file fields: comprobante_cierre (required when closing
+// if the caja has none yet) and comprobante_apertura (always optional, replaces
+// the current one if present).
 router.put(
   '/:id',
   [param('id').isInt()],
-  upload.single('comprobante_cierre'),
+  upload.fields([
+    { name: 'comprobante_cierre', maxCount: 1 },
+    { name: 'comprobante_apertura', maxCount: 1 },
+  ]),
   asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
     const { id } = req.params;
     const { nombre, responsable_id, estado } = req.body;
     const user = req.user!;
+
+    const filesMap = (req.files || {}) as Record<string, Express.Multer.File[]>;
+    const cierreFile = filesMap.comprobante_cierre?.[0];
+    const aperturaFile = filesMap.comprobante_apertura?.[0];
 
     // Validate estado value
     if (estado !== undefined && estado !== 'abierta' && estado !== 'cerrada') {
@@ -303,7 +349,7 @@ router.put(
     }
 
     // Require comprobante when closing
-    if (estado === 'cerrada' && !req.file) {
+    if (estado === 'cerrada' && !cierreFile) {
       // Check if already has comprobante (re-saving without changing estado)
       const existing = await query<{ comprobante_cierre_r2_key: string | null }>(
         'SELECT comprobante_cierre_r2_key FROM cajas_menudas WHERE id = $1',
@@ -319,29 +365,55 @@ router.put(
     const params: unknown[] = [];
     let paramIdx = 1;
 
-    if (nombre !== undefined) {
+    if (nombre !== undefined && nombre !== '') {
       sets.push(`nombre = $${paramIdx++}`);
       params.push(nombre);
     }
-    if (responsable_id !== undefined) {
+    if (responsable_id !== undefined && responsable_id !== '') {
       sets.push(`responsable_id = $${paramIdx++}`);
       params.push(Number(responsable_id));
     }
-    if (estado !== undefined) {
+    if (estado !== undefined && estado !== '') {
       sets.push(`estado = $${paramIdx++}`);
       params.push(estado);
     }
 
-    // Handle comprobante upload
-    if (req.file) {
-      const safeName = sanitizeFilename(req.file.originalname);
+    // Handle closing comprobante upload
+    if (cierreFile) {
+      const safeName = sanitizeFilename(cierreFile.originalname);
       const r2Key = `cajas-menudas/${id}/comprobante-cierre-${crypto.randomUUID()}_${safeName}`;
-      await uploadFile(r2Key, req.file.buffer, req.file.mimetype);
+      await uploadFile(r2Key, cierreFile.buffer, cierreFile.mimetype);
 
       sets.push(`comprobante_cierre_r2_key = $${paramIdx++}`);
       params.push(r2Key);
       sets.push(`comprobante_cierre_nombre = $${paramIdx++}`);
-      params.push(req.file.originalname);
+      params.push(cierreFile.originalname);
+    }
+
+    // Handle opening comprobante upload (replaces existing if any)
+    if (aperturaFile) {
+      // Delete previous opening comprobante from R2 if any
+      const previous = await query<{ comprobante_apertura_r2_key: string | null }>(
+        'SELECT comprobante_apertura_r2_key FROM cajas_menudas WHERE id = $1',
+        [id],
+      );
+      const prevKey = previous.rows[0]?.comprobante_apertura_r2_key;
+      if (prevKey) {
+        try {
+          await deleteFile(prevKey);
+        } catch (err) {
+          console.error('Error deleting previous opening comprobante:', prevKey, err);
+        }
+      }
+
+      const safeName = sanitizeFilename(aperturaFile.originalname);
+      const r2Key = `cajas-menudas/${id}/comprobante-apertura-${crypto.randomUUID()}_${safeName}`;
+      await uploadFile(r2Key, aperturaFile.buffer, aperturaFile.mimetype);
+
+      sets.push(`comprobante_apertura_r2_key = $${paramIdx++}`);
+      params.push(r2Key);
+      sets.push(`comprobante_apertura_nombre = $${paramIdx++}`);
+      params.push(aperturaFile.originalname);
     }
 
     params.push(id);
@@ -358,15 +430,19 @@ router.put(
 
     await registrarAudit(user.id, 'editar', 'caja_menuda', Number(id), {
       nombre, responsable_id, estado,
+      comprobante_apertura_actualizado: !!aperturaFile,
+      comprobante_cierre_actualizado: !!cierreFile,
     });
 
     res.json({ success: true, data: { id: Number(id) } });
   }),
 );
 
-// PUT /:id/monto — change assigned amount with history (transaction)
+// PUT /:id/monto — change assigned amount with history (transaction).
+// Optionally accepts a `comprobante` file that documents the new transfer.
 router.put(
   '/:id/monto',
+  upload.single('comprobante'),
   [
     param('id').isInt(),
     body('monto_asignado').isFloat({ gt: 0 }),
@@ -399,11 +475,37 @@ router.put(
 
       const montoAnterior = current.rows[0].monto_asignado;
 
-      await client.query(
+      // Reject no-op amount changes — no historial row should be created for a
+      // save that did not actually modify the amount.
+      if (Number(montoAnterior) === Number(monto_asignado)) {
+        await client.query('ROLLBACK');
+        res.status(400).json({
+          success: false,
+          error: 'El monto asignado no ha cambiado',
+        });
+        return;
+      }
+
+      const historialResult = await client.query<{ id: number }>(
         `INSERT INTO cajas_menudas_historial_monto (caja_menuda_id, monto_anterior, monto_nuevo, cambiado_por)
-         VALUES ($1, $2, $3, $4)`,
+         VALUES ($1, $2, $3, $4)
+         RETURNING id`,
         [id, montoAnterior, monto_asignado, user.id],
       );
+      const historialId = historialResult.rows[0].id;
+
+      // Upload the optional comprobante and link it to this historial row
+      if (req.file) {
+        const safeName = sanitizeFilename(req.file.originalname);
+        const r2Key = `cajas-menudas/${id}/historial-monto-${historialId}-${crypto.randomUUID()}_${safeName}`;
+        await uploadFile(r2Key, req.file.buffer, req.file.mimetype);
+        await client.query(
+          `UPDATE cajas_menudas_historial_monto
+           SET comprobante_r2_key = $1, comprobante_nombre = $2
+           WHERE id = $3`,
+          [r2Key, req.file.originalname, historialId],
+        );
+      }
 
       await client.query(
         `UPDATE cajas_menudas SET monto_asignado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
@@ -416,9 +518,10 @@ router.put(
         campo: 'monto_asignado',
         monto_anterior: montoAnterior,
         monto_nuevo: monto_asignado,
+        con_comprobante: !!req.file,
       });
 
-      res.json({ success: true, data: { id: Number(id) } });
+      res.json({ success: true, data: { id: Number(id), historial_id: historialId } });
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -697,6 +800,119 @@ router.get(
 );
 
 // GET /:id/adjuntos/:adjuntoId/download — get signed download URL
+// GET /:id/comprobante-apertura/download — signed URL for opening comprobante
+router.get(
+  '/:id/comprobante-apertura/download',
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const { id } = req.params;
+    const result = await query<{ comprobante_apertura_r2_key: string | null; comprobante_apertura_nombre: string | null }>(
+      'SELECT comprobante_apertura_r2_key, comprobante_apertura_nombre FROM cajas_menudas WHERE id = $1',
+      [id],
+    );
+    if (result.rows.length === 0 || !result.rows[0].comprobante_apertura_r2_key) {
+      res.status(404).json({ success: false, error: 'Comprobante de apertura no encontrado' });
+      return;
+    }
+    const url = await getFileSignedUrl(result.rows[0].comprobante_apertura_r2_key);
+    res.json({ success: true, data: { url, nombre: result.rows[0].comprobante_apertura_nombre } });
+  }),
+);
+
+// GET /:id/comprobante-cierre/download — signed URL for closing comprobante (fixes #34)
+router.get(
+  '/:id/comprobante-cierre/download',
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const { id } = req.params;
+    const result = await query<{ comprobante_cierre_r2_key: string | null; comprobante_cierre_nombre: string | null }>(
+      'SELECT comprobante_cierre_r2_key, comprobante_cierre_nombre FROM cajas_menudas WHERE id = $1',
+      [id],
+    );
+    if (result.rows.length === 0 || !result.rows[0].comprobante_cierre_r2_key) {
+      res.status(404).json({ success: false, error: 'Comprobante de cierre no encontrado' });
+      return;
+    }
+    const url = await getFileSignedUrl(result.rows[0].comprobante_cierre_r2_key);
+    res.json({ success: true, data: { url, nombre: result.rows[0].comprobante_cierre_nombre } });
+  }),
+);
+
+// POST /:id/historial-monto/:historialId/comprobante — upload (or replace) a comprobante on an existing historial row
+router.post(
+  '/:id/historial-monto/:historialId/comprobante',
+  upload.single('comprobante'),
+  [param('id').isInt(), param('historialId').isInt()],
+  asyncHandler(async (req: Request<{ id: string; historialId: string }>, res: Response): Promise<void> => {
+    const { id, historialId } = req.params;
+    const user = req.user!;
+
+    if (!req.file) {
+      res.status(400).json({ success: false, error: 'Archivo requerido' });
+      return;
+    }
+
+    const existing = await query<{ comprobante_r2_key: string | null }>(
+      `SELECT comprobante_r2_key FROM cajas_menudas_historial_monto
+       WHERE id = $1 AND caja_menuda_id = $2`,
+      [historialId, id],
+    );
+    if (existing.rows.length === 0) {
+      res.status(404).json({ success: false, error: 'Historial no encontrado' });
+      return;
+    }
+
+    // Delete previous file from R2 if replacing
+    const prevKey = existing.rows[0].comprobante_r2_key;
+    if (prevKey) {
+      try {
+        await deleteFile(prevKey);
+      } catch (err) {
+        console.error('Error deleting previous historial comprobante:', prevKey, err);
+      }
+    }
+
+    const safeName = sanitizeFilename(req.file.originalname);
+    const r2Key = `cajas-menudas/${id}/historial-monto-${historialId}-${crypto.randomUUID()}_${safeName}`;
+    await uploadFile(r2Key, req.file.buffer, req.file.mimetype);
+    await query(
+      `UPDATE cajas_menudas_historial_monto
+       SET comprobante_r2_key = $1, comprobante_nombre = $2
+       WHERE id = $3`,
+      [r2Key, req.file.originalname, historialId],
+    );
+
+    await registrarAudit(user.id, 'editar', 'caja_menuda', Number(id), {
+      accion: 'comprobante_historial_monto',
+      historial_id: Number(historialId),
+      nombre: req.file.originalname,
+    });
+
+    res.json({ success: true, message: 'Comprobante guardado' });
+  }),
+);
+
+// GET /:id/historial-monto/:historialId/comprobante/download — signed URL for a historial_monto comprobante
+router.get(
+  '/:id/historial-monto/:historialId/comprobante/download',
+  [param('id').isInt(), param('historialId').isInt()],
+  asyncHandler(async (req: Request<{ id: string; historialId: string }>, res: Response): Promise<void> => {
+    const { id, historialId } = req.params;
+    const result = await query<{ comprobante_r2_key: string | null; comprobante_nombre: string | null }>(
+      `SELECT comprobante_r2_key, comprobante_nombre
+       FROM cajas_menudas_historial_monto
+       WHERE id = $1 AND caja_menuda_id = $2`,
+      [historialId, id],
+    );
+    if (result.rows.length === 0 || !result.rows[0].comprobante_r2_key) {
+      res.status(404).json({ success: false, error: 'Comprobante no encontrado' });
+      return;
+    }
+    const url = await getFileSignedUrl(result.rows[0].comprobante_r2_key);
+    res.json({ success: true, data: { url, nombre: result.rows[0].comprobante_nombre } });
+  }),
+);
+
 router.get(
   '/:id/adjuntos/:adjuntoId/download',
   [param('id').isInt(), param('adjuntoId').isInt()],
