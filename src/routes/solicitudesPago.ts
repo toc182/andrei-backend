@@ -3,9 +3,18 @@ import { body, param, validationResult } from 'express-validator';
 import multer from 'multer';
 import crypto from 'crypto';
 import { query, pool } from '../database/config.js';
-import { authenticateToken, checkPermission, requireRole } from '../middleware/auth.js';
+import {
+  authenticateToken,
+  checkPermission,
+  requireRole,
+} from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { deleteFile, downloadFile, uploadFile, getFileSignedUrl } from '../services/storage.js';
+import {
+  deleteFile,
+  downloadFile,
+  uploadFile,
+  getFileSignedUrl,
+} from '../services/storage.js';
 import { generateSolicitudPDF } from '../services/pdfGenerator.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { sendEmail } from '../services/emailService.js';
@@ -78,7 +87,11 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
   let pdfComprobante:
     | { fecha_pago: string; registrado_por_nombre: string }
     | undefined;
-  if (sol.estado === 'pagada' || sol.estado === 'facturada' || sol.estado === 'devolucion') {
+  if (
+    sol.estado === 'pagada' ||
+    sol.estado === 'facturada' ||
+    sol.estado === 'devolucion'
+  ) {
     const compResult = await query<{
       fecha_pago: string;
       registrado_por_nombre: string;
@@ -162,16 +175,33 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     [solicitudId],
   );
   const FIELD_LABELS: Record<string, string> = {
-    proveedor: 'Proveedor', fecha: 'Fecha', observaciones: 'Observaciones',
-    beneficiario: 'Beneficiario', banco: 'Banco', tipo_cuenta: 'Tipo de Cuenta',
-    numero_cuenta: 'Número de Cuenta', fecha_pago: 'Fecha de Pago',
-    fecha_factura: 'Fecha de Factura', numero_factura: 'Número de Factura',
-    tipo: 'Tipo', subtotal: 'Subtotal', monto_total: 'Monto Total',
-    precio_unitario: 'Precio Unitario', precio_total: 'Precio Total',
-    cantidad: 'Cantidad', unidad: 'Unidad', descripcion: 'Descripción',
+    proveedor: 'Proveedor',
+    fecha: 'Fecha',
+    observaciones: 'Observaciones',
+    beneficiario: 'Beneficiario',
+    banco: 'Banco',
+    tipo_cuenta: 'Tipo de Cuenta',
+    numero_cuenta: 'Número de Cuenta',
+    fecha_pago: 'Fecha de Pago',
+    fecha_factura: 'Fecha de Factura',
+    numero_factura: 'Número de Factura',
+    tipo: 'Tipo',
+    subtotal: 'Subtotal',
+    monto_total: 'Monto Total',
+    precio_unitario: 'Precio Unitario',
+    precio_total: 'Precio Total',
+    cantidad: 'Cantidad',
+    unidad: 'Unidad',
+    descripcion: 'Descripción',
   };
 
-  const MONEY_FIELDS = ['subtotal', 'monto_total', 'precio_unitario', 'precio_total', 'monto'];
+  const MONEY_FIELDS = [
+    'subtotal',
+    'monto_total',
+    'precio_unitario',
+    'precio_total',
+    'monto',
+  ];
 
   function formatVal(campo: string, val: unknown): string {
     const s = String(val ?? '');
@@ -184,46 +214,74 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function flattenCambio(ch: any): { campo: string; anterior: string; nuevo: string }[] {
+  function flattenCambio(
+    ch: any,
+  ): { campo: string; anterior: string; nuevo: string }[] {
     const label = (f: string) => FIELD_LABELS[f] || f;
     if (ch.campo === 'item' && Array.isArray(ch.cambios)) {
-      return ch.cambios.map((sub: { campo: string; anterior: string; nuevo: string }) => ({
-        campo: `${ch.descripcion || 'Item'} — ${label(sub.campo)}`,
-        anterior: formatVal(sub.campo, sub.anterior),
-        nuevo: formatVal(sub.campo, sub.nuevo),
-      }));
+      return ch.cambios.map(
+        (sub: { campo: string; anterior: string; nuevo: string }) => ({
+          campo: `${ch.descripcion || 'Item'} — ${label(sub.campo)}`,
+          anterior: formatVal(sub.campo, sub.anterior),
+          nuevo: formatVal(sub.campo, sub.nuevo),
+        }),
+      );
     }
     if (ch.campo === 'item_agregado') {
-      return [{ campo: `Item agregado: ${ch.descripcion || ''}`, anterior: '', nuevo: '' }];
+      return [
+        {
+          campo: `Item agregado: ${ch.descripcion || ''}`,
+          anterior: '',
+          nuevo: '',
+        },
+      ];
     }
     if (ch.campo === 'item_eliminado') {
-      return [{ campo: `Item eliminado: ${ch.descripcion || ''}`, anterior: '', nuevo: '' }];
+      return [
+        {
+          campo: `Item eliminado: ${ch.descripcion || ''}`,
+          anterior: '',
+          nuevo: '',
+        },
+      ];
     }
-    return [{
-      campo: label(ch.campo || ''),
-      anterior: formatVal(ch.campo, ch.anterior),
-      nuevo: formatVal(ch.campo, ch.nuevo),
-    }];
+    return [
+      {
+        campo: label(ch.campo || ''),
+        anterior: formatVal(ch.campo, ch.anterior),
+        nuevo: formatVal(ch.campo, ch.nuevo),
+      },
+    ];
   }
 
-  const pdfCorrecciones = correccionesResult.rows.length > 0
-    ? correccionesResult.rows.map((c, i) => {
-        const cambiosObj = typeof c.cambios === 'string' ? JSON.parse(c.cambios) : c.cambios;
-        const cambiosList = Array.isArray(cambiosObj)
-          ? cambiosObj.flatMap(flattenCambio).filter((ch: { campo: string }) => ch.campo)
-          : [];
-        return {
-          version: i + 2,
-          fecha: c.created_at,
-          usuario_nombre: c.usuario_nombre,
-          motivo: c.motivo,
-          cambios: cambiosList,
-        };
-      })
-    : undefined;
+  const pdfCorrecciones =
+    correccionesResult.rows.length > 0
+      ? correccionesResult.rows.map((c, i) => {
+          const cambiosObj =
+            typeof c.cambios === 'string' ? JSON.parse(c.cambios) : c.cambios;
+          const cambiosList = Array.isArray(cambiosObj)
+            ? cambiosObj
+                .flatMap(flattenCambio)
+                .filter((ch: { campo: string }) => ch.campo)
+            : [];
+          return {
+            version: i + 2,
+            fecha: c.created_at,
+            usuario_nombre: c.usuario_nombre,
+            motivo: c.motivo,
+            cambios: cambiosList,
+          };
+        })
+      : undefined;
 
   // Fetch devolucion
-  let pdfDevolucion: { fecha_devolucion: string; motivo: string; registrado_por_nombre: string } | undefined;
+  let pdfDevolucion:
+    | {
+        fecha_devolucion: string;
+        motivo: string;
+        registrado_por_nombre: string;
+      }
+    | undefined;
   if (sol.estado === 'devolucion') {
     const devResult = await query<{
       fecha_devolucion: string;
@@ -351,15 +409,24 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
   // Merge devolucion comprobante if exists
   if (devolucionComp.rows.length > 0) {
     try {
-      const devFile = await downloadFile(devolucionComp.rows[0].comprobante_url);
+      const devFile = await downloadFile(
+        devolucionComp.rows[0].comprobante_url,
+      );
       const devMime = devolucionComp.rows[0].comprobante_url.toLowerCase();
       if (devMime.endsWith('.pdf')) {
         const devPdf = await PDFDocument.load(devFile);
-        const pages = await mergedPdf.copyPages(devPdf, devPdf.getPageIndices());
+        const pages = await mergedPdf.copyPages(
+          devPdf,
+          devPdf.getPageIndices(),
+        );
         for (const page of pages) {
           mergedPdf.addPage(page);
         }
-      } else if (devMime.endsWith('.jpg') || devMime.endsWith('.jpeg') || devMime.endsWith('.png')) {
+      } else if (
+        devMime.endsWith('.jpg') ||
+        devMime.endsWith('.jpeg') ||
+        devMime.endsWith('.png')
+      ) {
         const img = devMime.endsWith('.png')
           ? await mergedPdf.embedPng(devFile)
           : await mergedPdf.embedJpg(devFile);
@@ -414,7 +481,11 @@ interface CambioItemEliminado {
   anterior: Record<string, unknown>;
 }
 
-type Cambio = CambioSimple | CambioItem | CambioItemAgregado | CambioItemEliminado;
+type Cambio =
+  | CambioSimple
+  | CambioItem
+  | CambioItemAgregado
+  | CambioItemEliminado;
 
 // Normalize a date value to YYYY-MM-DD for comparison
 function normalizeDate(val: unknown): string {
@@ -437,7 +508,15 @@ function normalizeNumeric(val: unknown): string {
 }
 
 const DATE_FIELDS = ['fecha', 'fecha_pago', 'fecha_factura'];
-const NUMERIC_FIELDS = ['cantidad', 'precio_unitario', 'precio_total', 'monto', 'porcentaje', 'subtotal', 'monto_total'];
+const NUMERIC_FIELDS = [
+  'cantidad',
+  'precio_unitario',
+  'precio_total',
+  'monto',
+  'porcentaje',
+  'subtotal',
+  'monto_total',
+];
 
 function buildSolicitudDiff(
   oldData: Record<string, unknown>,
@@ -614,11 +693,18 @@ function generateCodigoVerificacion(): string {
 export async function generateNumero(
   projectId: number,
   tipo: 'regular' | 'reembolso' = 'regular',
-  client?: { query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> },
+  client?: {
+    query: (
+      text: string,
+      params?: unknown[],
+    ) => Promise<{ rows: Record<string, unknown>[] }>;
+  },
 ): Promise<string> {
   const q = client
-    ? <T>(text: string, params?: unknown[]) => client.query(text, params) as Promise<{ rows: T[] }>
-    : <T>(text: string, params?: unknown[]) => query<T & import('pg').QueryResultRow>(text, params).then(r => r);
+    ? <T>(text: string, params?: unknown[]) =>
+        client.query(text, params) as Promise<{ rows: T[] }>
+    : <T>(text: string, params?: unknown[]) =>
+        query<T & import('pg').QueryResultRow>(text, params).then((r) => r);
 
   const project = await q<{ sp_prefijo: string | null }>(
     'SELECT sp_prefijo FROM proyectos WHERE id = $1',
@@ -632,11 +718,12 @@ export async function generateNumero(
 
   // Reembolsos: count reembolso rows only, strip the M suffix when reading the number.
   // Regular: count regular rows only.
-  const countSql = tipo === 'reembolso'
-    ? `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
+  const countSql =
+    tipo === 'reembolso'
+      ? `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
        WHERE proyecto_id = $1 AND tipo = 'reembolso'`
-    : `SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total
+      : `SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
        WHERE proyecto_id = $1 AND tipo = 'regular'`;
 
@@ -690,15 +777,13 @@ router.get(
     const params: unknown[] = [];
     const userRol = req.user!.rol;
 
-    if (
-      userRol === 'usuario' &&
-      !req.user!.permissions?.acceso_global
-    ) {
+    if (userRol === 'usuario' && !req.user!.permissions?.acceso_global) {
       params.push(req.user!.id);
       projectFilter = ` AND sp.proyecto_id IN (SELECT proyecto_id FROM user_project_access WHERE user_id = $${params.length})`;
     }
 
-    const result = await query(`
+    const result = await query(
+      `
     SELECT sp.id, sp.numero, sp.proveedor, sp.monto_total, sp.estado, sp.fecha, sp.urgente,
       COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
       CASE WHEN rp.id IS NOT NULL THEN true ELSE false END as reembolso_registrado,
@@ -708,7 +793,9 @@ router.get(
     LEFT JOIN reembolsos_pinellas rp ON rp.solicitud_id = sp.id
     WHERE sp.pinellas_paga = true${projectFilter}
     ORDER BY rp.id IS NOT NULL ASC, sp.created_at DESC
-  `, params);
+  `,
+      params,
+    );
 
     res.json({ success: true, solicitudes: result.rows });
   }),
@@ -813,10 +900,7 @@ router.get(
 
     // Filter by project access for non-admin users without acceso_global
     const userRol = req.user!.rol;
-    if (
-      userRol === 'usuario' &&
-      !req.user!.permissions?.acceso_global
-    ) {
+    if (userRol === 'usuario' && !req.user!.permissions?.acceso_global) {
       paramCount++;
       whereClause += ` AND sp.proyecto_id IN (SELECT proyecto_id FROM user_project_access WHERE user_id = $${paramCount})`;
       params.push(currentUserId);
@@ -1302,18 +1386,25 @@ router.get(
       // Calculate puede_eliminar (mirrors DELETE /:id logic)
       const sol = solicitud.rows[0];
       const isAdmin = req.user?.rol === 'admin';
-      const testProjectId = process.env.TEST_PROJECT_ID ? parseInt(process.env.TEST_PROJECT_ID) : null;
-      const isEstadoProtegido = sol.estado === 'pagada' || sol.estado === 'facturada' || sol.estado === 'devolucion';
+      const testProjectId = process.env.TEST_PROJECT_ID
+        ? parseInt(process.env.TEST_PROJECT_ID)
+        : null;
+      const isEstadoProtegido =
+        sol.estado === 'pagada' ||
+        sol.estado === 'facturada' ||
+        sol.estado === 'devolucion';
       let puede_eliminar = false;
       if (isAdmin) {
         // Admin can delete anything except protected states outside test project
-        puede_eliminar = !isEstadoProtegido || sol.proyecto_id === testProjectId;
+        puede_eliminar =
+          !isEstadoProtegido || sol.proyecto_id === testProjectId;
       } else {
         // Non-admin: only pendiente, own solicitud, no approvals
         puede_eliminar =
           sol.estado === 'pendiente' &&
           aprobaciones.rows.length === 0 &&
-          (sol.preparado_por === req.user?.id || !!req.user?.permissions?.solicitudes_editar_todas);
+          (sol.preparado_por === req.user?.id ||
+            !!req.user?.permissions?.solicitudes_editar_todas);
       }
 
       res.json({
@@ -1850,8 +1941,7 @@ router.patch(
       const sol = existing.rows[0];
       const userId = req.user!.id;
       const userRol = req.user!.rol;
-      const isAdminOrCoAdmin =
-        userRol === 'admin' || userRol === 'co-admin';
+      const isAdminOrCoAdmin = userRol === 'admin' || userRol === 'co-admin';
       const isCreator = sol.preparado_por === userId;
 
       if (!isAdminOrCoAdmin && !isCreator) {
@@ -1988,7 +2078,10 @@ router.post(
     ])(req, res, (err) => {
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
-          res.status(400).json({ success: false, message: 'El archivo excede el limite de 10MB' });
+          res.status(400).json({
+            success: false,
+            message: 'El archivo excede el limite de 10MB',
+          });
           return;
         }
         res.status(400).json({ success: false, message: err.message });
@@ -2005,17 +2098,25 @@ router.post(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;
       const userId = req.user!.id;
-      const { motivo, updated_at, items, ajustes, ...solicitudFields } = req.body;
-      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+      const { motivo, updated_at, items, ajustes, ...solicitudFields } =
+        req.body;
+      const files = req.files as
+        | { [fieldname: string]: Express.Multer.File[] }
+        | undefined;
 
       // Validate motivo
       if (!motivo || !motivo.trim()) {
-        res.status(400).json({ success: false, message: 'El motivo de la corrección es obligatorio' });
+        res.status(400).json({
+          success: false,
+          message: 'El motivo de la corrección es obligatorio',
+        });
         return;
       }
 
       // Load current state
-      const currentResult = await query<SolicitudRow & { nombre_corto: string }>(
+      const currentResult = await query<
+        SolicitudRow & { nombre_corto: string }
+      >(
         `SELECT sp.*, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
          FROM solicitudes_pago sp
          LEFT JOIN proyectos p ON sp.proyecto_id = p.id
@@ -2023,7 +2124,9 @@ router.post(
         [id],
       );
       if (currentResult.rows.length === 0) {
-        res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+        res
+          .status(404)
+          .json({ success: false, message: 'Solicitud no encontrada' });
         return;
       }
 
@@ -2031,29 +2134,49 @@ router.post(
 
       // Validate estado
       if (current.estado !== 'pagada' && current.estado !== 'facturada') {
-        res.status(400).json({ success: false, message: 'Solo se pueden corregir solicitudes pagadas o facturadas' });
+        res.status(400).json({
+          success: false,
+          message: 'Solo se pueden corregir solicitudes pagadas o facturadas',
+        });
         return;
       }
 
       // Optimistic lock check
-      if (updated_at && new Date(current.updated_at).getTime() !== new Date(updated_at).getTime()) {
-        res.status(409).json({ success: false, message: 'La solicitud fue modificada por otro usuario. Recargue e intente de nuevo.' });
+      if (
+        updated_at &&
+        new Date(current.updated_at).getTime() !==
+          new Date(updated_at).getTime()
+      ) {
+        res.status(409).json({
+          success: false,
+          message:
+            'La solicitud fue modificada por otro usuario. Recargue e intente de nuevo.',
+        });
         return;
       }
 
       // Parse items and ajustes from body (sent as JSON strings in multipart)
-      const parsedItems = typeof items === 'string' ? JSON.parse(items) : items || [];
-      const parsedAjustes = typeof ajustes === 'string' ? JSON.parse(ajustes) : ajustes || [];
+      const parsedItems =
+        typeof items === 'string' ? JSON.parse(items) : items || [];
+      const parsedAjustes =
+        typeof ajustes === 'string' ? JSON.parse(ajustes) : ajustes || [];
 
       if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
-        res.status(400).json({ success: false, message: 'Debe incluir al menos un item' });
+        res
+          .status(400)
+          .json({ success: false, message: 'Debe incluir al menos un item' });
         return;
       }
 
       // Build diff for solicitud fields
       const solicitudDiffFields = [
-        'proveedor', 'fecha', 'observaciones', 'beneficiario',
-        'banco', 'tipo_cuenta', 'numero_cuenta',
+        'proveedor',
+        'fecha',
+        'observaciones',
+        'beneficiario',
+        'banco',
+        'tipo_cuenta',
+        'numero_cuenta',
       ];
       const cambios: Cambio[] = buildSolicitudDiff(
         current as unknown as Record<string, unknown>,
@@ -2066,17 +2189,30 @@ router.post(
         'SELECT fecha_pago FROM comprobantes_pago WHERE solicitud_pago_id = $1',
         [id],
       );
-      const currentFactura = await query<{ fecha_factura: string; numero_factura: string; tipo: string }>(
-        'SELECT fecha_factura, numero_factura, COALESCE(tipo, \'factura\') as tipo FROM facturas_solicitud WHERE solicitud_pago_id = $1',
+      const currentFactura = await query<{
+        fecha_factura: string;
+        numero_factura: string;
+        tipo: string;
+      }>(
+        "SELECT fecha_factura, numero_factura, COALESCE(tipo, 'factura') as tipo FROM facturas_solicitud WHERE solicitud_pago_id = $1",
         [id],
       );
 
       // Diff comprobante fields
-      if (solicitudFields.fecha_pago !== undefined && currentComprobante.rows.length > 0) {
-        const oldFechaPago = normalizeDate(currentComprobante.rows[0].fecha_pago);
+      if (
+        solicitudFields.fecha_pago !== undefined &&
+        currentComprobante.rows.length > 0
+      ) {
+        const oldFechaPago = normalizeDate(
+          currentComprobante.rows[0].fecha_pago,
+        );
         const newFechaPago = normalizeDate(solicitudFields.fecha_pago);
         if (oldFechaPago !== newFechaPago) {
-          cambios.push({ campo: 'fecha_pago', anterior: oldFechaPago, nuevo: newFechaPago });
+          cambios.push({
+            campo: 'fecha_pago',
+            anterior: oldFechaPago,
+            nuevo: newFechaPago,
+          });
         }
       }
 
@@ -2088,10 +2224,18 @@ router.post(
             let oldVal: string;
             let newVal: string;
             if (DATE_FIELDS.includes(f)) {
-              oldVal = normalizeDate(currentFactura.rows[0][f as keyof typeof currentFactura.rows[0]]);
+              oldVal = normalizeDate(
+                currentFactura.rows[0][
+                  f as keyof (typeof currentFactura.rows)[0]
+                ],
+              );
               newVal = normalizeDate(solicitudFields[f]);
             } else {
-              oldVal = String(currentFactura.rows[0][f as keyof typeof currentFactura.rows[0]] ?? '');
+              oldVal = String(
+                currentFactura.rows[0][
+                  f as keyof (typeof currentFactura.rows)[0]
+                ] ?? '',
+              );
               newVal = String(solicitudFields[f] ?? '');
             }
             if (oldVal !== newVal) {
@@ -2107,8 +2251,14 @@ router.post(
         [id],
       );
 
-      const currentItemsMap = new Map(currentItems.rows.map((item) => [item.id, item]));
-      const submittedItemIds = new Set(parsedItems.filter((i: { id?: number }) => i.id).map((i: { id: number }) => i.id));
+      const currentItemsMap = new Map(
+        currentItems.rows.map((item) => [item.id, item]),
+      );
+      const submittedItemIds = new Set(
+        parsedItems
+          .filter((i: { id?: number }) => i.id)
+          .map((i: { id: number }) => i.id),
+      );
 
       // Items removed
       for (const oldItem of currentItems.rows) {
@@ -2130,8 +2280,17 @@ router.post(
       for (const newItem of parsedItems) {
         if (newItem.id && currentItemsMap.has(newItem.id)) {
           const oldItem = currentItemsMap.get(newItem.id)!;
-          const itemCambios: { campo: string; anterior: string; nuevo: string }[] = [];
-          const itemFields = ['descripcion', 'cantidad', 'unidad', 'precio_unitario'];
+          const itemCambios: {
+            campo: string;
+            anterior: string;
+            nuevo: string;
+          }[] = [];
+          const itemFields = [
+            'descripcion',
+            'cantidad',
+            'unidad',
+            'precio_unitario',
+          ];
           for (const f of itemFields) {
             let oldVal: string;
             let newVal: string;
@@ -2187,7 +2346,9 @@ router.post(
 
       // Reject if nothing changed
       if (cambios.length === 0) {
-        res.status(400).json({ success: false, message: 'No se detectaron cambios' });
+        res
+          .status(400)
+          .json({ success: false, message: 'No se detectaron cambios' });
         return;
       }
 
@@ -2196,40 +2357,69 @@ router.post(
       const itemsCalculados = parsedItems.map((item: any) => {
         const cantidad = parseFloat(String(item.cantidad)) || 1;
         const precioUnitario = parseFloat(String(item.precio_unitario)) || 0;
-        return { ...item, cantidad, precio_unitario: precioUnitario, precio_total: cantidad * precioUnitario };
+        return {
+          ...item,
+          cantidad,
+          precio_unitario: precioUnitario,
+          precio_total: cantidad * precioUnitario,
+        };
       });
 
       const newSubtotal = itemsCalculados.reduce(
-        (sum: number, item: { precio_total: number }) => sum + item.precio_total,
+        (sum: number, item: { precio_total: number }) =>
+          sum + item.precio_total,
         0,
       );
 
-      const ajustesCalculados = parsedAjustes.map((a: { tipo?: string; monto?: number; porcentaje?: number; [key: string]: unknown }) => ({
-        ...a,
-        monto: parseFloat(String(a.monto)) || 0,
-        porcentaje: a.porcentaje ? parseFloat(String(a.porcentaje)) : null,
-      }));
+      const ajustesCalculados = parsedAjustes.map(
+        (a: {
+          tipo?: string;
+          monto?: number;
+          porcentaje?: number;
+          [key: string]: unknown;
+        }) => ({
+          ...a,
+          monto: parseFloat(String(a.monto)) || 0,
+          porcentaje: a.porcentaje ? parseFloat(String(a.porcentaje)) : null,
+        }),
+      );
 
       const newImpuestos = ajustesCalculados
-        .filter((a: { tipo: string }) => a.tipo === 'impuesto' || a.tipo === 'aumento')
+        .filter(
+          (a: { tipo: string }) =>
+            a.tipo === 'impuesto' || a.tipo === 'aumento',
+        )
         .reduce((sum: number, a: { monto: number }) => sum + a.monto, 0);
 
       const newDescuentos = ajustesCalculados
-        .filter((a: { tipo: string }) => a.tipo === 'descuento' || a.tipo === 'disminucion')
+        .filter(
+          (a: { tipo: string }) =>
+            a.tipo === 'descuento' || a.tipo === 'disminucion',
+        )
         .reduce((sum: number, a: { monto: number }) => sum + a.monto, 0);
 
       const newMontoTotal = newSubtotal + newImpuestos - newDescuentos;
 
       // Check if totals changed and add to diff (round to 2 decimals to avoid float noise)
-      const oldSubtotal = Math.round(parseFloat(String(current.subtotal)) * 100) / 100;
+      const oldSubtotal =
+        Math.round(parseFloat(String(current.subtotal)) * 100) / 100;
       const roundedNewSubtotal = Math.round(newSubtotal * 100) / 100;
-      const oldMontoTotal = Math.round(parseFloat(String(current.monto_total)) * 100) / 100;
+      const oldMontoTotal =
+        Math.round(parseFloat(String(current.monto_total)) * 100) / 100;
       const roundedNewMontoTotal = Math.round(newMontoTotal * 100) / 100;
       if (oldSubtotal !== roundedNewSubtotal) {
-        cambios.push({ campo: 'subtotal', anterior: String(oldSubtotal), nuevo: String(roundedNewSubtotal) });
+        cambios.push({
+          campo: 'subtotal',
+          anterior: String(oldSubtotal),
+          nuevo: String(roundedNewSubtotal),
+        });
       }
       if (oldMontoTotal !== roundedNewMontoTotal) {
-        cambios.push({ campo: 'monto_total', anterior: String(oldMontoTotal), nuevo: String(roundedNewMontoTotal) });
+        cambios.push({
+          campo: 'monto_total',
+          anterior: String(oldMontoTotal),
+          nuevo: String(roundedNewMontoTotal),
+        });
       }
 
       // --- Execute transaction ---
@@ -2272,7 +2462,10 @@ router.post(
         );
 
         // Replace items
-        await client.query('DELETE FROM solicitud_pago_items WHERE solicitud_pago_id = $1', [id]);
+        await client.query(
+          'DELETE FROM solicitud_pago_items WHERE solicitud_pago_id = $1',
+          [id],
+        );
         for (let i = 0; i < itemsCalculados.length; i++) {
           const item = itemsCalculados[i];
           await client.query(
@@ -2292,18 +2485,31 @@ router.post(
         }
 
         // Replace ajustes
-        await client.query('DELETE FROM solicitud_pago_ajustes WHERE solicitud_pago_id = $1', [id]);
+        await client.query(
+          'DELETE FROM solicitud_pago_ajustes WHERE solicitud_pago_id = $1',
+          [id],
+        );
         for (let i = 0; i < ajustesCalculados.length; i++) {
           const ajuste = ajustesCalculados[i];
           await client.query(
             `INSERT INTO solicitud_pago_ajustes (solicitud_pago_id, tipo, descripcion, porcentaje, monto, orden)
              VALUES ($1, $2, $3, $4, $5, $6)`,
-            [id, ajuste.tipo, ajuste.descripcion, ajuste.porcentaje, ajuste.monto, i],
+            [
+              id,
+              ajuste.tipo,
+              ajuste.descripcion,
+              ajuste.porcentaje,
+              ajuste.monto,
+              i,
+            ],
           );
         }
 
         // Update comprobante fields
-        if (solicitudFields.fecha_pago !== undefined && currentComprobante.rows.length > 0) {
+        if (
+          solicitudFields.fecha_pago !== undefined &&
+          currentComprobante.rows.length > 0
+        ) {
           await client.query(
             'UPDATE comprobantes_pago SET fecha_pago = $1 WHERE solicitud_pago_id = $2',
             [solicitudFields.fecha_pago, id],
@@ -2386,11 +2592,17 @@ router.post(
         );
 
         // Audit log
-        await registrarAudit(userId, 'correccion', 'solicitud_pago', parseInt(id), {
-          numero: current.numero,
-          motivo: motivo.trim(),
-          cambios_count: cambios.length,
-        });
+        await registrarAudit(
+          userId,
+          'correccion',
+          'solicitud_pago',
+          parseInt(id),
+          {
+            numero: current.numero,
+            motivo: motivo.trim(),
+            cambios_count: cambios.length,
+          },
+        );
 
         await client.query('COMMIT');
 
@@ -2406,7 +2618,10 @@ router.post(
               await downloadFile(baseKey);
             } catch {
               // No base PDF exists, skip versioning
-              res.json({ success: true, message: 'Corrección guardada exitosamente' });
+              res.json({
+                success: true,
+                message: 'Corrección guardada exitosamente',
+              });
               return;
             }
 
@@ -2437,7 +2652,10 @@ router.post(
           }
         }
 
-        res.json({ success: true, message: 'Corrección guardada exitosamente' });
+        res.json({
+          success: true,
+          message: 'Corrección guardada exitosamente',
+        });
       } catch (err) {
         await client.query('ROLLBACK');
         console.error('Error en corrección de solicitud:', err);
@@ -2497,7 +2715,9 @@ router.post(
       }
 
       // Verificar que la solicitud existe y está aprobada
-      const solicitud = await query<SolicitudRow & { nombre_corto: string; tipo: 'regular' | 'reembolso' }>(
+      const solicitud = await query<
+        SolicitudRow & { nombre_corto: string; tipo: 'regular' | 'reembolso' }
+      >(
         `SELECT sp.id, sp.numero, sp.estado, sp.tipo, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
          FROM solicitudes_pago sp
          LEFT JOIN proyectos p ON sp.proyecto_id = p.id
@@ -2589,7 +2809,9 @@ router.post(
 
       res.json({
         success: true,
-        message: isReembolso ? 'Reembolso registrado exitosamente' : 'Pago registrado exitosamente',
+        message: isReembolso
+          ? 'Reembolso registrado exitosamente'
+          : 'Pago registrado exitosamente',
         estado: targetEstado,
         tipo: solicitud.rows[0].tipo,
       });
@@ -3491,7 +3713,9 @@ router.delete(
       const isAdmin = req.user?.rol === 'admin';
       const isCoAdmin = req.user?.rol === 'co-admin';
 
-      const existing = await query<SolicitudRow & { preparado_por: number; proyecto_id: number }>(
+      const existing = await query<
+        SolicitudRow & { preparado_por: number; proyecto_id: number }
+      >(
         'SELECT id, numero, estado, preparado_por, proyecto_id FROM solicitudes_pago WHERE id = $1',
         [id],
       );
@@ -3509,7 +3733,9 @@ router.delete(
       const sol = existing.rows[0];
       if (
         isAdmin &&
-        (sol.estado === 'pagada' || sol.estado === 'facturada' || sol.estado === 'devolucion') &&
+        (sol.estado === 'pagada' ||
+          sol.estado === 'facturada' ||
+          sol.estado === 'devolucion') &&
         sol.proyecto_id !== testProjectId
       ) {
         res.status(400).json({
@@ -3557,9 +3783,10 @@ router.delete(
       }
 
       // Limpiar tablas relacionadas que no tengan ON DELETE CASCADE
-      await query('DELETE FROM devoluciones_solicitud WHERE solicitud_id = $1', [
-        id,
-      ]);
+      await query(
+        'DELETE FROM devoluciones_solicitud WHERE solicitud_id = $1',
+        [id],
+      );
       await query('DELETE FROM reembolsos_pinellas WHERE solicitud_id = $1', [
         id,
       ]);

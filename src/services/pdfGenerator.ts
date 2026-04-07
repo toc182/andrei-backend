@@ -135,7 +135,9 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
   let qrBuffer: Buffer | null = null;
   let verifyUrl = '';
   const esPagadaOFacturada =
-    data.estado === 'pagada' || data.estado === 'facturada' || data.estado === 'devolucion';
+    data.estado === 'pagada' ||
+    data.estado === 'facturada' ||
+    data.estado === 'devolucion';
   if (
     data.codigo_verificacion &&
     (esPagadaOFacturada ||
@@ -575,7 +577,12 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
         // Separator between corrections
         if (ci > 0) {
-          doc.moveTo(tableX + 8, corrY - 2).lineTo(tableX + pageWidth - 8, corrY - 2).strokeColor('#fde68a').lineWidth(0.5).stroke();
+          doc
+            .moveTo(tableX + 8, corrY - 2)
+            .lineTo(tableX + pageWidth - 8, corrY - 2)
+            .strokeColor('#fde68a')
+            .lineWidth(0.5)
+            .stroke();
           corrY += 2;
         }
 
@@ -585,10 +592,10 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
           lineBreak: false,
         });
         doc.font('Helvetica').fontSize(7.5).fillColor('#78350f');
-        doc.text(
-          ` — ${formatDate(corr.fecha)} por ${corr.usuario_nombre} — `,
-          { continued: true, lineBreak: false },
-        );
+        doc.text(` — ${formatDate(corr.fecha)} por ${corr.usuario_nombre} — `, {
+          continued: true,
+          lineBreak: false,
+        });
         doc.font('Helvetica').fontSize(7.5).fillColor('#6b7280');
         doc.text(`Motivo: ${corr.motivo}`, { lineBreak: false });
         corrY += 14;
@@ -596,15 +603,14 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
         // Cambios list with bullet points
         for (const cambio of corr.cambios) {
           doc.font('Helvetica').fontSize(7).fillColor('#92400e');
-          const cambioText = cambio.anterior || cambio.nuevo
-            ? `- ${cambio.campo}: ${cambio.anterior} >> ${cambio.nuevo}`
-            : `- ${cambio.campo}`;
-          doc.text(
-            cambioText,
-            tableX + 20,
-            corrY,
-            { width: pageWidth - 36, lineBreak: false },
-          );
+          const cambioText =
+            cambio.anterior || cambio.nuevo
+              ? `- ${cambio.campo}: ${cambio.anterior} >> ${cambio.nuevo}`
+              : `- ${cambio.campo}`;
+          doc.text(cambioText, tableX + 20, corrY, {
+            width: pageWidth - 36,
+            lineBreak: false,
+          });
           corrY += 11;
         }
         corrY += 4;
