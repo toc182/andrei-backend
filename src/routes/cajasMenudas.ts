@@ -119,7 +119,12 @@ router.get(
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
                 (SELECT SUM(g.monto_total) FROM cajas_menudas_gastos g
-                 WHERE g.caja_menuda_id = cm.id AND g.solicitud_reembolso_id IS NULL), 0
+                 WHERE g.caja_menuda_id = cm.id
+                   AND NOT EXISTS (
+                     SELECT 1 FROM solicitudes_pago sp
+                     WHERE sp.id = g.solicitud_reembolso_id
+                       AND sp.estado = 'reembolsada'
+                   )), 0
               ) AS saldo
        FROM cajas_menudas cm
        JOIN proyectos p ON p.id = cm.proyecto_id
@@ -183,7 +188,12 @@ router.get(
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
                 (SELECT SUM(g.monto_total) FROM cajas_menudas_gastos g
-                 WHERE g.caja_menuda_id = cm.id AND g.solicitud_reembolso_id IS NULL), 0
+                 WHERE g.caja_menuda_id = cm.id
+                   AND NOT EXISTS (
+                     SELECT 1 FROM solicitudes_pago sp
+                     WHERE sp.id = g.solicitud_reembolso_id
+                       AND sp.estado = 'reembolsada'
+                   )), 0
               ) AS saldo
        FROM cajas_menudas cm
        JOIN users u ON u.id = cm.responsable_id
@@ -231,11 +241,21 @@ router.get(
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
                 (SELECT SUM(g.monto_total) FROM cajas_menudas_gastos g
-                 WHERE g.caja_menuda_id = cm.id AND g.solicitud_reembolso_id IS NULL), 0
+                 WHERE g.caja_menuda_id = cm.id
+                   AND NOT EXISTS (
+                     SELECT 1 FROM solicitudes_pago sp
+                     WHERE sp.id = g.solicitud_reembolso_id
+                       AND sp.estado = 'reembolsada'
+                   )), 0
               ) AS saldo,
               COALESCE(
                 (SELECT SUM(g.monto_total) FROM cajas_menudas_gastos g
-                 WHERE g.caja_menuda_id = cm.id AND g.solicitud_reembolso_id IS NULL), 0
+                 WHERE g.caja_menuda_id = cm.id
+                   AND NOT EXISTS (
+                     SELECT 1 FROM solicitudes_pago sp
+                     WHERE sp.id = g.solicitud_reembolso_id
+                       AND sp.estado = 'reembolsada'
+                   )), 0
               ) AS total_gastado
        FROM cajas_menudas cm
        JOIN proyectos p ON p.id = cm.proyecto_id
@@ -381,7 +401,13 @@ router.put(
       // Reject closing if there are pending gastos
       if (estado === 'cerrada') {
         const pendingGastos = await query<{ count: string }>(
-          'SELECT COUNT(*)::text as count FROM cajas_menudas_gastos WHERE caja_menuda_id = $1 AND solicitud_reembolso_id IS NULL',
+          `SELECT COUNT(*)::text as count FROM cajas_menudas_gastos g
+           WHERE g.caja_menuda_id = $1
+             AND NOT EXISTS (
+               SELECT 1 FROM solicitudes_pago sp
+               WHERE sp.id = g.solicitud_reembolso_id
+                 AND sp.estado = 'reembolsada'
+             )`,
           [id],
         );
         if (Number(pendingGastos.rows[0].count) > 0) {
