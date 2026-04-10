@@ -3701,6 +3701,29 @@ router.get(
   ),
 );
 
+// --- GET /:id/reembolso/comprobante — Download reembolso comprobante ---
+router.get(
+  '/:id/reembolso/comprobante',
+  [param('id').isInt()],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const { id } = req.params;
+      const result = await query<{ comprobante_url: string }>(
+        'SELECT comprobante_url FROM reembolsos_pinellas WHERE solicitud_id = $1',
+        [id],
+      );
+      if (result.rows.length === 0) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Reembolso no encontrado' });
+        return;
+      }
+      const url = await getFileSignedUrl(result.rows[0].comprobante_url);
+      res.json({ success: true, url });
+    },
+  ),
+);
+
 // --- DELETE /:id — Eliminar solicitud ---
 // Admin: puede eliminar cualquier solicitud sin importar estado
 // Usuario normal: solo puede eliminar solicitudes pendientes propias (o con permiso solicitudes_editar_todas)
