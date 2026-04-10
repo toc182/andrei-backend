@@ -3834,6 +3834,16 @@ router.delete(
         [id],
       );
 
+      // Unlink caja menuda gastos and adjuntos so they return to current expenses
+      await query(
+        'UPDATE cajas_menudas_gastos SET solicitud_reembolso_id = NULL WHERE solicitud_reembolso_id = $1',
+        [id],
+      );
+      await query(
+        'UPDATE cajas_menudas_adjuntos SET solicitud_reembolso_id = NULL WHERE solicitud_reembolso_id = $1',
+        [id],
+      );
+
       const { numero, estado } = existing.rows[0];
       await query('DELETE FROM solicitudes_pago WHERE id = $1', [id]);
       await registrarAudit(
