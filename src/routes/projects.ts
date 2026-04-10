@@ -256,34 +256,7 @@ router.get(
         return;
       }
 
-      const proyecto = result.rows[0] as ProjectRow & {
-        usuarios_asignados: Array<{
-          id: number;
-          nombre: string;
-          email: string;
-          rol_proyecto: string;
-        }>;
-      };
-
-      // Try-catch interno preservado - tabla puede no existir en algunas instalaciones
-      try {
-        const usuariosResult = await query<{
-          id: number;
-          nombre: string;
-          email: string;
-          rol_proyecto: string;
-        }>(
-          `
-      SELECT u.id, u.nombre, u.email, pu.rol_proyecto
-      FROM proyecto_usuarios pu JOIN users u ON pu.user_id = u.id
-      WHERE pu.proyecto_id = $1
-    `,
-          [id],
-        );
-        proyecto.usuarios_asignados = usuariosResult.rows;
-      } catch {
-        proyecto.usuarios_asignados = [];
-      }
+      const proyecto = result.rows[0];
 
       res.json({ success: true, proyecto });
     },
