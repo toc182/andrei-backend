@@ -35,6 +35,10 @@ interface CajaMenudaRow {
   responsable_nombre?: string;
   saldo?: string;
   total_gastado?: string;
+  solicitud_apertura_id?: number | null;
+  solicitud_apertura_estado?: string | null;
+  solicitud_apertura_numero?: string | null;
+  historial_pendiente_transferencia?: boolean;
 }
 
 interface GastoRow {
@@ -110,11 +114,23 @@ router.get(
       `SELECT cm.id, cm.proyecto_id, cm.responsable_id, cm.nombre,
               cm.monto_asignado, cm.estado, cm.created_at,
               cm.comprobante_apertura_r2_key IS NOT NULL AS tiene_comprobante_apertura,
+              cm.solicitud_apertura_id,
+              sa.estado AS solicitud_apertura_estado,
+              sa.numero AS solicitud_apertura_numero,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
                 WHERE h.caja_menuda_id = cm.id
                   AND h.comprobante_r2_key IS NULL
+                  AND h.solicitud_id IS NULL
+                  AND h.monto_nuevo < h.monto_anterior
               ) AS historial_sin_comprobante,
+              EXISTS (
+                SELECT 1 FROM cajas_menudas_historial_monto h
+                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id
+                WHERE h.caja_menuda_id = cm.id
+                  AND h.solicitud_id IS NOT NULL
+                  AND sp.estado != 'transferida'
+              ) AS historial_pendiente_transferencia,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
@@ -129,6 +145,7 @@ router.get(
        FROM cajas_menudas cm
        JOIN proyectos p ON p.id = cm.proyecto_id
        JOIN users u ON u.id = cm.responsable_id
+       LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id
        ${whereClause}
        ORDER BY cm.created_at DESC`,
       params,
@@ -180,11 +197,23 @@ router.get(
         `SELECT cm.id, cm.proyecto_id, cm.responsable_id, cm.nombre,
               cm.monto_asignado, cm.estado, cm.created_at,
               cm.comprobante_apertura_r2_key IS NOT NULL AS tiene_comprobante_apertura,
+              cm.solicitud_apertura_id,
+              sa.estado AS solicitud_apertura_estado,
+              sa.numero AS solicitud_apertura_numero,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
                 WHERE h.caja_menuda_id = cm.id
                   AND h.comprobante_r2_key IS NULL
+                  AND h.solicitud_id IS NULL
+                  AND h.monto_nuevo < h.monto_anterior
               ) AS historial_sin_comprobante,
+              EXISTS (
+                SELECT 1 FROM cajas_menudas_historial_monto h
+                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id
+                WHERE h.caja_menuda_id = cm.id
+                  AND h.solicitud_id IS NOT NULL
+                  AND sp.estado != 'transferida'
+              ) AS historial_pendiente_transferencia,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
                 (SELECT SUM(g.monto_total) FROM cajas_menudas_gastos g
@@ -197,6 +226,7 @@ router.get(
               ) AS saldo
        FROM cajas_menudas cm
        JOIN users u ON u.id = cm.responsable_id
+       LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id
        WHERE cm.proyecto_id = $1
        ORDER BY cm.created_at DESC`,
         [proyectoId],
@@ -232,11 +262,23 @@ router.get(
               cm.comprobante_cierre_r2_key, cm.comprobante_cierre_nombre,
               cm.comprobante_apertura_r2_key, cm.comprobante_apertura_nombre,
               cm.comprobante_apertura_r2_key IS NOT NULL AS tiene_comprobante_apertura,
+              cm.solicitud_apertura_id,
+              sa.estado AS solicitud_apertura_estado,
+              sa.numero AS solicitud_apertura_numero,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
                 WHERE h.caja_menuda_id = cm.id
                   AND h.comprobante_r2_key IS NULL
+                  AND h.solicitud_id IS NULL
+                  AND h.monto_nuevo < h.monto_anterior
               ) AS historial_sin_comprobante,
+              EXISTS (
+                SELECT 1 FROM cajas_menudas_historial_monto h
+                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id
+                WHERE h.caja_menuda_id = cm.id
+                  AND h.solicitud_id IS NOT NULL
+                  AND sp.estado != 'transferida'
+              ) AS historial_pendiente_transferencia,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
@@ -260,6 +302,7 @@ router.get(
        FROM cajas_menudas cm
        JOIN proyectos p ON p.id = cm.proyecto_id
        JOIN users u ON u.id = cm.responsable_id
+       LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id
        WHERE cm.id = $1`,
         [id],
       );
@@ -272,9 +315,11 @@ router.get(
       }
 
       const historial = await query(
-        `SELECT h.*, u.nombre AS cambiado_por_nombre
+        `SELECT h.*, u.nombre AS cambiado_por_nombre,
+               sp.id AS solicitud_id, sp.numero AS solicitud_numero, sp.estado AS solicitud_estado
        FROM cajas_menudas_historial_monto h
        JOIN users u ON u.id = h.cambiado_por
+       LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id
        WHERE h.caja_menuda_id = $1
        ORDER BY h.created_at DESC`,
         [id],
