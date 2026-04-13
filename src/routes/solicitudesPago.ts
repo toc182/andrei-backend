@@ -692,7 +692,7 @@ function generateCodigoVerificacion(): string {
  */
 export async function generateNumero(
   projectId: number,
-  tipo: 'regular' | 'reembolso' = 'regular',
+  tipo: 'regular' | 'reembolso' | 'apertura' = 'regular',
   client?: {
     query: (
       text: string,
@@ -717,23 +717,30 @@ export async function generateNumero(
   if (!prefijo) throw new Error('PREFIJO_NO_CONFIGURADO');
 
   // Reembolsos: count reembolso rows only, strip the M suffix when reading the number.
+  // Apertura: count apertura rows only, strip the A suffix when reading the number.
   // Regular: count regular rows only.
-  const countSql =
-    tipo === 'reembolso'
-      ? `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
+  let countSql: string;
+  if (tipo === 'reembolso') {
+    countSql = `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
-       WHERE proyecto_id = $1 AND tipo = 'reembolso'`
-      : `SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total
+       WHERE proyecto_id = $1 AND tipo = 'reembolso'`;
+  } else if (tipo === 'apertura') {
+    countSql = `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
+       FROM solicitudes_pago
+       WHERE proyecto_id = $1 AND tipo = 'apertura'`;
+  } else {
+    countSql = `SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
        WHERE proyecto_id = $1 AND tipo = 'regular'`;
+  }
 
   const count = await q<{ total: string }>(countSql, [projectId]);
   const nextNum = parseInt(count.rows[0].total) + 1;
   const padded = String(nextNum).padStart(3, '0');
 
-  return tipo === 'reembolso'
-    ? `${prefijo}-${padded}M`
-    : `${prefijo}-${padded}`;
+  if (tipo === 'reembolso') return `${prefijo}-${padded}M`;
+  if (tipo === 'apertura') return `${prefijo}-${padded}A`;
+  return `${prefijo}-${padded}`;
 }
 
 // --- GET /pending-approval-count — Contar solicitudes pendientes de aprobación del usuario actual ---
@@ -2716,7 +2723,7 @@ router.post(
 
       // Verificar que la solicitud existe y está aprobada
       const solicitud = await query<
-        SolicitudRow & { nombre_corto: string; tipo: 'regular' | 'reembolso' }
+        SolicitudRow & { nombre_corto: string; tipo: 'regular' | 'reembolso' | 'apertura' }
       >(
         `SELECT sp.id, sp.numero, sp.estado, sp.tipo, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
          FROM solicitudes_pago sp
@@ -2738,9 +2745,13 @@ router.post(
         return;
       }
 
-      const isReembolso = solicitud.rows[0].tipo === 'reembolso';
-      const targetEstado = isReembolso ? 'reembolsada' : 'pagada';
-      const actionLabel = isReembolso ? 'reembolso' : 'pago';
+      const tipoSol = solicitud.rows[0].tipo;
+      const targetEstado = tipoSol === 'reembolso' ? 'reembolsada'
+        : tipoSol === 'apertura' ? 'transferida'
+        : 'pagada';
+      const actionLabel = tipoSol === 'reembolso' ? 'reembolso'
+        : tipoSol === 'apertura' ? 'transferencia'
+        : 'pago';
 
       // Crear comprobante
       await query(
@@ -2797,7 +2808,9 @@ router.post(
 
       await registrarAudit(
         userId,
-        isReembolso ? 'registrar_reembolso' : 'registrar_pago',
+        tipoSol === 'reembolso' ? 'registrar_reembolso'
+          : tipoSol === 'apertura' ? 'registrar_transferencia'
+          : 'registrar_pago',
         'solicitud_pago',
         parseInt(id),
         {
@@ -2809,11 +2822,11 @@ router.post(
 
       res.json({
         success: true,
-        message: isReembolso
-          ? 'Reembolso registrado exitosamente'
+        message: tipoSol === 'reembolso' ? 'Reembolso registrado exitosamente'
+          : tipoSol === 'apertura' ? 'Transferencia registrada exitosamente'
           : 'Pago registrado exitosamente',
         estado: targetEstado,
-        tipo: solicitud.rows[0].tipo,
+        tipo: tipoSol,
       });
     },
   ),
