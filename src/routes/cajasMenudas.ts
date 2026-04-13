@@ -643,29 +643,112 @@ router.put(
           return;
         }
 
+        const isIncrease = Number(monto_asignado) > Number(montoAnterior);
+        const difference = Number(monto_asignado) - Number(montoAnterior);
+
         const historialResult = await client.query<{ id: number }>(
           `INSERT INTO cajas_menudas_historial_monto (caja_menuda_id, monto_anterior, monto_nuevo, cambiado_por)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id`,
+           VALUES ($1, $2, $3, $4)
+           RETURNING id`,
           [id, montoAnterior, monto_asignado, user.id],
         );
         const historialId = historialResult.rows[0].id;
 
-        // Upload the optional comprobante and link it to this historial row
-        if (req.file) {
-          const safeName = sanitizeFilename(req.file.originalname);
-          const r2Key = `cajas-menudas/${id}/historial-monto-${historialId}-${crypto.randomUUID()}_${safeName}`;
-          await uploadFile(r2Key, req.file.buffer, req.file.mimetype);
-          await client.query(
-            `UPDATE cajas_menudas_historial_monto
-           SET comprobante_r2_key = $1, comprobante_nombre = $2
-           WHERE id = $3`,
-            [r2Key, req.file.originalname, historialId],
+        let solicitudId: number | null = null;
+        let solicitudNumero: string | null = null;
+
+        if (isIncrease) {
+          // For increases: create apertura solicitud for the difference
+          const cajaResult = await client.query<{
+            proyecto_id: number;
+            nombre: string;
+            responsable_id: number;
+          }>(
+            'SELECT proyecto_id, nombre, responsable_id FROM cajas_menudas WHERE id = $1',
+            [id],
           );
+          const caja = cajaResult.rows[0];
+
+          const responsableResult = await client.query<{ nombre: string }>(
+            'SELECT nombre FROM users WHERE id = $1',
+            [caja.responsable_id],
+          );
+          const beneficiarioNombre = responsableResult.rows[0]?.nombre || '';
+
+          let numero: string;
+          try {
+            numero = await generateNumero(caja.proyecto_id, 'apertura', client);
+          } catch (err) {
+            await client.query('ROLLBACK');
+            if ((err as Error).message === 'PREFIJO_NO_CONFIGURADO') {
+              res.status(400).json({
+                success: false,
+                error: 'El proyecto no tiene prefijo de solicitud configurado',
+              });
+              return;
+            }
+            throw err;
+          }
+
+          const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+          const bytes = crypto.randomBytes(8);
+          let codigoVerificacion = '';
+          for (let i = 0; i < 8; i++) {
+            codigoVerificacion += chars[bytes[i] % chars.length];
+          }
+
+          const formatMonto = (v: number) => `B/. ${v.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+          const concepto = `Aumento de Caja Menuda — ${caja.nombre} (${formatMonto(Number(montoAnterior))} → ${formatMonto(Number(monto_asignado))})`;
+
+          const solicitudResult = await client.query<{ id: number }>(
+            `INSERT INTO solicitudes_pago (
+              proyecto_id, numero, fecha, proveedor, preparado_por,
+              subtotal, descuentos, impuestos, monto_total,
+              estado, observaciones, beneficiario, codigo_verificacion, tipo
+            ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 0, 0, $5, 'pendiente', $6, $7, $8, 'apertura')
+            RETURNING id`,
+            [
+              caja.proyecto_id,
+              numero,
+              beneficiarioNombre,
+              user.id,
+              difference,
+              concepto,
+              beneficiarioNombre,
+              codigoVerificacion,
+            ],
+          );
+          solicitudId = solicitudResult.rows[0].id;
+          solicitudNumero = numero;
+
+          await client.query(
+            `INSERT INTO solicitud_pago_items (solicitud_pago_id, descripcion, cantidad, precio_unitario, precio_total, orden)
+             VALUES ($1, $2, 1, $3, $3, 0)`,
+            [solicitudId, concepto, difference],
+          );
+
+          // Link solicitud to historial entry
+          await client.query(
+            'UPDATE cajas_menudas_historial_monto SET solicitud_id = $1 WHERE id = $2',
+            [solicitudId, historialId],
+          );
+        } else {
+          // For decreases: optional comprobante upload (same as before)
+          if (req.file) {
+            const safeName = sanitizeFilename(req.file.originalname);
+            const r2Key = `cajas-menudas/${id}/historial-monto-${historialId}-${crypto.randomUUID()}_${safeName}`;
+            await uploadFile(r2Key, req.file.buffer, req.file.mimetype);
+            await client.query(
+              `UPDATE cajas_menudas_historial_monto
+               SET comprobante_r2_key = $1, comprobante_nombre = $2
+               WHERE id = $3`,
+              [r2Key, req.file.originalname, historialId],
+            );
+          }
         }
 
         await client.query(
-          `UPDATE cajas_menudas SET monto_asignado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          'UPDATE cajas_menudas SET monto_asignado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
           [monto_asignado, id],
         );
 
@@ -675,12 +758,20 @@ router.put(
           campo: 'monto_asignado',
           monto_anterior: montoAnterior,
           monto_nuevo: monto_asignado,
-          con_comprobante: !!req.file,
+          es_aumento: isIncrease,
+          solicitud_apertura_id: solicitudId,
+          solicitud_numero: solicitudNumero,
+          con_comprobante: !isIncrease && !!req.file,
         });
 
         res.json({
           success: true,
-          data: { id: Number(id), historial_id: historialId },
+          data: {
+            id: Number(id),
+            historial_id: historialId,
+            solicitud_id: solicitudId,
+            solicitud_numero: solicitudNumero,
+          },
         });
       } catch (err) {
         await client.query('ROLLBACK');
