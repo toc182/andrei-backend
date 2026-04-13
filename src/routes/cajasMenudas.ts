@@ -304,10 +304,9 @@ router.get(
   ),
 );
 
-// POST / — create caja menuda (opening comprobante optional)
+// POST / — create caja menuda (auto-creates apertura solicitud)
 router.post(
   '/',
-  upload.single('comprobante_apertura'),
   [
     body('proyecto_id').isInt(),
     body('responsable_id').isInt(),
@@ -328,37 +327,103 @@ router.post(
     const { proyecto_id, responsable_id, nombre, monto_asignado } = req.body;
     const user = req.user!;
 
-    const result = await query<{ id: number }>(
-      `INSERT INTO cajas_menudas (proyecto_id, responsable_id, nombre, monto_asignado, created_by)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      [proyecto_id, responsable_id, nombre, monto_asignado, user.id],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-    const cajaId = result.rows[0].id;
-
-    // Handle optional opening comprobante
-    if (req.file) {
-      const safeName = sanitizeFilename(req.file.originalname);
-      const r2Key = `cajas-menudas/${cajaId}/comprobante-apertura-${crypto.randomUUID()}_${safeName}`;
-      await uploadFile(r2Key, req.file.buffer, req.file.mimetype);
-      await query(
-        `UPDATE cajas_menudas
-         SET comprobante_apertura_r2_key = $1, comprobante_apertura_nombre = $2
-         WHERE id = $3`,
-        [r2Key, req.file.originalname, cajaId],
+      // 1. Create caja menuda
+      const result = await client.query<{ id: number }>(
+        `INSERT INTO cajas_menudas (proyecto_id, responsable_id, nombre, monto_asignado, created_by)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id`,
+        [proyecto_id, responsable_id, nombre, monto_asignado, user.id],
       );
+      const cajaId = result.rows[0].id;
+
+      // 2. Get responsable name for beneficiario
+      const responsableResult = await client.query<{ nombre: string }>(
+        'SELECT nombre FROM users WHERE id = $1',
+        [responsable_id],
+      );
+      const beneficiarioNombre = responsableResult.rows[0]?.nombre || '';
+
+      // 3. Generate apertura solicitud numero
+      let numero: string;
+      try {
+        numero = await generateNumero(proyecto_id, 'apertura', client);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        if ((err as Error).message === 'PREFIJO_NO_CONFIGURADO') {
+          res.status(400).json({
+            success: false,
+            error: 'El proyecto no tiene prefijo de solicitud configurado. Configure el prefijo antes de crear una caja menuda.',
+          });
+          return;
+        }
+        throw err;
+      }
+
+      // 4. Generate verification code
+      const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+      const bytes = crypto.randomBytes(8);
+      let codigoVerificacion = '';
+      for (let i = 0; i < 8; i++) {
+        codigoVerificacion += chars[bytes[i] % chars.length];
+      }
+
+      // 5. Create apertura solicitud
+      const concepto = `Apertura de Caja Menuda — ${nombre}`;
+      const solicitudResult = await client.query<{ id: number }>(
+        `INSERT INTO solicitudes_pago (
+          proyecto_id, numero, fecha, proveedor, preparado_por,
+          subtotal, descuentos, impuestos, monto_total,
+          estado, observaciones, beneficiario, codigo_verificacion, tipo
+        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 0, 0, $5, 'pendiente', $6, $7, $8, 'apertura')
+        RETURNING id`,
+        [
+          proyecto_id,
+          numero,
+          beneficiarioNombre,
+          user.id,
+          monto_asignado,
+          concepto,
+          beneficiarioNombre,
+          codigoVerificacion,
+        ],
+      );
+      const solicitudId = solicitudResult.rows[0].id;
+
+      // 6. Create single item for the solicitud
+      await client.query(
+        `INSERT INTO solicitud_pago_items (solicitud_pago_id, descripcion, cantidad, precio_unitario, precio_total, orden)
+         VALUES ($1, $2, 1, $3, $3, 0)`,
+        [solicitudId, concepto, monto_asignado],
+      );
+
+      // 7. Link solicitud to caja
+      await client.query(
+        'UPDATE cajas_menudas SET solicitud_apertura_id = $1 WHERE id = $2',
+        [solicitudId, cajaId],
+      );
+
+      await client.query('COMMIT');
+
+      await registrarAudit(user.id, 'crear', 'caja_menuda', cajaId, {
+        proyecto_id,
+        responsable_id,
+        nombre,
+        monto_asignado,
+        solicitud_apertura_id: solicitudId,
+        solicitud_numero: numero,
+      });
+
+      res.status(201).json({ success: true, data: { id: cajaId, solicitud_apertura_id: solicitudId } });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
-
-    await registrarAudit(user.id, 'crear', 'caja_menuda', cajaId, {
-      proyecto_id,
-      responsable_id,
-      nombre,
-      monto_asignado,
-      con_comprobante_apertura: !!req.file,
-    });
-
-    res.status(201).json({ success: true, data: { id: cajaId } });
   }),
 );
 
