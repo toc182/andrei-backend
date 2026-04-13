@@ -530,9 +530,36 @@ router.put(
         }
       }
 
-      // Require comprobante when closing
-      if (estado === 'cerrada' && !cierreFile) {
-        // Check if already has comprobante (re-saving without changing estado)
+      // Calculate saldo for zero-balance auto-PDF
+      let saldoCierre: number | null = null;
+      if (estado === 'cerrada') {
+        const cajaInfo = await query<{
+          monto_asignado: string;
+          nombre: string;
+          responsable_id: number;
+          proyecto_id: number;
+        }>(
+          'SELECT monto_asignado, nombre, responsable_id, proyecto_id FROM cajas_menudas WHERE id = $1',
+          [id],
+        );
+        const caja = cajaInfo.rows[0];
+
+        const gastosResult = await query<{ total: string }>(
+          `SELECT COALESCE(SUM(g.monto_total), 0)::text as total
+           FROM cajas_menudas_gastos g
+           WHERE g.caja_menuda_id = $1
+             AND NOT EXISTS (
+               SELECT 1 FROM solicitudes_pago sp
+               WHERE sp.id = g.solicitud_reembolso_id
+                 AND sp.estado = 'reembolsada'
+             )`,
+          [id],
+        );
+        saldoCierre = Number(caja.monto_asignado) - Number(gastosResult.rows[0].total);
+      }
+
+      // Require comprobante when closing WITH remaining balance
+      if (estado === 'cerrada' && !cierreFile && saldoCierre !== 0) {
         const existing = await query<{
           comprobante_cierre_r2_key: string | null;
         }>(
@@ -542,7 +569,7 @@ router.put(
         if (!existing.rows[0]?.comprobante_cierre_r2_key) {
           res.status(400).json({
             success: false,
-            error: 'Se requiere un comprobante de cierre',
+            error: 'Se requiere un comprobante de cierre para cajas con saldo pendiente',
           });
           return;
         }
@@ -575,6 +602,79 @@ router.put(
         params.push(r2Key);
         sets.push(`comprobante_cierre_nombre = $${paramIdx++}`);
         params.push(cierreFile.originalname);
+      }
+
+      // Auto-generate constancia PDF when closing with zero balance
+      if (estado === 'cerrada' && !cierreFile && saldoCierre === 0) {
+        const cajaData = await query<{
+          nombre: string;
+          proyecto_id: number;
+          responsable_id: number;
+        }>(
+          'SELECT nombre, proyecto_id, responsable_id FROM cajas_menudas WHERE id = $1',
+          [id],
+        );
+        const cajaRow = cajaData.rows[0];
+
+        const [proyectoData, responsableData] = await Promise.all([
+          query<{ nombre: string; nombre_corto: string | null }>(
+            'SELECT nombre, nombre_corto FROM proyectos WHERE id = $1',
+            [cajaRow.proyecto_id],
+          ),
+          query<{ nombre: string }>(
+            'SELECT nombre FROM users WHERE id = $1',
+            [cajaRow.responsable_id],
+          ),
+        ]);
+
+        const proyectoNombre = proyectoData.rows[0]?.nombre_corto || proyectoData.rows[0]?.nombre || '';
+        const responsableNombre = responsableData.rows[0]?.nombre || '';
+        const fechaCierre = new Date().toLocaleDateString('es-PA', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        });
+
+        const pdfDoc = await PDFDocument.create();
+        const page = pdfDoc.addPage([595, 842]); // A4
+        const { height } = page.getSize();
+
+        const title = 'CONSTANCIA DE CIERRE DE CAJA MENUDA';
+        const body = [
+          `Caja Menuda: ${cajaRow.nombre}`,
+          `Proyecto: ${proyectoNombre}`,
+          `Fecha de cierre: ${fechaCierre}`,
+          `Saldo final: B/. 0.00`,
+          `Responsable: ${responsableNombre}`,
+          '',
+          'Se hace constar que la caja menuda indicada ha sido cerrada',
+          'con saldo cero, sin fondos pendientes de devolución.',
+        ];
+
+        page.drawText(title, { x: 50, y: height - 100, size: 16 });
+        let yPos = height - 150;
+        for (const line of body) {
+          page.drawText(line, { x: 50, y: yPos, size: 12 });
+          yPos -= 24;
+        }
+
+        page.drawText(`Generado automáticamente el ${fechaCierre}`, {
+          x: 50,
+          y: 80,
+          size: 9,
+        });
+
+        const pdfBytes = await pdfDoc.save();
+        const pdfBuffer = Buffer.from(pdfBytes);
+        const pdfName = `constancia-cierre-${cajaRow.nombre.replace(/[^a-zA-Z0-9]/g, '-')}.pdf`;
+        const r2Key = `cajas-menudas/${id}/comprobante-cierre-${crypto.randomUUID()}_${pdfName}`;
+
+        await uploadFile(r2Key, pdfBuffer, 'application/pdf');
+
+        sets.push(`comprobante_cierre_r2_key = $${paramIdx++}`);
+        params.push(r2Key);
+        sets.push(`comprobante_cierre_nombre = $${paramIdx++}`);
+        params.push(pdfName);
       }
 
       // Handle opening comprobante upload (replaces existing if any)
