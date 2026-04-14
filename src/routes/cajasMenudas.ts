@@ -312,6 +312,7 @@ router.get(
               ) AS tiene_reembolso_pendiente,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
               u.nombre AS responsable_nombre,
+              creator.nombre AS created_by_nombre,
               cm.monto_asignado - COALESCE(
                 (SELECT SUM(g.monto_total) FROM cajas_menudas_gastos g
                  WHERE g.caja_menuda_id = cm.id
@@ -333,6 +334,7 @@ router.get(
        FROM cajas_menudas cm
        JOIN proyectos p ON p.id = cm.proyecto_id
        JOIN users u ON u.id = cm.responsable_id
+       JOIN users creator ON creator.id = cm.created_by
        LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id
        WHERE cm.id = $1`,
         [id],
