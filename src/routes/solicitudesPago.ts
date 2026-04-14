@@ -1270,7 +1270,8 @@ router.get(
       let comprobante = null;
       if (
         solicitud.rows[0].estado === 'pagada' ||
-        solicitud.rows[0].estado === 'facturada'
+        solicitud.rows[0].estado === 'facturada' ||
+        solicitud.rows[0].estado === 'transferida'
       ) {
         const compResult = await query<{
           fecha_pago: string;
