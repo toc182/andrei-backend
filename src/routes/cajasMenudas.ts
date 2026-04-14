@@ -39,6 +39,7 @@ interface CajaMenudaRow {
   solicitud_apertura_estado?: string | null;
   solicitud_apertura_numero?: string | null;
   historial_pendiente_transferencia?: boolean;
+  tiene_reembolso_pendiente?: boolean;
 }
 
 interface GastoRow {
@@ -131,6 +132,16 @@ router.get(
                   AND h.solicitud_id IS NOT NULL
                   AND sp.estado != 'transferida'
               ) AS historial_pendiente_transferencia,
+              EXISTS (
+                SELECT 1 FROM solicitudes_pago sp
+                WHERE sp.id IN (
+                  SELECT DISTINCT g.solicitud_reembolso_id
+                  FROM cajas_menudas_gastos g
+                  WHERE g.caja_menuda_id = cm.id
+                    AND g.solicitud_reembolso_id IS NOT NULL
+                )
+                AND sp.estado != 'reembolsada'
+              ) AS tiene_reembolso_pendiente,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
@@ -214,6 +225,16 @@ router.get(
                   AND h.solicitud_id IS NOT NULL
                   AND sp.estado != 'transferida'
               ) AS historial_pendiente_transferencia,
+              EXISTS (
+                SELECT 1 FROM solicitudes_pago sp
+                WHERE sp.id IN (
+                  SELECT DISTINCT g.solicitud_reembolso_id
+                  FROM cajas_menudas_gastos g
+                  WHERE g.caja_menuda_id = cm.id
+                    AND g.solicitud_reembolso_id IS NOT NULL
+                )
+                AND sp.estado != 'reembolsada'
+              ) AS tiene_reembolso_pendiente,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
                 (SELECT SUM(g.monto_total) FROM cajas_menudas_gastos g
@@ -279,6 +300,16 @@ router.get(
                   AND h.solicitud_id IS NOT NULL
                   AND sp.estado != 'transferida'
               ) AS historial_pendiente_transferencia,
+              EXISTS (
+                SELECT 1 FROM solicitudes_pago sp
+                WHERE sp.id IN (
+                  SELECT DISTINCT g.solicitud_reembolso_id
+                  FROM cajas_menudas_gastos g
+                  WHERE g.caja_menuda_id = cm.id
+                    AND g.solicitud_reembolso_id IS NOT NULL
+                )
+                AND sp.estado != 'reembolsada'
+              ) AS tiene_reembolso_pendiente,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
               u.nombre AS responsable_nombre,
               cm.monto_asignado - COALESCE(
@@ -508,23 +539,25 @@ router.put(
         return;
       }
 
-      // Reject closing if there are pending gastos
       if (estado === 'cerrada') {
-        const pendingGastos = await query<{ count: string }>(
-          `SELECT COUNT(*)::text as count FROM cajas_menudas_gastos g
-           WHERE g.caja_menuda_id = $1
-             AND NOT EXISTS (
-               SELECT 1 FROM solicitudes_pago sp
-               WHERE sp.id = g.solicitud_reembolso_id
-                 AND sp.estado = 'reembolsada'
-             )`,
+        // Block closing if there are non-reembolsada reembolso solicitudes
+        const pendingReembolsos = await query<{ count: string }>(
+          `SELECT COUNT(*)::text as count
+           FROM solicitudes_pago sp
+           WHERE sp.id IN (
+             SELECT DISTINCT g.solicitud_reembolso_id
+             FROM cajas_menudas_gastos g
+             WHERE g.caja_menuda_id = $1
+               AND g.solicitud_reembolso_id IS NOT NULL
+           )
+           AND sp.estado != 'reembolsada'`,
           [id],
         );
-        if (Number(pendingGastos.rows[0].count) > 0) {
+        if (Number(pendingReembolsos.rows[0].count) > 0) {
           res.status(400).json({
             success: false,
             error:
-              'No se puede cerrar la caja menuda con gastos pendientes de reembolso',
+              'No se puede cerrar la caja con una solicitud de reembolso pendiente. Elimine la solicitud de reembolso primero.',
           });
           return;
         }
