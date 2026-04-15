@@ -170,9 +170,9 @@ router.get(
       SELECT
         p.id, p.nombre, p.nombre_corto, p.cliente_id, p.fecha_inicio, p.fecha_fin_estimada,
         p.estado, p.contratista, p.ingeniero_residente, p.codigo_proyecto, p.contrato,
-        p.acto_publico, p.monto_contrato_original, 0 as presupuesto_base, 0 as itbms,
+        p.acto_publico, p.tiene_ipt, p.monto_contrato_original, 0 as presupuesto_base, 0 as itbms,
         p.monto_contrato_original as monto_total, p.datos_adicionales, p.created_at, p.updated_at,
-        c.nombre as cliente_nombre, c.abreviatura as cliente_abreviatura
+        c.nombre as cliente_nombre, c.abreviatura as cliente_abreviatura, c.tipo as cliente_tipo
       FROM proyectos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
       ${whereClause}

@@ -38,12 +38,30 @@ const TRANSICIONES: Record<string, Record<string, string[]>> = {
     aprobada_contraloria: ['pagada'],
     pagada: [],
   },
+  publico_ipt: {
+    borrador: ['enviada_institucion'],
+    enviada_institucion: ['observaciones_institucion', 'aprobada_institucion'],
+    observaciones_institucion: ['enviada_institucion'],
+    // Aprobada por institución puede regresar a observaciones si el IPT
+    // recibe feedback de Contraloría/MEF que obliga a ajustar la cuenta.
+    aprobada_institucion: ['observaciones_institucion', 'pagada'],
+    pagada: [],
+  },
 };
 
 function getFlow(proyectoTipo: string, tieneIpt: boolean): string {
   if (proyectoTipo === 'privado') return 'privado';
-  if (tieneIpt) return 'publico_ipt'; // Phase 3
+  // proyectoTipo === 'estado' (government/public) or legacy 'publico'
+  if (tieneIpt) return 'publico_ipt';
   return 'publico_normal';
+}
+
+async function iptIsAprobado(cuentaId: number): Promise<boolean> {
+  const r = await query<{ estado: string }>(
+    'SELECT estado FROM cuentas_ipt WHERE cuenta_id = $1',
+    [cuentaId],
+  );
+  return r.rows.length > 0 && r.rows[0].estado === 'aprobado';
 }
 
 function isEnviadaEstado(estado: string): boolean {
@@ -126,9 +144,10 @@ router.get(
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
     const result = await query(
-      `SELECT c.*, p.nombre AS proyecto_nombre, p.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt
+      `SELECT c.*, p.nombre AS proyecto_nombre, cl.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt
        FROM cuentas c
        JOIN proyectos p ON p.id = c.proyecto_id
+       LEFT JOIN clientes cl ON cl.id = p.cliente_id
        ${where}
        ORDER BY c.created_at DESC`,
       params,
@@ -148,9 +167,10 @@ router.get(
       const id = Number(req.params.id);
 
       const cuentaRes = await query<CuentaRow & { proyecto_nombre: string; proyecto_tipo: string; proyecto_tiene_ipt: boolean }>(
-        `SELECT c.*, p.nombre AS proyecto_nombre, p.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt
+        `SELECT c.*, p.nombre AS proyecto_nombre, cl.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt
          FROM cuentas c
          JOIN proyectos p ON p.id = c.proyecto_id
+       LEFT JOIN clientes cl ON cl.id = p.cliente_id
          WHERE c.id = $1`,
         [id],
       );
@@ -183,12 +203,23 @@ router.get(
         [id],
       );
 
+      const iptRes = await query(
+        `SELECT i.*, um.nombre AS firma_ministro_nombre, ume.nombre AS firma_mef_nombre, uc.nombre AS firma_contralor_nombre
+         FROM cuentas_ipt i
+         LEFT JOIN users um ON um.id = i.firma_ministro_por
+         LEFT JOIN users ume ON ume.id = i.firma_mef_por
+         LEFT JOIN users uc ON uc.id = i.firma_contralor_por
+         WHERE i.cuenta_id = $1`,
+        [id],
+      );
+
       res.json({
         success: true,
         data: {
           ...cuenta,
           eventos: eventos.rows,
           adjuntos: adjuntos.rows,
+          ipt: iptRes.rows[0] || null,
         },
       });
     },
@@ -256,6 +287,22 @@ router.post(
           user.id,
         ],
       );
+
+      // Auto-create IPT row for publico_ipt projects.
+      const projInfo = await client.query<{ cliente_tipo: string | null; tiene_ipt: boolean | null }>(
+        `SELECT cl.tipo AS cliente_tipo, p.tiene_ipt
+         FROM proyectos p LEFT JOIN clientes cl ON cl.id = p.cliente_id
+         WHERE p.id = $1`,
+        [proyecto_id],
+      );
+      const tipo = projInfo.rows[0]?.cliente_tipo || 'privado';
+      const tieneIpt = !!projInfo.rows[0]?.tiene_ipt;
+      if (getFlow(tipo, tieneIpt) === 'publico_ipt') {
+        await client.query(
+          `INSERT INTO cuentas_ipt (cuenta_id, estado, created_by) VALUES ($1, 'pendiente', $2)`,
+          [insert.rows[0].id, user.id],
+        );
+      }
 
       await client.query('COMMIT');
 
@@ -374,8 +421,10 @@ router.post(
       };
 
       const cur = await query<CuentaRow & { proyecto_tipo: string; proyecto_tiene_ipt: boolean }>(
-        `SELECT c.*, p.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt
-         FROM cuentas c JOIN proyectos p ON p.id = c.proyecto_id
+        `SELECT c.*, cl.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt
+         FROM cuentas c
+         JOIN proyectos p ON p.id = c.proyecto_id
+         LEFT JOIN clientes cl ON cl.id = p.cliente_id
          WHERE c.id = $1 AND c.active = TRUE`,
         [id],
       );
@@ -405,6 +454,17 @@ router.post(
           error: `Transición no permitida: "${cuenta.estado}" → "${estado_hacia}"`,
         });
         return;
+      }
+
+      // IPT guard: en flujo publico_ipt, solo se puede marcar pagada si el IPT está aprobado.
+      if (flow === 'publico_ipt' && estado_hacia === 'pagada') {
+        if (!(await iptIsAprobado(Number(id)))) {
+          res.status(400).json({
+            success: false,
+            error: 'No se puede marcar pagada hasta que el IPT esté aprobado',
+          });
+          return;
+        }
       }
 
       const client = await pool.connect();
@@ -665,6 +725,115 @@ router.delete(
         [id],
       );
       await registrarAudit(user.id, 'eliminar', 'cuenta', id, {});
+      res.json({ success: true });
+    },
+  ),
+);
+
+// ─── IPT endpoints ──────────────────────────────────────────────────────────
+
+// PATCH /:id/ipt — update IPT signatures, estado, observaciones.
+// Body may contain any of:
+//   estado: 'pendiente' | 'con_observaciones' | 'aprobado'
+//   observaciones_texto: string | null
+//   firma_ministro: boolean   (true = set today's date + user; false = clear)
+//   firma_mef: boolean
+//   firma_contralor: boolean
+router.patch(
+  '/:id/ipt',
+  [param('id').isInt()],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const user = req.user!;
+      const id = Number(req.params.id);
+
+      const cur = await query<CuentaRow>(
+        'SELECT * FROM cuentas WHERE id = $1 AND active = TRUE',
+        [id],
+      );
+      if (cur.rows.length === 0) {
+        res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+        return;
+      }
+      if (!(await userCanAccessProject(user.id, user.rol, cur.rows[0].proyecto_id))) {
+        res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+        return;
+      }
+
+      const existing = await query<{ id: number }>(
+        'SELECT id FROM cuentas_ipt WHERE cuenta_id = $1',
+        [id],
+      );
+      if (existing.rows.length === 0) {
+        res.status(400).json({
+          success: false,
+          error: 'Esta cuenta no tiene IPT (proyecto no marcado con IPT)',
+        });
+        return;
+      }
+
+      const { estado, observaciones_texto, firma_ministro, firma_mef, firma_contralor } =
+        req.body as {
+          estado?: string;
+          observaciones_texto?: string | null;
+          firma_ministro?: boolean;
+          firma_mef?: boolean;
+          firma_contralor?: boolean;
+        };
+
+      const sets: string[] = ['updated_at = CURRENT_TIMESTAMP'];
+      const params: unknown[] = [];
+
+      if (estado !== undefined) {
+        if (!['pendiente', 'con_observaciones', 'aprobado'].includes(estado)) {
+          res.status(400).json({ success: false, error: 'Estado de IPT inválido' });
+          return;
+        }
+        params.push(estado);
+        sets.push(`estado = $${params.length}`);
+      }
+      if (observaciones_texto !== undefined) {
+        params.push(observaciones_texto);
+        sets.push(`observaciones_texto = $${params.length}`);
+      }
+      if (firma_ministro !== undefined) {
+        if (firma_ministro) {
+          params.push(user.id);
+          sets.push(`firma_ministro_por = $${params.length}`);
+          sets.push(`fecha_firma_ministro = CURRENT_DATE`);
+        } else {
+          sets.push(`firma_ministro_por = NULL`);
+          sets.push(`fecha_firma_ministro = NULL`);
+        }
+      }
+      if (firma_mef !== undefined) {
+        if (firma_mef) {
+          params.push(user.id);
+          sets.push(`firma_mef_por = $${params.length}`);
+          sets.push(`fecha_firma_mef = CURRENT_DATE`);
+        } else {
+          sets.push(`firma_mef_por = NULL`);
+          sets.push(`fecha_firma_mef = NULL`);
+        }
+      }
+      if (firma_contralor !== undefined) {
+        if (firma_contralor) {
+          params.push(user.id);
+          sets.push(`firma_contralor_por = $${params.length}`);
+          sets.push(`fecha_firma_contralor = CURRENT_DATE`);
+        } else {
+          sets.push(`firma_contralor_por = NULL`);
+          sets.push(`fecha_firma_contralor = NULL`);
+        }
+      }
+
+      params.push(id);
+      await query(
+        `UPDATE cuentas_ipt SET ${sets.join(', ')} WHERE cuenta_id = $${params.length}`,
+        params,
+      );
+
+      await registrarAudit(user.id, 'ipt_actualizar', 'cuenta', id, req.body);
       res.json({ success: true });
     },
   ),
