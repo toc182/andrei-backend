@@ -595,6 +595,7 @@ interface SolicitudRow {
   impuestos: number;
   monto_total: number;
   estado: string;
+  tipo?: 'regular' | 'reembolso' | 'apertura';
   observaciones: string | null;
   beneficiario: string | null;
   banco: string | null;
@@ -2009,7 +2010,7 @@ router.patch(
       const { estado } = req.body;
 
       const existing = await query<SolicitudRow>(
-        'SELECT id, estado FROM solicitudes_pago WHERE id = $1',
+        'SELECT id, estado, tipo FROM solicitudes_pago WHERE id = $1',
         [id],
       );
       if (existing.rows.length === 0) {
@@ -2030,8 +2031,18 @@ router.patch(
         return;
       }
 
-      // Si se reenvía (rechazada → pendiente), limpiar aprobaciones anteriores
+      // Si se reenvía (rechazada → pendiente), limpiar aprobaciones anteriores.
+      // Las solicitudes de apertura/aumento de caja menuda no pueden reenviarse:
+      // su rechazo es definitivo y revierte el monto de la caja.
       if (estadoActual === 'rechazada' && estado === 'pendiente') {
+        if (existing.rows[0].tipo === 'apertura') {
+          res.status(400).json({
+            success: false,
+            message:
+              'Las solicitudes de apertura o aumento de caja menuda no pueden reenviarse. Cree una nueva solicitud de aumento desde la caja.',
+          });
+          return;
+        }
         await query(
           'DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1',
           [id],
@@ -3356,6 +3367,44 @@ router.post(
         'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         ['rechazada', id],
       );
+
+      // Apertura rejection side effects: revert caja monto to reflect the
+      // rejection (initial → 0, increase → monto_anterior). Rejections of
+      // apertura solicitudes are final — the user cannot reenviar.
+      if (solicitud.rows[0].tipo === 'apertura') {
+        const initial = await query<{ id: number }>(
+          'SELECT id FROM cajas_menudas WHERE solicitud_apertura_id = $1',
+          [id],
+        );
+        if (initial.rows.length > 0) {
+          await query(
+            'UPDATE cajas_menudas SET monto_asignado = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+            [initial.rows[0].id],
+          );
+        } else {
+          const historial = await query<{
+            id: number;
+            caja_menuda_id: number;
+            monto_anterior: string;
+          }>(
+            `SELECT id, caja_menuda_id, monto_anterior
+             FROM cajas_menudas_historial_monto
+             WHERE solicitud_id = $1`,
+            [id],
+          );
+          if (historial.rows.length > 0) {
+            const h = historial.rows[0];
+            await query(
+              `UPDATE cajas_menudas_historial_monto SET estado = 'rechazada' WHERE id = $1`,
+              [h.id],
+            );
+            await query(
+              'UPDATE cajas_menudas SET monto_asignado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+              [h.monto_anterior, h.caja_menuda_id],
+            );
+          }
+        }
+      }
 
       res.json({ success: true, message: 'Solicitud rechazada' });
     },

@@ -354,7 +354,7 @@ router.get(
        JOIN users u ON u.id = h.cambiado_por
        LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id
        WHERE h.caja_menuda_id = $1
-       ORDER BY h.created_at DESC`,
+       ORDER BY h.created_at ASC`,
         [id],
       );
 
@@ -819,6 +819,31 @@ router.put(
           res.status(400).json({
             success: false,
             error: 'El monto asignado no ha cambiado',
+          });
+          return;
+        }
+
+        const pendingApertura = await client.query<{ id: number }>(
+          `SELECT sp.id
+           FROM solicitudes_pago sp
+           WHERE sp.tipo = 'apertura'
+             AND sp.estado = 'pendiente'
+             AND (
+               sp.id = (SELECT solicitud_apertura_id FROM cajas_menudas WHERE id = $1)
+               OR sp.id IN (
+                 SELECT solicitud_id FROM cajas_menudas_historial_monto
+                 WHERE caja_menuda_id = $1 AND estado = 'activa' AND solicitud_id IS NOT NULL
+               )
+             )
+           LIMIT 1`,
+          [id],
+        );
+        if (pendingApertura.rows.length > 0) {
+          await client.query('ROLLBACK');
+          res.status(400).json({
+            success: false,
+            error:
+              'Esta caja ya tiene una solicitud de cambio de monto pendiente',
           });
           return;
         }
