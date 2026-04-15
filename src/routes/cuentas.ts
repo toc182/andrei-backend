@@ -19,14 +19,43 @@ const upload = multer({
 const sanitizeFilename = (name: string): string =>
   name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
 
-// Transiciones permitidas por tipo de flujo (solo privado en Phase 1).
-const TRANSICIONES_PRIVADO: Record<string, string[]> = {
-  borrador: ['enviada'],
-  enviada: ['observaciones', 'aprobada'],
-  observaciones: ['enviada'],
-  aprobada: ['pagada'],
-  pagada: [],
+// Transiciones permitidas por tipo de flujo.
+const TRANSICIONES: Record<string, Record<string, string[]>> = {
+  privado: {
+    borrador: ['enviada'],
+    enviada: ['observaciones', 'aprobada'],
+    observaciones: ['enviada'],
+    aprobada: ['pagada'],
+    pagada: [],
+  },
+  publico_normal: {
+    borrador: ['enviada_institucion'],
+    enviada_institucion: ['observaciones_institucion', 'aprobada_institucion'],
+    observaciones_institucion: ['enviada_institucion'],
+    aprobada_institucion: ['enviada_contraloria'],
+    enviada_contraloria: ['observaciones_contraloria', 'aprobada_contraloria'],
+    observaciones_contraloria: ['enviada_contraloria'],
+    aprobada_contraloria: ['pagada'],
+    pagada: [],
+  },
 };
+
+function getFlow(proyectoTipo: string, tieneIpt: boolean): string {
+  if (proyectoTipo === 'privado') return 'privado';
+  if (tieneIpt) return 'publico_ipt'; // Phase 3
+  return 'publico_normal';
+}
+
+function isEnviadaEstado(estado: string): boolean {
+  return estado === 'enviada' || estado === 'enviada_institucion' || estado === 'enviada_contraloria';
+}
+function isObservacionesEstado(estado: string): boolean {
+  return (
+    estado === 'observaciones' ||
+    estado === 'observaciones_institucion' ||
+    estado === 'observaciones_contraloria'
+  );
+}
 
 interface CuentaRow {
   id: number;
@@ -344,8 +373,10 @@ router.post(
         comentario?: string;
       };
 
-      const cur = await query<CuentaRow>(
-        'SELECT * FROM cuentas WHERE id = $1 AND active = TRUE',
+      const cur = await query<CuentaRow & { proyecto_tipo: string; proyecto_tiene_ipt: boolean }>(
+        `SELECT c.*, p.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt
+         FROM cuentas c JOIN proyectos p ON p.id = c.proyecto_id
+         WHERE c.id = $1 AND c.active = TRUE`,
         [id],
       );
       if (cur.rows.length === 0) {
@@ -358,7 +389,16 @@ router.post(
         return;
       }
 
-      const permitidos = TRANSICIONES_PRIVADO[cuenta.estado] || [];
+      const flow = getFlow(cuenta.proyecto_tipo, cuenta.proyecto_tiene_ipt);
+      const matrix = TRANSICIONES[flow];
+      if (!matrix) {
+        res.status(400).json({
+          success: false,
+          error: `Flujo "${flow}" no soportado aún`,
+        });
+        return;
+      }
+      const permitidos = matrix[cuenta.estado] || [];
       if (!permitidos.includes(estado_hacia)) {
         res.status(400).json({
           success: false,
@@ -374,11 +414,10 @@ router.post(
         const sets: string[] = ['estado = $1', 'updated_at = CURRENT_TIMESTAMP'];
         const params: unknown[] = [estado_hacia];
 
-        if (cuenta.estado === 'borrador' && estado_hacia === 'enviada') {
-          params.push();
+        if (cuenta.estado === 'borrador' && isEnviadaEstado(estado_hacia)) {
           sets.push(`fecha_primera_submision = CURRENT_DATE`);
         }
-        if (cuenta.estado === 'observaciones' && estado_hacia === 'enviada') {
+        if (isObservacionesEstado(cuenta.estado) && isEnviadaEstado(estado_hacia)) {
           sets.push(`fecha_ultima_resubmision = CURRENT_DATE`);
         }
         if (estado_hacia === 'pagada') {
