@@ -30,6 +30,7 @@ export interface UserPermissions {
   oportunidades_ver: boolean;
   registrar_pago: boolean;
   caja_menuda: boolean;
+  cuentas: boolean;
 }
 
 /**

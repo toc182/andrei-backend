@@ -38,6 +38,7 @@ const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'oportunidades_ver',
   'registrar_pago',
   'caja_menuda',
+  'cuentas',
 ];
 
 /**
@@ -88,7 +89,7 @@ export async function authenticateToken(
                 solicitudes_editar_todas, requisiciones_editar_todas,
                 equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
                 equipos_asignacion, equipos_uso, equipos_editar_asignacion,
-                documentos_acceso, oportunidades_ver, registrar_pago, caja_menuda
+                documentos_acceso, oportunidades_ver, registrar_pago, caja_menuda, cuentas
          FROM user_permissions WHERE user_id = $1`,
         [user.id],
       );

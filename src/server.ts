@@ -66,6 +66,7 @@ import permissionsRoutes from './routes/permissions.js';
 import verificacionRoutes from './routes/verificacion.js';
 import notificationsRoutes from './routes/notifications.js';
 import cajasMenudasRoutes from './routes/cajasMenudas.js';
+import cuentasRoutes from './routes/cuentas.js';
 import { startScheduler } from './cron/scheduler.js';
 
 const app = express();
@@ -123,6 +124,7 @@ app.use('/api/approval-settings', approvalSettingsRoutes);
 app.use('/api/permissions', permissionsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/cajas-menudas', cajasMenudasRoutes);
+app.use('/api/cuentas', cuentasRoutes);
 
 // Servir archivos estáticos de uploads
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
