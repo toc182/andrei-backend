@@ -109,6 +109,140 @@ async function userCanAccessProject(
   return Number(r.rows[0].count) > 0;
 }
 
+// GET /resumen — project-level aggregation for the general view.
+// Returns one entry per project with: current cuenta, pending cuentas, accumulated avance, etc.
+router.get(
+  '/resumen',
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const user = req.user!;
+
+    // Get all projects with active cuentas that the user can access
+    const accessFilter =
+      user.rol === 'admin' || user.rol === 'co-admin'
+        ? ''
+        : `AND p.id IN (SELECT proyecto_id FROM user_project_access WHERE user_id = ${Number(user.id)})`;
+
+    const projects = await query<{
+      proyecto_id: number;
+      proyecto_nombre: string;
+      cliente_nombre: string | null;
+      cliente_tipo: string | null;
+      tiene_ipt: boolean;
+      fecha_inicio: string | null;
+    }>(
+      `SELECT DISTINCT p.id AS proyecto_id, p.nombre AS proyecto_nombre,
+              cl.nombre AS cliente_nombre, cl.tipo AS cliente_tipo,
+              p.tiene_ipt, p.fecha_inicio
+       FROM cuentas c
+       JOIN proyectos p ON p.id = c.proyecto_id
+       LEFT JOIN clientes cl ON cl.id = p.cliente_id
+       WHERE c.active = TRUE ${accessFilter}
+       ORDER BY p.nombre`,
+      [],
+    );
+
+    if (projects.rows.length === 0) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const projectIds = projects.rows.map((p) => p.proyecto_id);
+
+    // Get all active cuentas for these projects
+    const cuentas = await query<CuentaRow & { proyecto_id: number }>(
+      `SELECT c.*
+       FROM cuentas c
+       WHERE c.proyecto_id = ANY($1) AND c.active = TRUE
+       ORDER BY c.numero ASC`,
+      [projectIds],
+    );
+
+    // Group cuentas by project
+    const cuentasByProject = new Map<number, (CuentaRow & { proyecto_id: number })[]>();
+    for (const c of cuentas.rows) {
+      if (!cuentasByProject.has(c.proyecto_id)) cuentasByProject.set(c.proyecto_id, []);
+      cuentasByProject.get(c.proyecto_id)!.push(c);
+    }
+
+    const PAGADA_STATES = ['pagada'];
+    const PENDING_STATES = [
+      'enviada', 'observaciones', 'aprobada',
+      'enviada_institucion', 'observaciones_institucion', 'aprobada_institucion',
+      'enviada_contraloria', 'observaciones_contraloria', 'aprobada_contraloria',
+    ];
+
+    const result = projects.rows.map((proj) => {
+      const allCuentas = cuentasByProject.get(proj.proyecto_id) || [];
+      const sorted = [...allCuentas].sort((a, b) => a.numero - b.numero);
+
+      // Pending: submitted but not paid
+      const pendientes = sorted.filter((c) => PENDING_STATES.includes(c.estado));
+
+      // Current: first cuenta not yet submitted (borrador or no-iniciada concept)
+      // = the one after the last submitted/paid cuenta, OR the first if none submitted
+      const lastSubmittedIdx = sorted.reduce(
+        (max, c, i) => (c.estado !== 'borrador' ? i : max),
+        -1,
+      );
+      const currentCuenta = lastSubmittedIdx < sorted.length - 1
+        ? sorted[lastSubmittedIdx + 1]
+        : null;
+
+      // Pagadas
+      const pagadas = sorted.filter((c) => PAGADA_STATES.includes(c.estado));
+
+      // Accumulated avance: max avance across all cuentas
+      const avanceAcum = sorted.reduce((max, c) => {
+        const v = c.avance_porcentaje ? Number(c.avance_porcentaje) : 0;
+        return v > max ? v : max;
+      }, 0);
+
+      // Days since project started
+      const diasInicio = proj.fecha_inicio
+        ? Math.floor((Date.now() - new Date(proj.fecha_inicio).getTime()) / 86400000)
+        : null;
+
+      // Days since last submittal
+      const lastSubmitDate = sorted
+        .filter((c) => c.fecha_primera_submision)
+        .reduce((latest: string | null, c) => {
+          if (!latest) return c.fecha_primera_submision;
+          return c.fecha_primera_submision! > latest ? c.fecha_primera_submision! : latest;
+        }, null);
+      const diasUltimoEnvio = lastSubmitDate
+        ? Math.floor((Date.now() - new Date(lastSubmitDate).getTime()) / 86400000)
+        : null;
+
+      return {
+        proyecto_id: proj.proyecto_id,
+        proyecto_nombre: proj.proyecto_nombre,
+        cliente_nombre: proj.cliente_nombre,
+        cliente_tipo: proj.cliente_tipo,
+        tiene_ipt: proj.tiene_ipt,
+        avance_acumulado: avanceAcum,
+        dias_inicio: diasInicio,
+        dias_ultimo_envio: diasUltimoEnvio,
+        cuenta_actual: currentCuenta,
+        pendientes: pendientes.map((c) => ({
+          id: c.id,
+          numero: c.numero,
+          estado: c.estado,
+          monto_total: c.monto_total,
+          periodo_inicio: c.periodo_inicio,
+          periodo_fin: c.periodo_fin,
+          avance_porcentaje: c.avance_porcentaje,
+          fecha_primera_submision: c.fecha_primera_submision,
+        })),
+        pagadas: pagadas.length,
+        total_cuentas: allCuentas.length,
+        all_paid: pagadas.length === allCuentas.length && allCuentas.length > 0,
+      };
+    });
+
+    res.json({ success: true, data: result });
+  }),
+);
+
 // GET / — lista de cuentas. Filtros: proyecto_id, estado, active.
 router.get(
   '/',
@@ -358,10 +492,14 @@ router.put(
         res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
         return;
       }
-      if (cuenta.estado !== 'borrador') {
+      const LOCKED_STATES = [
+        'aprobada', 'pagada',
+        'aprobada_institucion', 'aprobada_contraloria',
+      ];
+      if (LOCKED_STATES.includes(cuenta.estado)) {
         res.status(400).json({
           success: false,
-          error: 'Solo se puede editar una cuenta en borrador',
+          error: 'No se puede editar una cuenta aprobada o pagada',
         });
         return;
       }
@@ -375,8 +513,14 @@ router.put(
         'avance_porcentaje',
         'es_final',
       ] as const;
+      const changes: Record<string, { from: unknown; to: unknown }> = {};
       for (const f of fields) {
         if (f in req.body) {
+          const oldVal = cuenta[f as keyof CuentaRow];
+          const newVal = req.body[f];
+          if (String(oldVal ?? '') !== String(newVal ?? '')) {
+            changes[f] = { from: oldVal, to: newVal };
+          }
           params.push(req.body[f]);
           sets.push(`${f} = $${params.length}`);
         }
@@ -390,6 +534,18 @@ router.put(
         `UPDATE cuentas SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length}`,
         params,
       );
+
+      // Log edit as event if the cuenta was already submitted (not borrador)
+      if (cuenta.estado !== 'borrador' && Object.keys(changes).length > 0) {
+        const changeDesc = Object.entries(changes)
+          .map(([k, v]) => `${k}: ${v.from ?? '—'} → ${v.to ?? '—'}`)
+          .join(', ');
+        await query(
+          `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
+           VALUES ($1, 'edicion', $2, $3)`,
+          [id, changeDesc, user.id],
+        );
+      }
 
       await registrarAudit(user.id, 'editar', 'cuenta', id, req.body);
       res.json({ success: true });
