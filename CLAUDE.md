@@ -12,7 +12,7 @@ src/
 ├── database/ # config.ts (pool), migrate.ts, migrations/ (056 files, .sql)
 ├── types/ # api.ts, auth.ts, database.ts, index.ts, models.ts
 ├── cron/ # scheduler.ts (daily email notifications)
-└── utils/ # QueryBuilder.ts
+└── utils/ # (currently empty)
 
 ## Commands
 
