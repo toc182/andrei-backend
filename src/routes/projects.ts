@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult, param } from 'express-validator';
-import { query } from '../database/config.js';
+import { query, pool } from '../database/config.js';
 import {
   authenticateToken,
   requireManager,
@@ -326,11 +326,17 @@ router.post(
         datos_adicionales = {},
       } = req.body;
 
+      const user = req.user!;
+      const client = await pool.connect();
       let result;
-      // Try-catch interno preservado - fallback para esquemas sin columnas de presupuesto
+
       try {
-        result = await query<ProjectRow>(
-          `
+        await client.query('BEGIN');
+
+        // Try-catch interno preservado - fallback para esquemas sin columnas de presupuesto
+        try {
+          result = await client.query<ProjectRow>(
+            `
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
         estado, contratista, ingeniero_residente, codigo_proyecto,
@@ -338,34 +344,32 @@ router.post(
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *
     `,
-          [
-            nombre,
-            nombre_corto,
-            cliente_id,
-            fecha_inicio,
-            fecha_fin_estimada,
-            estado,
-            contratista,
-            ingeniero_residente,
-            codigo_proyecto,
-            contrato,
-            acto_publico,
-            monto_contrato_original,
-            presupuesto_base,
-            itbms,
-            monto_total,
-            JSON.stringify(datos_adicionales),
-          ],
-        );
-      } catch (innerError) {
-        const innerDbError = innerError as { code?: string };
-        // Si es error de duplicado, re-lanzar para que asyncHandler lo maneje
-        if (innerDbError.code === '23505') {
-          throw innerError;
-        }
-        // Si no es duplicado, es probablemente schema issue - usar fallback
-        result = await query<ProjectRow>(
-          `
+            [
+              nombre,
+              nombre_corto,
+              cliente_id,
+              fecha_inicio,
+              fecha_fin_estimada,
+              estado,
+              contratista,
+              ingeniero_residente,
+              codigo_proyecto,
+              contrato,
+              acto_publico,
+              monto_contrato_original,
+              presupuesto_base,
+              itbms,
+              monto_total,
+              JSON.stringify(datos_adicionales),
+            ],
+          );
+        } catch (innerError) {
+          const innerDbError = innerError as { code?: string };
+          if (innerDbError.code === '23505') {
+            throw innerError;
+          }
+          result = await client.query<ProjectRow>(
+            `
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
         estado, contratista, ingeniero_residente, codigo_proyecto,
@@ -373,29 +377,79 @@ router.post(
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
     `,
-          [
-            nombre,
-            nombre_corto,
-            cliente_id,
-            fecha_inicio,
-            fecha_fin_estimada,
-            estado,
-            contratista,
-            ingeniero_residente,
-            codigo_proyecto,
-            contrato,
-            acto_publico,
-            monto_contrato_original,
-            JSON.stringify(datos_adicionales),
-          ],
-        );
-      }
+            [
+              nombre,
+              nombre_corto,
+              cliente_id,
+              fecha_inicio,
+              fecha_fin_estimada,
+              estado,
+              contratista,
+              ingeniero_residente,
+              codigo_proyecto,
+              contrato,
+              acto_publico,
+              monto_contrato_original,
+              JSON.stringify(datos_adicionales),
+            ],
+          );
+        }
 
-      res.status(201).json({
-        success: true,
-        message: 'Proyecto creado exitosamente',
-        proyecto: result.rows[0],
-      });
+        const proyecto = result.rows[0];
+
+        // Auto-create cuenta #1
+        const cuentaInsert = await client.query<{ id: number }>(
+          `INSERT INTO cuentas (
+            proyecto_id, numero, es_final, estado, periodo_inicio, created_by
+          ) VALUES ($1, 1, false, 'borrador', $2, $3)
+          RETURNING id`,
+          [proyecto.id, fecha_inicio || null, user.id],
+        );
+
+        // Timeline event
+        await client.query(
+          `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
+           VALUES ($1, 'creacion', 'Período de Cuenta 1 iniciado', $2)`,
+          [cuentaInsert.rows[0].id, user.id],
+        );
+
+        // Auto-create IPT row for publico_ipt projects
+        if (cliente_id) {
+          const projInfo = await client.query<{ cliente_tipo: string | null; tiene_ipt: boolean | null }>(
+            `SELECT cl.tipo AS cliente_tipo, p.tiene_ipt
+             FROM proyectos p LEFT JOIN clientes cl ON cl.id = p.cliente_id
+             WHERE p.id = $1`,
+            [proyecto.id],
+          );
+          const tipo = projInfo.rows[0]?.cliente_tipo || 'privado';
+          const tieneIpt = !!projInfo.rows[0]?.tiene_ipt;
+          if (tipo !== 'privado' && tieneIpt) {
+            await client.query(
+              `INSERT INTO cuentas_ipt (cuenta_id, estado, created_by) VALUES ($1, 'pendiente', $2)`,
+              [cuentaInsert.rows[0].id, user.id],
+            );
+          }
+        }
+
+        await client.query('COMMIT');
+
+        await registrarAudit(user.id, 'crear', 'cuenta', cuentaInsert.rows[0].id, {
+          proyecto_id: proyecto.id,
+          numero: 1,
+          auto_created: true,
+        });
+
+        res.status(201).json({
+          success: true,
+          message: 'Proyecto creado exitosamente',
+          proyecto,
+        });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     },
     {
       duplicateMessage: 'El código de proyecto ya existe',
