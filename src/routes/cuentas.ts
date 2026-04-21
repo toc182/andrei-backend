@@ -125,13 +125,15 @@ router.get(
     const projects = await query<{
       proyecto_id: number;
       proyecto_nombre: string;
+      proyecto_nombre_corto: string | null;
       cliente_nombre: string | null;
+      cliente_abreviatura: string | null;
       cliente_tipo: string | null;
       tiene_ipt: boolean;
       fecha_inicio: string | null;
     }>(
-      `SELECT DISTINCT p.id AS proyecto_id, p.nombre AS proyecto_nombre,
-              cl.nombre AS cliente_nombre, cl.tipo AS cliente_tipo,
+      `SELECT DISTINCT p.id AS proyecto_id, p.nombre AS proyecto_nombre, p.nombre_corto AS proyecto_nombre_corto,
+              cl.nombre AS cliente_nombre, cl.abreviatura AS cliente_abreviatura, cl.tipo AS cliente_tipo,
               p.tiene_ipt, p.fecha_inicio
        FROM cuentas c
        JOIN proyectos p ON p.id = c.proyecto_id
@@ -191,10 +193,18 @@ router.get(
       // Pagadas
       const pagadas = sorted.filter((c) => PAGADA_STATES.includes(c.estado));
 
-      // Accumulated avance: max avance across all cuentas
-      const avanceAcum = sorted.reduce((max, c) => {
+      // Avance from previous cuentas (sum of all before current)
+      const currentIdx = currentCuenta
+        ? sorted.findIndex((c) => c.id === currentCuenta.id)
+        : sorted.length;
+      const avancePrevio = sorted
+        .slice(0, currentIdx)
+        .reduce((sum, c) => sum + (c.avance_porcentaje ? Number(c.avance_porcentaje) : 0), 0);
+
+      // Accumulated avance: sum of all cuentas including current
+      const avanceAcum = sorted.reduce((sum, c) => {
         const v = c.avance_porcentaje ? Number(c.avance_porcentaje) : 0;
-        return v > max ? v : max;
+        return sum + v;
       }, 0);
 
       // Days since project started
@@ -216,23 +226,33 @@ router.get(
       return {
         proyecto_id: proj.proyecto_id,
         proyecto_nombre: proj.proyecto_nombre,
+        proyecto_nombre_corto: proj.proyecto_nombre_corto,
         cliente_nombre: proj.cliente_nombre,
+        cliente_abreviatura: proj.cliente_abreviatura,
         cliente_tipo: proj.cliente_tipo,
         tiene_ipt: proj.tiene_ipt,
         avance_acumulado: avanceAcum,
+        avance_previo: avancePrevio,
         dias_inicio: diasInicio,
         dias_ultimo_envio: diasUltimoEnvio,
         cuenta_actual: currentCuenta,
-        pendientes: pendientes.map((c) => ({
-          id: c.id,
-          numero: c.numero,
-          estado: c.estado,
-          monto_total: c.monto_total,
-          periodo_inicio: c.periodo_inicio,
-          periodo_fin: c.periodo_fin,
-          avance_porcentaje: c.avance_porcentaje,
-          fecha_primera_submision: c.fecha_primera_submision,
-        })),
+        pendientes: pendientes.map((c) => {
+          const idx = sorted.findIndex((s) => s.id === c.id);
+          const prevAvance = sorted
+            .slice(0, idx)
+            .reduce((sum, s) => sum + (s.avance_porcentaje ? Number(s.avance_porcentaje) : 0), 0);
+          return {
+            id: c.id,
+            numero: c.numero,
+            estado: c.estado,
+            monto_total: c.monto_total,
+            periodo_inicio: c.periodo_inicio,
+            periodo_fin: c.periodo_fin,
+            avance_porcentaje: c.avance_porcentaje,
+            avance_previo: prevAvance,
+            fecha_primera_submision: c.fecha_primera_submision,
+          };
+        }),
         pagadas: pagadas.length,
         total_cuentas: allCuentas.length,
         all_paid: pagadas.length === allCuentas.length && allCuentas.length > 0,
@@ -420,6 +440,13 @@ router.post(
           avance_porcentaje ?? null,
           user.id,
         ],
+      );
+
+      // Initial timeline event
+      await client.query(
+        `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
+         VALUES ($1, 'creacion', $2, $3)`,
+        [insert.rows[0].id, `Período de Cuenta ${numero} iniciado`, user.id],
       );
 
       // Auto-create IPT row for publico_ipt projects.
