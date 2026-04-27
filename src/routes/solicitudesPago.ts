@@ -1402,16 +1402,17 @@ router.get(
         sol.estado === 'pagada' ||
         sol.estado === 'facturada' ||
         sol.estado === 'devolucion';
+      const isEstadoEditable =
+        sol.estado === 'pendiente' || sol.estado === 'aprobada';
       let puede_eliminar = false;
       if (isAdmin) {
         // Admin can delete anything except protected states outside test project
         puede_eliminar =
           !isEstadoProtegido || sol.proyecto_id === testProjectId;
       } else {
-        // Non-admin: only pendiente, own solicitud, no approvals
+        // Non-admin: pendiente or aprobada (stages 1/2/3), own solicitud or solicitudes_editar_todas
         puede_eliminar =
-          sol.estado === 'pendiente' &&
-          aprobaciones.rows.length === 0 &&
+          isEstadoEditable &&
           (sol.preparado_por === req.user?.id ||
             !!req.user?.permissions?.solicitudes_editar_todas);
       }
@@ -1726,10 +1727,11 @@ router.put(
           .json({ success: false, message: 'Solicitud no encontrada' });
         return;
       }
-      if (!['pendiente'].includes(existing.rows[0].estado)) {
+      if (!['pendiente', 'aprobada'].includes(existing.rows[0].estado)) {
         res.status(400).json({
           success: false,
-          message: 'Solo se pueden editar solicitudes en estado pendiente',
+          message:
+            'Solo se pueden editar solicitudes en estado pendiente o aprobada',
         });
         return;
       }
@@ -1748,33 +1750,15 @@ router.put(
         }
       }
 
-      // Verificar estado de aprobaciones
+      // Verificar estado de aprobaciones — editar reinicia la cadena tanto si
+      // hay aprobaciones parciales como si está totalmente aprobada
       const aprobacionesResult = await query<{ count: string }>(
         'SELECT COUNT(*) as count FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1 AND accion = $2',
         [id, 'aprobado'],
       );
       const aprobacionesCount = parseInt(aprobacionesResult.rows[0].count);
 
-      const aprobadoresTotalResult = await query<{ count: string }>(
-        'SELECT COUNT(*) as count FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true',
-        [existing.rows[0].proyecto_id],
-      );
-      const aprobadoresTotal = parseInt(aprobadoresTotalResult.rows[0].count);
-
-      if (
-        aprobacionesCount > 0 &&
-        aprobadoresTotal > 0 &&
-        aprobacionesCount >= aprobadoresTotal
-      ) {
-        res.status(403).json({
-          success: false,
-          message:
-            'No se puede editar una solicitud con todas las aprobaciones completas',
-        });
-        return;
-      }
-
-      const tieneAprobacionesParciales = aprobacionesCount > 0;
+      const tieneAprobaciones = aprobacionesCount > 0;
 
       const {
         fecha,
@@ -1896,8 +1880,8 @@ router.put(
         );
       }
 
-      // Si tenía aprobaciones parciales, anularlas y resetear estado
-      if (tieneAprobacionesParciales) {
+      // Si tenía aprobaciones (parciales o totales), anularlas y resetear estado
+      if (tieneAprobaciones) {
         await query(
           'DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1',
           [id],
@@ -1916,7 +1900,7 @@ router.put(
         success: true,
         message: 'Solicitud actualizada',
         solicitud: result.rows[0],
-        aprobaciones_anuladas: tieneAprobacionesParciales,
+        aprobaciones_anuladas: tieneAprobaciones,
       });
     },
   ),
@@ -3833,11 +3817,12 @@ router.delete(
       }
 
       if (!isAdmin) {
-        // Co-admin y usuarios normales: solo pendientes
-        if (existing.rows[0].estado !== 'pendiente') {
+        // Co-admin y usuarios normales: pendiente o aprobada (stages 1/2/3)
+        if (!['pendiente', 'aprobada'].includes(existing.rows[0].estado)) {
           res.status(400).json({
             success: false,
-            message: 'Solo se pueden eliminar solicitudes en estado pendiente',
+            message:
+              'Solo se pueden eliminar solicitudes en estado pendiente o aprobada',
           });
           return;
         }
