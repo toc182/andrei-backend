@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS nueva_tabla (...);
 
 - NEVER skip authenticateToken on any route
 - NEVER use string concatenation in SQL queries
+- NEVER assume table structure — verify with MCP postgres before writing queries
 - ALWAYS call registrarAudit() on create, edit, delete, approve, pay operations
 - NEVER delete migrations — add new ones only
 - .env is never committed — Railway uses DATABASE_URL, JWT_SECRET, R2 keys, RESEND_API_KEY
