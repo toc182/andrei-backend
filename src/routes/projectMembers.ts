@@ -157,16 +157,16 @@ router.post(
         return;
       }
 
-      // Verificar si ya existe como miembro activo
-      const existingCheck = await query<{ id: number }>(
+      // Buscar fila existente (activa o inactiva) para este usuario y proyecto
+      const existing = await query<{ id: number; activo: boolean }>(
         `
-    SELECT id FROM project_members
-    WHERE project_id = $1 AND user_id = $2 AND tipo_miembro = 'usuario' AND activo = true
+    SELECT id, activo FROM project_members
+    WHERE project_id = $1 AND user_id = $2 AND tipo_miembro = 'usuario'
   `,
         [project_id, user_id],
       );
 
-      if (existingCheck.rows.length > 0) {
+      if (existing.rows.length > 0 && existing.rows[0].activo) {
         res.status(400).json({
           success: false,
           message: 'El usuario ya es miembro de este proyecto',
@@ -174,40 +174,35 @@ router.post(
         return;
       }
 
-      // Insertar o reactivar
-      const result = await query<ProjectMemberRow>(
-        `
-    INSERT INTO project_members (project_id, user_id, tipo_miembro, rol_proyecto)
-    VALUES ($1, $2, 'usuario', $3)
-    ON CONFLICT ON CONSTRAINT project_members_pkey DO NOTHING
-    RETURNING *
-  `,
-        [project_id, user_id, rol_proyecto || 'miembro'],
-      );
-
-      // Si no se inserto, intentar reactivar
-      if (result.rows.length === 0) {
+      let memberRow: ProjectMemberRow;
+      if (existing.rows.length > 0) {
+        // Reactivar miembro previamente removido
         const updateResult = await query<ProjectMemberRow>(
           `
       UPDATE project_members
       SET activo = true, rol_proyecto = $3, updated_at = CURRENT_TIMESTAMP
-      WHERE project_id = $1 AND user_id = $2 AND tipo_miembro = 'usuario'
+      WHERE id = $1 AND project_id = $2
+      RETURNING *
+    `,
+          [existing.rows[0].id, project_id, rol_proyecto || 'miembro'],
+        );
+        memberRow = updateResult.rows[0];
+      } else {
+        // Insertar nuevo miembro
+        const insertResult = await query<ProjectMemberRow>(
+          `
+      INSERT INTO project_members (project_id, user_id, tipo_miembro, rol_proyecto)
+      VALUES ($1, $2, 'usuario', $3)
       RETURNING *
     `,
           [project_id, user_id, rol_proyecto || 'miembro'],
         );
-
-        res.status(201).json({
-          success: true,
-          member: updateResult.rows[0],
-          message: 'Miembro agregado exitosamente',
-        });
-        return;
+        memberRow = insertResult.rows[0];
       }
 
       res.status(201).json({
         success: true,
-        member: result.rows[0],
+        member: memberRow,
         message: 'Miembro agregado exitosamente',
       });
     },
@@ -233,16 +228,16 @@ router.post(
         return;
       }
 
-      // Verificar si ya existe como miembro activo
-      const existingCheck = await query<{ id: number }>(
+      // Buscar fila existente (activa o inactiva) para este contacto externo y proyecto
+      const existing = await query<{ id: number; activo: boolean }>(
         `
-    SELECT id FROM project_members
-    WHERE project_id = $1 AND external_contact_id = $2 AND tipo_miembro = 'externo' AND activo = true
+    SELECT id, activo FROM project_members
+    WHERE project_id = $1 AND external_contact_id = $2 AND tipo_miembro = 'externo'
   `,
         [project_id, external_contact_id],
       );
 
-      if (existingCheck.rows.length > 0) {
+      if (existing.rows.length > 0 && existing.rows[0].activo) {
         res.status(400).json({
           success: false,
           message: 'El contacto externo ya es miembro de este proyecto',
@@ -250,15 +245,29 @@ router.post(
         return;
       }
 
-      // Insertar nuevo miembro externo
-      const result = await query<ProjectMemberRow>(
-        `
-    INSERT INTO project_members (project_id, external_contact_id, tipo_miembro, rol_proyecto)
-    VALUES ($1, $2, 'externo', $3)
-    RETURNING *
-  `,
-        [project_id, external_contact_id, rol_proyecto || 'miembro'],
-      );
+      let result: { rows: ProjectMemberRow[] };
+      if (existing.rows.length > 0) {
+        // Reactivar contacto externo previamente removido
+        result = await query<ProjectMemberRow>(
+          `
+      UPDATE project_members
+      SET activo = true, rol_proyecto = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING *
+    `,
+          [existing.rows[0].id, rol_proyecto || 'miembro'],
+        );
+      } else {
+        // Insertar nuevo miembro externo
+        result = await query<ProjectMemberRow>(
+          `
+      INSERT INTO project_members (project_id, external_contact_id, tipo_miembro, rol_proyecto)
+      VALUES ($1, $2, 'externo', $3)
+      RETURNING *
+    `,
+          [project_id, external_contact_id, rol_proyecto || 'miembro'],
+        );
+      }
 
       // Obtener datos completos del contacto
       const memberData = await query<ProjectMemberRow>(
