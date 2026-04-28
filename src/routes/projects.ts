@@ -32,6 +32,7 @@ interface ProjectRow {
   codigo_proyecto?: string;
   contrato?: string;
   acto_publico?: string;
+  tipo_contrato?: 'publico' | 'privado';
   monto_contrato_original?: number;
   presupuesto_base?: number;
   itbms?: number;
@@ -64,6 +65,7 @@ interface CreateProjectBody {
   codigo_proyecto?: string;
   contrato?: string;
   acto_publico?: string;
+  tipo_contrato?: 'publico' | 'privado';
   monto_contrato_original?: number;
   presupuesto_base?: number;
   itbms?: number;
@@ -105,7 +107,7 @@ router.get(
       } = req.query;
       const offset = (parseInt(page) - 1) * parseInt(limit);
 
-      let whereClause = 'WHERE 1=1';
+      let whereClause = 'WHERE COALESCE(p.activo, true) = true';
       const queryParams: unknown[] = [];
       let paramCounter = 1;
 
@@ -150,7 +152,7 @@ router.get(
       SELECT
         p.id, p.nombre, p.nombre_corto, p.cliente_id, p.fecha_inicio, p.fecha_fin_estimada,
         p.estado, p.contratista, p.ingeniero_residente, p.codigo_proyecto, p.contrato,
-        p.acto_publico, p.monto_contrato_original,
+        p.acto_publico, p.tipo_contrato, p.monto_contrato_original,
         COALESCE(p.presupuesto_base, 0) as presupuesto_base,
         COALESCE(p.itbms, 0) as itbms,
         COALESCE(p.monto_total, p.monto_contrato_original) as monto_total,
@@ -170,7 +172,7 @@ router.get(
       SELECT
         p.id, p.nombre, p.nombre_corto, p.cliente_id, p.fecha_inicio, p.fecha_fin_estimada,
         p.estado, p.contratista, p.ingeniero_residente, p.codigo_proyecto, p.contrato,
-        p.acto_publico, p.tiene_ipt, p.monto_contrato_original, 0 as presupuesto_base, 0 as itbms,
+        p.acto_publico, p.tipo_contrato, p.tiene_ipt, p.monto_contrato_original, 0 as presupuesto_base, 0 as itbms,
         p.monto_contrato_original as monto_total, p.datos_adicionales, p.created_at, p.updated_at,
         c.nombre as cliente_nombre, c.abreviatura as cliente_abreviatura, c.tipo as cliente_tipo
       FROM proyectos p
@@ -287,7 +289,12 @@ router.post(
     body('monto_contrato_original').optional({ nullable: true }).isNumeric(),
     body('presupuesto_base').optional({ nullable: true }).isNumeric(),
     body('itbms').optional({ nullable: true }).isNumeric(),
-    body('monto_total').optional({ nullable: true }).isNumeric(),
+    body('monto_total')
+      .exists({ values: 'falsy' })
+      .withMessage('Monto total es requerido')
+      .bail()
+      .isFloat({ gt: 0 })
+      .withMessage('Monto total debe ser mayor a cero'),
     body('datos_adicionales').optional().isObject(),
     authenticateToken,
     checkPermission('proyectos_crear'),
@@ -319,6 +326,7 @@ router.post(
         codigo_proyecto,
         contrato,
         acto_publico,
+        tipo_contrato = 'privado',
         monto_contrato_original,
         presupuesto_base,
         itbms,
@@ -340,8 +348,8 @@ router.post(
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
         estado, contratista, ingeniero_residente, codigo_proyecto,
-        contrato, acto_publico, monto_contrato_original, presupuesto_base, itbms, monto_total, datos_adicionales
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        contrato, acto_publico, tipo_contrato, monto_contrato_original, presupuesto_base, itbms, monto_total, datos_adicionales
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
     `,
             [
@@ -356,6 +364,7 @@ router.post(
               codigo_proyecto,
               contrato,
               acto_publico,
+              tipo_contrato,
               monto_contrato_original,
               presupuesto_base,
               itbms,
@@ -373,8 +382,8 @@ router.post(
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
         estado, contratista, ingeniero_residente, codigo_proyecto,
-        contrato, acto_publico, monto_contrato_original, datos_adicionales
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        contrato, acto_publico, tipo_contrato, monto_contrato_original, datos_adicionales
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *
     `,
             [
@@ -389,6 +398,7 @@ router.post(
               codigo_proyecto,
               contrato,
               acto_publico,
+              tipo_contrato,
               monto_contrato_original,
               JSON.stringify(datos_adicionales),
             ],
@@ -397,13 +407,15 @@ router.post(
 
         const proyecto = result.rows[0];
 
-        // Auto-create cuenta #1
+        // Auto-create cuenta #1.
+        // monto_total mirrors the project's monto when known, otherwise 0
+        // (matches the backfill migration 071_backfill_cuenta1.sql).
         const cuentaInsert = await client.query<{ id: number }>(
           `INSERT INTO cuentas (
-            proyecto_id, numero, es_final, estado, periodo_inicio, created_by
-          ) VALUES ($1, 1, false, 'borrador', $2, $3)
+            proyecto_id, numero, es_final, monto_total, estado, periodo_inicio, created_by
+          ) VALUES ($1, 1, false, $2, 'borrador', $3, $4)
           RETURNING id`,
-          [proyecto.id, fecha_inicio || null, user.id],
+          [proyecto.id, monto_total ?? 0, fecha_inicio || null, user.id],
         );
 
         // Timeline event
@@ -517,6 +529,7 @@ router.put(
         'codigo_proyecto',
         'contrato',
         'acto_publico',
+        'tipo_contrato',
         'monto_contrato_original',
         'presupuesto_base',
         'itbms',
@@ -624,7 +637,11 @@ router.delete(
       }
 
       const { nombre } = projectResult.rows[0];
-      await query('DELETE FROM proyectos WHERE id = $1', [id]);
+      // Soft delete — keeps the row + audit trail intact, hides from list.
+      await query(
+        'UPDATE proyectos SET activo = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+        [id],
+      );
       await registrarAudit(req.user!.id, 'eliminar', 'proyecto', parseInt(id), {
         nombre,
       });

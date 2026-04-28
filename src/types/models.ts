@@ -52,6 +52,7 @@ export type ProjectStatus =
   | 'completado'
   | 'cancelado';
 export type ProjectCurrency = 'USD' | 'PAB';
+export type ProjectContractType = 'publico' | 'privado';
 
 export interface Project {
   id: number;
@@ -67,6 +68,7 @@ export interface Project {
   codigo_proyecto?: string;
   contrato?: string;
   acto_publico?: string;
+  tipo_contrato: ProjectContractType;
   monto_contrato_original?: number;
   presupuesto_base?: number;
   itbms?: number;
