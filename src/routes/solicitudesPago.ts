@@ -1440,6 +1440,7 @@ router.post(
   '/',
   [
     body('proyecto_id').isInt().withMessage('Proyecto requerido'),
+    body('solicitado_por').isInt().withMessage('Solicitante requerido'),
     body('proveedor').trim().notEmpty().withMessage('Proveedor requerido'),
     body('items')
       .isArray({ min: 1 })
