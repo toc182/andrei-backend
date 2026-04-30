@@ -453,16 +453,17 @@ router.post(
       const concepto = `Apertura de Caja Menuda — ${nombre}`;
       const solicitudResult = await client.query<{ id: number }>(
         `INSERT INTO solicitudes_pago (
-          proyecto_id, numero, fecha, proveedor, preparado_por,
+          proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
           subtotal, descuentos, impuestos, monto_total,
           estado, observaciones, beneficiario, codigo_verificacion, tipo
-        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 0, 0, $5, 'pendiente', $6, $7, $8, 'apertura')
+        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, 0, 0, $6, 'pendiente', $7, $8, $9, 'apertura')
         RETURNING id`,
         [
           proyecto_id,
           numero,
           beneficiarioNombre,
           user.id,
+          responsable_id,
           monto_asignado,
           concepto,
           beneficiarioNombre,
@@ -907,16 +908,17 @@ router.put(
 
           const solicitudResult = await client.query<{ id: number }>(
             `INSERT INTO solicitudes_pago (
-              proyecto_id, numero, fecha, proveedor, preparado_por,
+              proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
               subtotal, descuentos, impuestos, monto_total,
               estado, observaciones, beneficiario, codigo_verificacion, tipo
-            ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 0, 0, $5, 'pendiente', $6, $7, $8, 'apertura')
+            ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, 0, 0, $6, 'pendiente', $7, $8, $9, 'apertura')
             RETURNING id`,
             [
               caja.proyecto_id,
               numero,
               beneficiarioNombre,
               user.id,
+              caja.responsable_id,
               difference,
               concepto,
               beneficiarioNombre,
@@ -1655,8 +1657,9 @@ router.post(
           proyecto_id: number;
           nombre: string;
           estado: string;
+          responsable_id: number;
         }>(
-          'SELECT proyecto_id, nombre, estado FROM cajas_menudas WHERE id = $1 FOR UPDATE',
+          'SELECT proyecto_id, nombre, estado, responsable_id FROM cajas_menudas WHERE id = $1 FOR UPDATE',
           [id],
         );
 
@@ -1740,16 +1743,17 @@ router.post(
 
         const solicitudResult = await client.query<{ id: number }>(
           `INSERT INTO solicitudes_pago (
-          proyecto_id, numero, fecha, proveedor, preparado_por,
+          proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
           subtotal, descuentos, impuestos, monto_total,
           estado, observaciones, codigo_verificacion, tipo
-        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 0, 0, $5, 'pendiente', $6, $7, 'reembolso')
+        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, 0, 0, $6, 'pendiente', $7, $8, 'reembolso')
         RETURNING id`,
           [
             caja.proyecto_id,
             numero,
             `Reembolso Caja Menuda - ${caja.nombre}`,
             user.id,
+            caja.responsable_id,
             total,
             descripcionItem,
             codigoVerificacion,
