@@ -134,7 +134,8 @@ router.get(
     }>(
       `SELECT DISTINCT p.id AS proyecto_id, p.nombre AS proyecto_nombre, p.nombre_corto AS proyecto_nombre_corto,
               cl.nombre AS cliente_nombre, cl.abreviatura AS cliente_abreviatura, cl.tipo AS cliente_tipo,
-              p.tiene_ipt, p.fecha_inicio
+              p.tiene_ipt,
+              TO_CHAR(p.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio
        FROM cuentas c
        JOIN proyectos p ON p.id = c.proyecto_id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id

@@ -24,8 +24,8 @@ interface ProjectRow {
   nombre: string;
   nombre_corto?: string;
   cliente_id?: number;
-  fecha_inicio?: Date;
-  fecha_fin_estimada?: Date;
+  fecha_inicio?: string;
+  fecha_fin_estimada?: string;
   estado: ProjectState;
   contratista?: string;
   ingeniero_residente?: string;
@@ -150,7 +150,9 @@ router.get(
         result = await query<ProjectRow>(
           `
       SELECT
-        p.id, p.nombre, p.nombre_corto, p.cliente_id, p.fecha_inicio, p.fecha_fin_estimada,
+        p.id, p.nombre, p.nombre_corto, p.cliente_id,
+        TO_CHAR(p.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
+        TO_CHAR(p.fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada,
         p.estado, p.contratista, p.ingeniero_residente, p.codigo_proyecto, p.contrato,
         p.acto_publico, p.tipo_contrato, p.monto_contrato_original,
         COALESCE(p.presupuesto_base, 0) as presupuesto_base,
@@ -170,7 +172,9 @@ router.get(
         result = await query<ProjectRow>(
           `
       SELECT
-        p.id, p.nombre, p.nombre_corto, p.cliente_id, p.fecha_inicio, p.fecha_fin_estimada,
+        p.id, p.nombre, p.nombre_corto, p.cliente_id,
+        TO_CHAR(p.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
+        TO_CHAR(p.fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada,
         p.estado, p.contratista, p.ingeniero_residente, p.codigo_proyecto, p.contrato,
         p.acto_publico, p.tipo_contrato, p.tiene_ipt, p.monto_contrato_original, 0 as presupuesto_base, 0 as itbms,
         p.monto_contrato_original as monto_total, p.datos_adicionales, p.created_at, p.updated_at,
@@ -243,7 +247,10 @@ router.get(
 
       const result = await query<ProjectRow>(
         `
-    SELECT p.*, c.nombre as cliente_nombre, c.contacto as cliente_contacto,
+    SELECT p.*,
+           TO_CHAR(p.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
+           TO_CHAR(p.fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada,
+           c.nombre as cliente_nombre, c.contacto as cliente_contacto,
            c.telefono as cliente_telefono, c.email as cliente_email
     FROM proyectos p LEFT JOIN clientes c ON p.cliente_id = c.id
     WHERE p.id = $1

@@ -15,13 +15,13 @@ interface AdendaRow {
   numero_adenda: number;
   tipo: AdendaTipo;
   estado: AdendaEstado;
-  nueva_fecha_fin?: Date;
+  nueva_fecha_fin?: string;
   dias_extension?: number;
   nuevo_monto?: number;
   monto_adicional?: number;
   justificacion: string;
-  fecha_solicitud: Date;
-  fecha_aprobacion?: Date;
+  fecha_solicitud: string;
+  fecha_aprobacion?: string;
   observaciones?: string;
   proyecto_nombre?: string;
   created_at: Date;
@@ -76,6 +76,9 @@ router.get(
         `
     SELECT
       a.*,
+      TO_CHAR(a.fecha_solicitud, 'YYYY-MM-DD') AS fecha_solicitud,
+      TO_CHAR(a.fecha_aprobacion, 'YYYY-MM-DD') AS fecha_aprobacion,
+      TO_CHAR(a.nueva_fecha_fin, 'YYYY-MM-DD') AS nueva_fecha_fin,
       p.nombre as proyecto_nombre
     FROM adendas a
     JOIN proyectos p ON a.proyecto_id = p.id
@@ -384,7 +387,7 @@ router.get(
       SUM(CASE WHEN estado = 'aprobada' THEN 1 ELSE 0 END) as adendas_aprobadas,
       SUM(CASE WHEN tipo IN ('tiempo', 'mixta') AND estado = 'aprobada' THEN dias_extension ELSE 0 END) as dias_extension_total,
       SUM(CASE WHEN tipo IN ('costo', 'mixta') AND estado = 'aprobada' THEN COALESCE(monto_adicional, 0) ELSE 0 END) as monto_adicional_total,
-      MAX(CASE WHEN tipo IN ('tiempo', 'mixta') AND estado = 'aprobada' THEN nueva_fecha_fin ELSE NULL END) as fecha_fin_actual
+      TO_CHAR(MAX(CASE WHEN tipo IN ('tiempo', 'mixta') AND estado = 'aprobada' THEN nueva_fecha_fin ELSE NULL END), 'YYYY-MM-DD') as fecha_fin_actual
     FROM adendas
     WHERE proyecto_id = $1
   `,

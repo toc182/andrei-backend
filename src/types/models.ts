@@ -60,8 +60,8 @@ export interface Project {
   nombre_corto?: string;
   cliente_id?: number;
   cliente_nombre?: string;
-  fecha_inicio?: Date;
-  fecha_fin_estimada?: Date;
+  fecha_inicio?: string;
+  fecha_fin_estimada?: string;
   estado: ProjectStatus;
   contratista?: string;
   ingeniero_residente?: string;
@@ -356,7 +356,7 @@ export interface Adenda {
   descripcion: string;
   monto_adicional?: number;
   dias_adicionales?: number;
-  fecha_aprobacion?: Date;
+  fecha_aprobacion?: string;
   created_at: Date;
   updated_at: Date;
 }
