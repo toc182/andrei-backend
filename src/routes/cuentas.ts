@@ -89,7 +89,7 @@ interface CuentaRow {
   fecha_ultima_resubmision: string | null;
   fecha_pagada: string | null;
   observaciones_pago: string | null;
-  active: boolean;
+  activo: boolean;
   created_by: number;
   created_at: Date;
   updated_at: Date;
@@ -139,7 +139,7 @@ router.get(
        FROM cuentas c
        JOIN proyectos p ON p.id = c.proyecto_id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
-       WHERE c.active = TRUE ${accessFilter}
+       WHERE c.activo = TRUE ${accessFilter}
        ORDER BY p.nombre`,
       [],
     );
@@ -155,7 +155,7 @@ router.get(
     const cuentas = await query<CuentaRow & { proyecto_id: number }>(
       `SELECT c.*
        FROM cuentas c
-       WHERE c.proyecto_id = ANY($1) AND c.active = TRUE
+       WHERE c.proyecto_id = ANY($1) AND c.activo = TRUE
        ORDER BY c.numero ASC`,
       [projectIds],
     );
@@ -264,12 +264,12 @@ router.get(
   }),
 );
 
-// GET / — lista de cuentas. Filtros: proyecto_id, estado, active.
+// GET / — lista de cuentas. Filtros: proyecto_id, estado, activo.
 router.get(
   '/',
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const user = req.user!;
-    const { proyecto_id, estado, active } = req.query as Record<string, string>;
+    const { proyecto_id, estado, activo } = req.query as Record<string, string>;
 
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -282,10 +282,10 @@ router.get(
       params.push(estado);
       conditions.push(`c.estado = $${params.length}`);
     }
-    if (active === undefined || active === 'true') {
-      conditions.push(`c.active = TRUE`);
-    } else if (active === 'false') {
-      conditions.push(`c.active = FALSE`);
+    if (activo === undefined || activo === 'true') {
+      conditions.push(`c.activo = TRUE`);
+    } else if (activo === 'false') {
+      conditions.push(`c.activo = FALSE`);
     }
 
     // Restringir por acceso a proyecto si no es admin/co-admin.
@@ -508,7 +508,7 @@ router.put(
       const id = Number(req.params.id);
 
       const cur = await query<CuentaRow>(
-        'SELECT * FROM cuentas WHERE id = $1 AND active = TRUE',
+        'SELECT * FROM cuentas WHERE id = $1 AND activo = TRUE',
         [id],
       );
       if (cur.rows.length === 0) {
@@ -609,7 +609,7 @@ router.post(
          FROM cuentas c
          JOIN proyectos p ON p.id = c.proyecto_id
          LEFT JOIN clientes cl ON cl.id = p.cliente_id
-         WHERE c.id = $1 AND c.active = TRUE`,
+         WHERE c.id = $1 AND c.activo = TRUE`,
         [id],
       );
       if (cur.rows.length === 0) {
@@ -714,7 +714,7 @@ router.post(
       const { comentario } = req.body as { comentario: string };
 
       const cur = await query<CuentaRow>(
-        'SELECT * FROM cuentas WHERE id = $1 AND active = TRUE',
+        'SELECT * FROM cuentas WHERE id = $1 AND activo = TRUE',
         [id],
       );
       if (cur.rows.length === 0) {
@@ -754,7 +754,7 @@ router.post(
       }
 
       const cur = await query<CuentaRow>(
-        'SELECT * FROM cuentas WHERE id = $1 AND active = TRUE',
+        'SELECT * FROM cuentas WHERE id = $1 AND activo = TRUE',
         [id],
       );
       if (cur.rows.length === 0) {
@@ -885,7 +885,7 @@ router.delete(
       const id = Number(req.params.id);
 
       const cur = await query<CuentaRow>(
-        'SELECT * FROM cuentas WHERE id = $1 AND active = TRUE',
+        'SELECT * FROM cuentas WHERE id = $1 AND activo = TRUE',
         [id],
       );
       if (cur.rows.length === 0) {
@@ -905,7 +905,7 @@ router.delete(
         return;
       }
       await query(
-        'UPDATE cuentas SET active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+        'UPDATE cuentas SET activo = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
         [id],
       );
       await registrarAudit(user.id, 'eliminar', 'cuenta', id, {});
@@ -932,7 +932,7 @@ router.patch(
       const id = Number(req.params.id);
 
       const cur = await query<CuentaRow>(
-        'SELECT * FROM cuentas WHERE id = $1 AND active = TRUE',
+        'SELECT * FROM cuentas WHERE id = $1 AND activo = TRUE',
         [id],
       );
       if (cur.rows.length === 0) {
