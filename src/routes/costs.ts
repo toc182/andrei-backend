@@ -38,7 +38,7 @@ interface BudgetRow {
 
 interface BudgetCategoryRow {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   project_category_id: number;
   presupuesto_inicial: number;
   presupuesto_actual: number;
@@ -436,9 +436,9 @@ router.get(
         `
     SELECT bc.*, pec.nombre as categoria_nombre, pec.codigo as categoria_codigo,
            pec.color as categoria_color, pec.id as project_category_id
-    FROM budget_categories bc
+    FROM categorias_presupuesto bc
     JOIN project_expense_categories pec ON bc.project_category_id = pec.id
-    WHERE bc.project_id = $1 AND pec.activo = true
+    WHERE bc.proyecto_id = $1 AND pec.activo = true
     ORDER BY pec.nombre
   `,
         [projectId],
@@ -570,14 +570,14 @@ router.post(
           [projectId, 'PAB', notas || '', req.user!.id],
         );
 
-        await query(`DELETE FROM budget_categories WHERE project_id = $1`, [
+        await query(`DELETE FROM categorias_presupuesto WHERE proyecto_id = $1`, [
           projectId,
         ]);
 
         for (const category of categories) {
           await query(
             `
-        INSERT INTO budget_categories (project_id, project_category_id, presupuesto_inicial, presupuesto_actual)
+        INSERT INTO categorias_presupuesto (proyecto_id, project_category_id, presupuesto_inicial, presupuesto_actual)
         VALUES ($1, $2, $3, $4)
       `,
             [
@@ -941,7 +941,7 @@ router.get(
       COUNT(pe.id) as total_gastos
     FROM project_expense_categories pec
     LEFT JOIN expense_categories ec ON pec.category_id = ec.id
-    LEFT JOIN budget_categories bc ON pec.id = bc.project_category_id AND bc.project_id = $1
+    LEFT JOIN categorias_presupuesto bc ON pec.id = bc.project_category_id AND bc.proyecto_id = $1
     LEFT JOIN project_expenses pe ON pec.category_id = pe.category_id AND pe.project_id = $1 AND pe.tipo_gasto = 'real'
     WHERE pec.project_id = $1 AND pec.activo = true
     GROUP BY pec.id, pec.nombre, pec.codigo, pec.color, ec.nombre, ec.codigo, ec.color, bc.presupuesto_actual
