@@ -20,10 +20,10 @@ const router = Router();
 // Types
 interface LogEntryRow {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   titulo?: string;
   contenido: string;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
   updated_at: Date;
   creador_nombre?: string;
@@ -33,23 +33,23 @@ interface LogEntryRow {
 
 interface LogCommentRow {
   id: number;
-  entry_id: number;
+  bitacora_id: number;
   contenido: string;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
   creador_nombre?: string;
 }
 
 interface LogAttachmentRow {
   id: number;
-  entry_id?: number;
-  comment_id?: number;
-  filename: string;
-  filepath: string;
-  mimetype: string;
-  size: number;
+  bitacora_id?: number;
+  comentario_id?: number;
+  nombre_archivo: string;
+  ruta_archivo: string;
+  tipo_mime: string;
+  tamano: number;
   created_at: Date;
-  created_by?: number;
+  creado_por?: number;
 }
 
 interface QueryParams {
@@ -126,15 +126,15 @@ router.get(
     SELECT
       e.*,
       u.nombre as creador_nombre,
-      (SELECT COUNT(*) FROM project_log_comments WHERE entry_id = e.id) as comment_count,
+      (SELECT COUNT(*) FROM proyecto_bitacora_comentarios WHERE bitacora_id = e.id) as comment_count,
       (
-        SELECT COUNT(*) FROM project_log_attachments
-        WHERE entry_id = e.id
-        OR comment_id IN (SELECT id FROM project_log_comments WHERE entry_id = e.id)
+        SELECT COUNT(*) FROM proyecto_bitacora_adjuntos
+        WHERE bitacora_id = e.id
+        OR comentario_id IN (SELECT id FROM proyecto_bitacora_comentarios WHERE bitacora_id = e.id)
       ) as attachment_count
-    FROM project_log_entries e
-    JOIN users u ON e.created_by = u.id
-    WHERE e.project_id = $1
+    FROM proyecto_bitacora e
+    JOIN users u ON e.creado_por = u.id
+    WHERE e.proyecto_id = $1
     ORDER BY e.created_at DESC
     LIMIT $2 OFFSET $3
   `,
@@ -147,17 +147,17 @@ router.get(
 
       if (entryIds.length > 0) {
         const attachmentsResult = await query<LogAttachmentRow>(
-          'SELECT * FROM project_log_attachments WHERE entry_id = ANY($1) ORDER BY created_at ASC',
+          'SELECT * FROM proyecto_bitacora_adjuntos WHERE bitacora_id = ANY($1) ORDER BY created_at ASC',
           [entryIds],
         );
 
-        // Group attachments by entry_id
+        // Group attachments by bitacora_id
         attachmentsResult.rows.forEach((att) => {
-          if (att.entry_id) {
-            if (!attachmentsByEntry[att.entry_id]) {
-              attachmentsByEntry[att.entry_id] = [];
+          if (att.bitacora_id) {
+            if (!attachmentsByEntry[att.bitacora_id]) {
+              attachmentsByEntry[att.bitacora_id] = [];
             }
-            attachmentsByEntry[att.entry_id].push(att);
+            attachmentsByEntry[att.bitacora_id].push(att);
           }
         });
       }
@@ -170,7 +170,7 @@ router.get(
 
       // Get total count
       const countResult = await query<{ total: string }>(
-        'SELECT COUNT(*) as total FROM project_log_entries WHERE project_id = $1',
+        'SELECT COUNT(*) as total FROM proyecto_bitacora WHERE proyecto_id = $1',
         [projectId],
       );
 
@@ -199,8 +199,8 @@ router.get(
     SELECT
       e.*,
       u.nombre as creador_nombre
-    FROM project_log_entries e
-    JOIN users u ON e.created_by = u.id
+    FROM proyecto_bitacora e
+    JOIN users u ON e.creado_por = u.id
     WHERE e.id = $1
   `,
         [entryId],
@@ -219,9 +219,9 @@ router.get(
     SELECT
       c.*,
       u.nombre as creador_nombre
-    FROM project_log_comments c
-    JOIN users u ON c.created_by = u.id
-    WHERE c.entry_id = $1
+    FROM proyecto_bitacora_comentarios c
+    JOIN users u ON c.creado_por = u.id
+    WHERE c.bitacora_id = $1
     ORDER BY c.created_at ASC
   `,
         [entryId],
@@ -230,8 +230,8 @@ router.get(
       // Get entry attachments
       const attachmentsResult = await query<LogAttachmentRow>(
         `
-    SELECT * FROM project_log_attachments
-    WHERE entry_id = $1
+    SELECT * FROM proyecto_bitacora_adjuntos
+    WHERE bitacora_id = $1
     ORDER BY created_at ASC
   `,
         [entryId],
@@ -243,17 +243,17 @@ router.get(
 
       if (commentIds.length > 0) {
         const commentAttResult = await query<LogAttachmentRow>(
-          'SELECT * FROM project_log_attachments WHERE comment_id = ANY($1) ORDER BY created_at ASC',
+          'SELECT * FROM proyecto_bitacora_adjuntos WHERE comentario_id = ANY($1) ORDER BY created_at ASC',
           [commentIds],
         );
 
-        // Group by comment_id
+        // Group by comentario_id
         commentAttResult.rows.forEach((att) => {
-          if (att.comment_id) {
-            if (!commentAttachments[att.comment_id]) {
-              commentAttachments[att.comment_id] = [];
+          if (att.comentario_id) {
+            if (!commentAttachments[att.comentario_id]) {
+              commentAttachments[att.comentario_id] = [];
             }
-            commentAttachments[att.comment_id].push(att);
+            commentAttachments[att.comentario_id].push(att);
           }
         });
       }
@@ -300,7 +300,7 @@ router.post(
       // Create entry
       const entryResult = await query<LogEntryRow>(
         `
-    INSERT INTO project_log_entries (project_id, titulo, contenido, created_by)
+    INSERT INTO proyecto_bitacora (proyecto_id, titulo, contenido, creado_por)
     VALUES ($1, $2, $3, $4)
     RETURNING *
   `,
@@ -315,7 +315,7 @@ router.post(
         for (const file of files) {
           await query(
             `
-        INSERT INTO project_log_attachments (entry_id, filename, filepath, mimetype, size)
+        INSERT INTO proyecto_bitacora_adjuntos (bitacora_id, nombre_archivo, ruta_archivo, tipo_mime, tamano)
         VALUES ($1, $2, $3, $4, $5)
       `,
             [
@@ -333,8 +333,8 @@ router.post(
       const completeEntry = await query<LogEntryRow>(
         `
     SELECT e.*, u.nombre as creador_nombre
-    FROM project_log_entries e
-    JOIN users u ON e.created_by = u.id
+    FROM proyecto_bitacora e
+    JOIN users u ON e.creado_por = u.id
     WHERE e.id = $1
   `,
         [entry.id],
@@ -342,7 +342,7 @@ router.post(
 
       // Get attachments
       const attachments = await query<LogAttachmentRow>(
-        'SELECT * FROM project_log_attachments WHERE entry_id = $1',
+        'SELECT * FROM proyecto_bitacora_adjuntos WHERE bitacora_id = $1',
         [entry.id],
       );
 
@@ -373,8 +373,8 @@ router.put(
       const userId = req.user!.id;
 
       // Check ownership
-      const existing = await query<{ created_by: number }>(
-        'SELECT created_by FROM project_log_entries WHERE id = $1',
+      const existing = await query<{ creado_por: number }>(
+        'SELECT creado_por FROM proyecto_bitacora WHERE id = $1',
         [entryId],
       );
 
@@ -385,7 +385,7 @@ router.put(
         return;
       }
 
-      if (existing.rows[0].created_by !== userId) {
+      if (existing.rows[0].creado_por !== userId) {
         res
           .status(403)
           .json({ success: false, message: 'No puedes editar esta entrada' });
@@ -394,7 +394,7 @@ router.put(
 
       const result = await query<LogEntryRow>(
         `
-    UPDATE project_log_entries
+    UPDATE proyecto_bitacora
     SET titulo = $1, contenido = $2, updated_at = CURRENT_TIMESTAMP
     WHERE id = $3
     RETURNING *
@@ -420,8 +420,8 @@ router.delete(
       const userId = req.user!.id;
 
       // Check ownership
-      const existing = await query<{ created_by: number }>(
-        'SELECT created_by FROM project_log_entries WHERE id = $1',
+      const existing = await query<{ creado_por: number }>(
+        'SELECT creado_por FROM proyecto_bitacora WHERE id = $1',
         [entryId],
       );
 
@@ -432,7 +432,7 @@ router.delete(
         return;
       }
 
-      if (existing.rows[0].created_by !== userId) {
+      if (existing.rows[0].creado_por !== userId) {
         res
           .status(403)
           .json({ success: false, message: 'No puedes eliminar esta entrada' });
@@ -440,8 +440,8 @@ router.delete(
       }
 
       // Get attachments to delete files
-      const attachments = await query<{ filepath: string }>(
-        'SELECT filepath FROM project_log_attachments WHERE entry_id = $1',
+      const attachments = await query<{ ruta_archivo: string }>(
+        'SELECT ruta_archivo FROM proyecto_bitacora_adjuntos WHERE bitacora_id = $1',
         [entryId],
       );
 
@@ -450,7 +450,7 @@ router.delete(
         const filePath = path.join(
           __dirname,
           '../uploads/bitacora',
-          att.filepath,
+          att.ruta_archivo,
         );
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
@@ -458,7 +458,7 @@ router.delete(
       }
 
       // Delete entry (cascade will delete comments and attachments)
-      await query('DELETE FROM project_log_entries WHERE id = $1', [entryId]);
+      await query('DELETE FROM proyecto_bitacora WHERE id = $1', [entryId]);
 
       res.json({ success: true, message: 'Entrada eliminada' });
     },
@@ -485,7 +485,7 @@ router.post(
 
       // Verify entry exists
       const entryCheck = await query<{ id: number }>(
-        'SELECT id FROM project_log_entries WHERE id = $1',
+        'SELECT id FROM proyecto_bitacora WHERE id = $1',
         [entryId],
       );
 
@@ -499,7 +499,7 @@ router.post(
       // Create comment
       const result = await query<LogCommentRow>(
         `
-    INSERT INTO project_log_comments (entry_id, contenido, created_by)
+    INSERT INTO proyecto_bitacora_comentarios (bitacora_id, contenido, creado_por)
     VALUES ($1, $2, $3)
     RETURNING *
   `,
@@ -515,7 +515,7 @@ router.post(
         for (const file of files) {
           const attResult = await query<LogAttachmentRow>(
             `
-        INSERT INTO project_log_attachments (comment_id, filename, filepath, mimetype, size)
+        INSERT INTO proyecto_bitacora_adjuntos (comentario_id, nombre_archivo, ruta_archivo, tipo_mime, tamano)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING *
       `,
@@ -562,8 +562,8 @@ router.delete(
       const userId = req.user!.id;
 
       // Get attachments to delete files
-      const attachments = await query<{ filepath: string }>(
-        'SELECT filepath FROM project_log_attachments WHERE comment_id = $1',
+      const attachments = await query<{ ruta_archivo: string }>(
+        'SELECT ruta_archivo FROM proyecto_bitacora_adjuntos WHERE comentario_id = $1',
         [commentId],
       );
 
@@ -572,7 +572,7 @@ router.delete(
         const filePath = path.join(
           __dirname,
           '../uploads/bitacora',
-          att.filepath,
+          att.ruta_archivo,
         );
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
@@ -580,7 +580,7 @@ router.delete(
       }
 
       const result = await query<{ id: number }>(
-        'DELETE FROM project_log_comments WHERE id = $1 AND created_by = $2 RETURNING id',
+        'DELETE FROM proyecto_bitacora_comentarios WHERE id = $1 AND creado_por = $2 RETURNING id',
         [commentId, userId],
       );
 
@@ -613,8 +613,8 @@ router.post(
       const userId = req.user!.id;
 
       // Verify entry exists and user owns it
-      const entryCheck = await query<{ created_by: number }>(
-        'SELECT created_by FROM project_log_entries WHERE id = $1',
+      const entryCheck = await query<{ creado_por: number }>(
+        'SELECT creado_por FROM proyecto_bitacora WHERE id = $1',
         [entryId],
       );
 
@@ -625,7 +625,7 @@ router.post(
         return;
       }
 
-      if (entryCheck.rows[0].created_by !== userId) {
+      if (entryCheck.rows[0].creado_por !== userId) {
         res.status(403).json({
           success: false,
           message: 'No puedes agregar fotos a esta entrada',
@@ -645,7 +645,7 @@ router.post(
       for (const file of files) {
         const result = await query<LogAttachmentRow>(
           `
-      INSERT INTO project_log_attachments (entry_id, filename, filepath, mimetype, size)
+      INSERT INTO proyecto_bitacora_adjuntos (bitacora_id, nombre_archivo, ruta_archivo, tipo_mime, tamano)
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `,
@@ -675,11 +675,11 @@ router.delete(
       const userId = req.user!.id;
 
       // Get attachment and verify ownership
-      const attachment = await query<LogAttachmentRow & { created_by: number }>(
+      const attachment = await query<LogAttachmentRow & { creado_por: number }>(
         `
-    SELECT a.*, e.created_by
-    FROM project_log_attachments a
-    JOIN project_log_entries e ON a.entry_id = e.id
+    SELECT a.*, e.creado_por
+    FROM proyecto_bitacora_adjuntos a
+    JOIN proyecto_bitacora e ON a.bitacora_id = e.id
     WHERE a.id = $1
   `,
         [attachmentId],
@@ -692,7 +692,7 @@ router.delete(
         return;
       }
 
-      if (attachment.rows[0].created_by !== userId) {
+      if (attachment.rows[0].creado_por !== userId) {
         res
           .status(403)
           .json({ success: false, message: 'No puedes eliminar este archivo' });
@@ -703,14 +703,14 @@ router.delete(
       const filePath = path.join(
         __dirname,
         '../uploads/bitacora',
-        attachment.rows[0].filepath,
+        attachment.rows[0].ruta_archivo,
       );
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
       }
 
       // Delete from database
-      await query('DELETE FROM project_log_attachments WHERE id = $1', [
+      await query('DELETE FROM proyecto_bitacora_adjuntos WHERE id = $1', [
         attachmentId,
       ]);
 

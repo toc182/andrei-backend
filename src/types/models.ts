@@ -273,30 +273,30 @@ export interface ProjectTodoComment {
 // ==================== PROJECT BITACORA ====================
 export interface ProjectLogEntry {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   titulo: string;
   contenido: string;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
   updated_at: Date;
 }
 
 export interface ProjectLogComment {
   id: number;
-  entry_id: number;
+  bitacora_id: number;
   contenido: string;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
 }
 
 export interface ProjectLogAttachment {
   id: number;
-  entry_id?: number;
-  comment_id?: number;
-  filename: string;
-  original_name: string;
-  mimetype: string;
-  size: number;
+  bitacora_id?: number;
+  comentario_id?: number;
+  nombre_archivo: string;
+  ruta_archivo: string;
+  tipo_mime: string;
+  tamano: number;
   created_at: Date;
 }
 
