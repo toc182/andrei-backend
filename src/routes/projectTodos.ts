@@ -14,7 +14,7 @@ const router = Router();
 // Types
 interface TodoCategoryRow {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   nombre: string;
   color: string;
   activo: boolean;
@@ -24,15 +24,15 @@ interface TodoCategoryRow {
 
 interface TodoRow {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   titulo: string;
   descripcion?: string;
-  category_id?: number;
+  categoria_id?: number;
   asignado_a?: number;
   fecha_limite?: Date;
   prioridad: 'alta' | 'media' | 'baja';
   estado: 'pendiente' | 'completado';
-  created_by: number;
+  creado_por: number;
   completado_por?: number;
   completado_at?: Date;
   created_at: Date;
@@ -55,7 +55,7 @@ interface TodoStatsRow {
 
 interface TodoCommentRow {
   id: number;
-  todo_id: number;
+  tarea_id: number;
   user_id: number;
   contenido: string;
   created_at: Date;
@@ -66,7 +66,7 @@ interface QueryParams {
   estado?: string;
   prioridad?: string;
   asignado_a?: string;
-  category_id?: string;
+  categoria_id?: string;
 }
 
 interface CreateCategoryBody {
@@ -77,7 +77,7 @@ interface CreateCategoryBody {
 interface CreateTodoBody {
   titulo: string;
   descripcion?: string;
-  category_id?: number;
+  categoria_id?: number;
   asignado_a?: number;
   fecha_limite?: string;
   prioridad?: 'alta' | 'media' | 'baja';
@@ -104,8 +104,8 @@ router.get(
 
       const result = await query<TodoCategoryRow>(
         `
-    SELECT * FROM project_todo_categories
-    WHERE project_id = $1 AND activo = true
+    SELECT * FROM proyecto_categorias_tareas
+    WHERE proyecto_id = $1 AND activo = true
     ORDER BY nombre
   `,
         [projectId],
@@ -144,8 +144,8 @@ router.post(
       // Check if an inactive category with this name exists (soft-deleted)
       const existing = await query<TodoCategoryRow>(
         `
-    SELECT * FROM project_todo_categories
-    WHERE project_id = $1 AND nombre = $2 AND activo = false
+    SELECT * FROM proyecto_categorias_tareas
+    WHERE proyecto_id = $1 AND nombre = $2 AND activo = false
   `,
         [projectId, nombre],
       );
@@ -155,7 +155,7 @@ router.post(
         // Reactivate the soft-deleted category
         result = await query<TodoCategoryRow>(
           `
-      UPDATE project_todo_categories
+      UPDATE proyecto_categorias_tareas
       SET activo = true, color = $1, updated_at = CURRENT_TIMESTAMP
       WHERE id = $2
       RETURNING *
@@ -166,7 +166,7 @@ router.post(
         // Create new category
         result = await query<TodoCategoryRow>(
           `
-      INSERT INTO project_todo_categories (project_id, nombre, color)
+      INSERT INTO proyecto_categorias_tareas (proyecto_id, nombre, color)
       VALUES ($1, $2, $3)
       RETURNING *
     `,
@@ -203,7 +203,7 @@ router.put(
 
       const result = await query<TodoCategoryRow>(
         `
-    UPDATE project_todo_categories
+    UPDATE proyecto_categorias_tareas
     SET nombre = COALESCE($1, nombre),
         color = COALESCE($2, color),
         updated_at = CURRENT_TIMESTAMP
@@ -238,19 +238,19 @@ router.delete(
 
       await query(
         `
-    UPDATE project_todo_categories
+    UPDATE proyecto_categorias_tareas
     SET activo = false, updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
   `,
         [id],
       );
 
-      // Set category_id to null for todos using this category
+      // Set categoria_id to null for todos using this category
       await query(
         `
-    UPDATE project_todos
-    SET category_id = NULL
-    WHERE category_id = $1
+    UPDATE proyecto_tareas
+    SET categoria_id = NULL
+    WHERE categoria_id = $1
   `,
         [id],
       );
@@ -274,7 +274,7 @@ router.get(
       res: Response,
     ): Promise<void> => {
       const { projectId } = req.params;
-      const { estado, prioridad, asignado_a, category_id } = req.query;
+      const { estado, prioridad, asignado_a, categoria_id } = req.query;
 
       let sql = `
     SELECT
@@ -289,14 +289,14 @@ router.get(
         ELSE NULL
       END as asignado_nombre,
       pm.tipo_miembro as asignado_tipo
-    FROM project_todos t
-    LEFT JOIN project_todo_categories c ON t.category_id = c.id
-    LEFT JOIN users u ON t.created_by = u.id
+    FROM proyecto_tareas t
+    LEFT JOIN proyecto_categorias_tareas c ON t.categoria_id = c.id
+    LEFT JOIN users u ON t.creado_por = u.id
     LEFT JOIN users uc ON t.completado_por = uc.id
     LEFT JOIN project_members pm ON t.asignado_a = pm.id
     LEFT JOIN users usr ON pm.user_id = usr.id AND pm.tipo_miembro = 'usuario'
     LEFT JOIN external_contacts ec ON pm.external_contact_id = ec.id AND pm.tipo_miembro = 'externo'
-    WHERE t.project_id = $1
+    WHERE t.proyecto_id = $1
   `;
 
       const params: unknown[] = [projectId];
@@ -320,9 +320,9 @@ router.get(
         paramIndex++;
       }
 
-      if (category_id) {
-        sql += ` AND t.category_id = $${paramIndex}`;
-        params.push(category_id);
+      if (categoria_id) {
+        sql += ` AND t.categoria_id = $${paramIndex}`;
+        params.push(categoria_id);
         paramIndex++;
       }
 
@@ -343,8 +343,8 @@ router.get(
       COUNT(*) FILTER (WHERE estado = 'pendiente') as pendientes,
       COUNT(*) FILTER (WHERE estado = 'completado') as completados,
       COUNT(*) FILTER (WHERE prioridad = 'alta' AND estado = 'pendiente') as alta_prioridad
-    FROM project_todos
-    WHERE project_id = $1
+    FROM proyecto_tareas
+    WHERE proyecto_id = $1
   `,
         [projectId],
       );
@@ -365,7 +365,7 @@ router.post(
   [
     body('titulo').trim().notEmpty().withMessage('Título es requerido'),
     body('descripcion').optional({ nullable: true }).trim(),
-    body('category_id').optional({ nullable: true }),
+    body('categoria_id').optional({ nullable: true }),
     body('asignado_a').optional({ nullable: true }),
     body('fecha_limite').optional({ nullable: true }),
     body('prioridad')
@@ -387,7 +387,7 @@ router.post(
       const {
         titulo,
         descripcion,
-        category_id,
+        categoria_id,
         asignado_a,
         fecha_limite,
         prioridad,
@@ -396,9 +396,9 @@ router.post(
 
       const result = await query<TodoRow>(
         `
-    INSERT INTO project_todos (
-      project_id, titulo, descripcion, category_id, asignado_a,
-      fecha_limite, prioridad, created_by
+    INSERT INTO proyecto_tareas (
+      proyecto_id, titulo, descripcion, categoria_id, asignado_a,
+      fecha_limite, prioridad, creado_por
     )
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     RETURNING *
@@ -407,7 +407,7 @@ router.post(
           projectId,
           titulo,
           descripcion || null,
-          category_id || null,
+          categoria_id || null,
           asignado_a || null,
           fecha_limite || null,
           prioridad || 'media',
@@ -430,7 +430,7 @@ router.put(
   [
     body('titulo').optional({ nullable: true }).trim().notEmpty(),
     body('descripcion').optional({ nullable: true }).trim(),
-    body('category_id').optional({ nullable: true }),
+    body('categoria_id').optional({ nullable: true }),
     body('asignado_a').optional({ nullable: true }),
     body('fecha_limite').optional({ nullable: true }),
     body('prioridad')
@@ -446,7 +446,7 @@ router.put(
       const {
         titulo,
         descripcion,
-        category_id,
+        categoria_id,
         asignado_a,
         fecha_limite,
         prioridad,
@@ -454,10 +454,10 @@ router.put(
 
       const result = await query<TodoRow>(
         `
-    UPDATE project_todos
+    UPDATE proyecto_tareas
     SET titulo = COALESCE($1, titulo),
         descripcion = COALESCE($2, descripcion),
-        category_id = $3,
+        categoria_id = $3,
         asignado_a = $4,
         fecha_limite = $5,
         prioridad = COALESCE($6, prioridad),
@@ -468,7 +468,7 @@ router.put(
         [
           titulo,
           descripcion,
-          category_id || null,
+          categoria_id || null,
           asignado_a || null,
           fecha_limite || null,
           prioridad,
@@ -502,7 +502,7 @@ router.patch(
 
       // Get current state
       const current = await query<{ estado: string }>(
-        'SELECT estado FROM project_todos WHERE id = $1',
+        'SELECT estado FROM proyecto_tareas WHERE id = $1',
         [id],
       );
       if (current.rows.length === 0) {
@@ -518,7 +518,7 @@ router.patch(
       // Calculate values in JS to avoid PostgreSQL type inference issues
       const result = await query<TodoRow>(
         `
-    UPDATE project_todos
+    UPDATE proyecto_tareas
     SET estado = $1,
         completado_at = $2,
         completado_por = $3,
@@ -551,7 +551,7 @@ router.delete(
       const { id } = req.params;
 
       const result = await query<{ id: number }>(
-        'DELETE FROM project_todos WHERE id = $1 RETURNING id',
+        'DELETE FROM proyecto_tareas WHERE id = $1 RETURNING id',
         [id],
       );
 
@@ -584,9 +584,9 @@ router.get(
     SELECT
       c.*,
       u.nombre as usuario_nombre
-    FROM project_todo_comments c
+    FROM proyecto_tareas_comentarios c
     JOIN users u ON c.user_id = u.id
-    WHERE c.todo_id = $1
+    WHERE c.tarea_id = $1
     ORDER BY c.created_at ASC
   `,
         [todoId],
@@ -627,7 +627,7 @@ router.post(
 
       const result = await query<TodoCommentRow>(
         `
-    INSERT INTO project_todo_comments (todo_id, user_id, contenido)
+    INSERT INTO proyecto_tareas_comentarios (tarea_id, user_id, contenido)
     VALUES ($1, $2, $3)
     RETURNING *
   `,
@@ -665,7 +665,7 @@ router.delete(
 
       // Only allow deleting own comments
       const result = await query<{ id: number }>(
-        'DELETE FROM project_todo_comments WHERE id = $1 AND user_id = $2 RETURNING id',
+        'DELETE FROM proyecto_tareas_comentarios WHERE id = $1 AND user_id = $2 RETURNING id',
         [commentId, userId],
       );
 

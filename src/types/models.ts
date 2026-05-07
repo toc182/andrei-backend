@@ -237,7 +237,7 @@ export type TodoPriority = 'baja' | 'media' | 'alta';
 
 export interface ProjectTodoCategory {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   nombre: string;
   color?: string;
   orden: number;
@@ -247,15 +247,15 @@ export interface ProjectTodoCategory {
 
 export interface ProjectTodo {
   id: number;
-  project_id: number;
-  category_id?: number;
+  proyecto_id: number;
+  categoria_id?: number;
   titulo: string;
   descripcion?: string;
   estado: TodoStatus;
   prioridad: TodoPriority;
   fecha_vencimiento?: Date;
   asignado_a?: number;
-  created_by: number;
+  creado_por: number;
   completado_at?: Date;
   completado_por?: number;
   created_at: Date;
@@ -264,9 +264,9 @@ export interface ProjectTodo {
 
 export interface ProjectTodoComment {
   id: number;
-  todo_id: number;
+  tarea_id: number;
   contenido: string;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
 }
 
