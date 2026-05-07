@@ -16,7 +16,7 @@ interface ExternalContactRow {
   activo: boolean;
   created_at: Date;
   updated_at: Date;
-  created_by?: number;
+  creado_por?: number;
   creado_por_nombre?: string;
 }
 
@@ -53,10 +53,10 @@ router.get(
       ec.activo,
       ec.created_at,
       ec.updated_at,
-      ec.created_by,
+      ec.creado_por,
       u.nombre as creado_por_nombre
-    FROM external_contacts ec
-    LEFT JOIN users u ON ec.created_by = u.id
+    FROM contactos_externos ec
+    LEFT JOIN users u ON ec.creado_por = u.id
     ${whereClause}
     ORDER BY ec.nombre
   `);
@@ -98,10 +98,10 @@ router.get(
       ec.activo,
       ec.created_at,
       ec.updated_at,
-      ec.created_by,
+      ec.creado_por,
       u.nombre as creado_por_nombre
-    FROM external_contacts ec
-    LEFT JOIN users u ON ec.created_by = u.id
+    FROM contactos_externos ec
+    LEFT JOIN users u ON ec.creado_por = u.id
     WHERE ec.id = $1
   `,
         [id],
@@ -133,7 +133,7 @@ router.post(
       res: Response,
     ): Promise<void> => {
       const { nombre, cargo, telefono, email, notas } = req.body;
-      const created_by = req.user!.id;
+      const creado_por = req.user!.id;
 
       if (!nombre || nombre.trim() === '') {
         res.status(400).json({
@@ -145,7 +145,7 @@ router.post(
 
       const result = await query<ExternalContactRow>(
         `
-    INSERT INTO external_contacts (nombre, cargo, telefono, email, notas, created_by)
+    INSERT INTO contactos_externos (nombre, cargo, telefono, email, notas, creado_por)
     VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *
   `,
@@ -155,7 +155,7 @@ router.post(
           telefono?.trim() || null,
           email?.trim() || null,
           notas?.trim() || null,
-          created_by,
+          creado_por,
         ],
       );
 
@@ -190,7 +190,7 @@ router.put(
 
       const result = await query<ExternalContactRow>(
         `
-    UPDATE external_contacts
+    UPDATE contactos_externos
     SET
       nombre = $1,
       cargo = $2,
@@ -257,7 +257,7 @@ router.delete(
 
       const result = await query<ExternalContactRow>(
         `
-    UPDATE external_contacts
+    UPDATE contactos_externos
     SET activo = false, updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
     RETURNING *
@@ -291,7 +291,7 @@ router.patch(
 
       const result = await query<ExternalContactRow>(
         `
-    UPDATE external_contacts
+    UPDATE contactos_externos
     SET activo = true, updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
     RETURNING *

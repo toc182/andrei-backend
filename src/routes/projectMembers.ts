@@ -85,7 +85,7 @@ router.get(
       u.tipo_usuario
     FROM proyecto_miembros pm
     LEFT JOIN users u ON pm.user_id = u.id AND pm.tipo_miembro = 'usuario'
-    LEFT JOIN external_contacts ec ON pm.contacto_externo_id = ec.id AND pm.tipo_miembro = 'externo'
+    LEFT JOIN contactos_externos ec ON pm.contacto_externo_id = ec.id AND pm.tipo_miembro = 'externo'
     WHERE pm.proyecto_id = $1 AND pm.activo = true
     ORDER BY COALESCE(u.nombre, ec.nombre)
   `,
@@ -126,7 +126,7 @@ router.get(
   asyncHandler(async (_req: Request, res: Response): Promise<void> => {
     const result = await query<ExternalContactRow>(`
     SELECT id, nombre, cargo, telefono, email
-    FROM external_contacts
+    FROM contactos_externos
     WHERE activo = true
     ORDER BY nombre
   `);
@@ -285,7 +285,7 @@ router.post(
       ec.email as externo_email,
       ec.nombre as nombre_display
     FROM proyecto_miembros pm
-    JOIN external_contacts ec ON pm.contacto_externo_id = ec.id
+    JOIN contactos_externos ec ON pm.contacto_externo_id = ec.id
     WHERE pm.id = $1
   `,
         [result.rows[0].id],
