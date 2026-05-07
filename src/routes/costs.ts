@@ -25,13 +25,13 @@ interface ProjectCategoryRow extends CategoryRow {
 
 interface BudgetRow {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   moneda: string;
   notas?: string;
   proyecto_nombre?: string;
   monto_contrato_original?: number;
-  created_by: number;
-  updated_by?: number;
+  creado_por: number;
+  actualizado_por?: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -425,9 +425,9 @@ router.get(
       const budgetResult = await query<BudgetRow>(
         `
     SELECT pb.*, p.nombre as proyecto_nombre, p.monto_contrato_original
-    FROM project_budgets pb
-    LEFT JOIN proyectos p ON pb.project_id = p.id
-    WHERE pb.project_id = $1
+    FROM proyecto_presupuestos pb
+    LEFT JOIN proyectos p ON pb.proyecto_id = p.id
+    WHERE pb.proyecto_id = $1
   `,
         [projectId],
       );
@@ -561,10 +561,10 @@ router.post(
 
         await query(
           `
-      INSERT INTO project_budgets (project_id, moneda, notas, created_by)
+      INSERT INTO proyecto_presupuestos (proyecto_id, moneda, notas, creado_por)
       VALUES ($1, $2, $3, $4)
-      ON CONFLICT (project_id)
-      DO UPDATE SET notas = $3, updated_at = CURRENT_TIMESTAMP, updated_by = $4
+      ON CONFLICT (proyecto_id)
+      DO UPDATE SET notas = $3, updated_at = CURRENT_TIMESTAMP, actualizado_por = $4
       RETURNING id
     `,
           [projectId, 'PAB', notas || '', req.user!.id],
@@ -915,8 +915,8 @@ router.get(
       const budgetResult = await query<BudgetRow>(
         `
     SELECT pb.*, p.nombre as proyecto_nombre
-    FROM project_budgets pb JOIN proyectos p ON pb.project_id = p.id
-    WHERE pb.project_id = $1
+    FROM proyecto_presupuestos pb JOIN proyectos p ON pb.proyecto_id = p.id
+    WHERE pb.proyecto_id = $1
   `,
         [projectId],
       );
