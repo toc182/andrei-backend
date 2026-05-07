@@ -137,14 +137,14 @@ export interface ExpenseCategory {
 
 export interface ProjectExpense {
   id: number;
-  project_id: number;
-  category_id?: number;
-  project_expense_category_id?: number;
+  proyecto_id: number;
+  categoria_id?: number;
+  proyecto_categoria_id?: number;
   descripcion: string;
   monto: number;
   fecha: Date;
   tipo: ExpenseType;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
   updated_at: Date;
 }

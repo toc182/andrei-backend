@@ -17,10 +17,10 @@ interface CategoryRow {
 }
 
 interface ProjectCategoryRow extends CategoryRow {
-  project_id: number;
-  category_id?: number;
+  proyecto_id: number;
+  categoria_id?: number;
   is_custom: boolean;
-  project_category_id?: number;
+  proyecto_categoria_id?: number;
 }
 
 interface BudgetRow {
@@ -39,7 +39,7 @@ interface BudgetRow {
 interface BudgetCategoryRow {
   id: number;
   proyecto_id: number;
-  project_category_id: number;
+  proyecto_categoria_id: number;
   presupuesto_inicial: number;
   presupuesto_actual: number;
   categoria_nombre?: string;
@@ -49,8 +49,8 @@ interface BudgetCategoryRow {
 
 interface ExpenseRow {
   id: number;
-  project_id: number;
-  category_id: number;
+  proyecto_id: number;
+  categoria_id: number;
   fecha: Date;
   concepto: string;
   descripcion?: string;
@@ -61,12 +61,12 @@ interface ExpenseRow {
   categoria_codigo?: string;
   categoria_color?: string;
   creado_por_nombre?: string;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
 }
 
 interface ExpenseSummary {
-  category_id: number;
+  categoria_id: number;
   categoria_nombre: string;
   categoria_codigo: string;
   total_gastado: string;
@@ -194,7 +194,7 @@ router.get(
 
       const hasCustomSettings = await query<{ count: string }>(
         `
-    SELECT COUNT(*) as count FROM project_expense_categories WHERE project_id = $1
+    SELECT COUNT(*) as count FROM proyecto_categorias_gastos WHERE proyecto_id = $1
   `,
         [projectId],
       );
@@ -206,15 +206,15 @@ router.get(
       const result = await query<ProjectCategoryRow>(
         `
     SELECT
-      pec.id, pec.project_id, pec.category_id,
+      pec.id, pec.proyecto_id, pec.categoria_id,
       COALESCE(pec.nombre, ec.nombre) as nombre,
       COALESCE(pec.codigo, ec.codigo) as codigo,
       COALESCE(pec.color, ec.color) as color,
       pec.activo, pec.orden,
-      CASE WHEN pec.category_id IS NOT NULL THEN false ELSE true END as is_custom
-    FROM project_expense_categories pec
-    LEFT JOIN expense_categories ec ON pec.category_id = ec.id
-    WHERE pec.project_id = $1 AND pec.activo = true
+      CASE WHEN pec.categoria_id IS NOT NULL THEN false ELSE true END as is_custom
+    FROM proyecto_categorias_gastos pec
+    LEFT JOIN expense_categories ec ON pec.categoria_id = ec.id
+    WHERE pec.proyecto_id = $1 AND pec.activo = true
     ORDER BY pec.orden, COALESCE(pec.nombre, ec.nombre)
   `,
         [projectId],
@@ -239,10 +239,10 @@ router.get(
 
       const result = await query<ProjectCategoryRow>(
         `
-    SELECT pec.id, pec.category_id, ec.nombre, ec.codigo, ec.color
-    FROM project_expense_categories pec
-    JOIN expense_categories ec ON pec.category_id = ec.id
-    WHERE pec.project_id = $1 AND pec.activo = false
+    SELECT pec.id, pec.categoria_id, ec.nombre, ec.codigo, ec.color
+    FROM proyecto_categorias_gastos pec
+    JOIN expense_categories ec ON pec.categoria_id = ec.id
+    WHERE pec.proyecto_id = $1 AND pec.activo = false
     ORDER BY ec.orden, ec.nombre
   `,
         [projectId],
@@ -271,9 +271,9 @@ router.delete(
 
       const expenseCheck = await query<{ count: string }>(
         `
-    SELECT COUNT(*) as count FROM project_expenses
-    WHERE project_id = $1 AND category_id = (
-      SELECT COALESCE(category_id, $2) FROM project_expense_categories WHERE id = $2
+    SELECT COUNT(*) as count FROM proyecto_gastos
+    WHERE proyecto_id = $1 AND categoria_id = (
+      SELECT COALESCE(categoria_id, $2) FROM proyecto_categorias_gastos WHERE id = $2
     )
   `,
         [projectId, categoryId],
@@ -289,8 +289,8 @@ router.delete(
 
       await query(
         `
-    UPDATE project_expense_categories SET activo = false, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $1 AND project_id = $2
+    UPDATE proyecto_categorias_gastos SET activo = false, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1 AND proyecto_id = $2
   `,
         [categoryId, projectId],
       );
@@ -318,8 +318,8 @@ router.post(
 
       await query(
         `
-    UPDATE project_expense_categories SET activo = true, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $1 AND project_id = $2
+    UPDATE proyecto_categorias_gastos SET activo = true, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1 AND proyecto_id = $2
   `,
         [categoryId, projectId],
       );
@@ -373,14 +373,14 @@ router.post(
 
       const maxOrder = await query<{ next_orden: number }>(
         `
-    SELECT COALESCE(MAX(orden), 0) + 1 as next_orden FROM project_expense_categories WHERE project_id = $1
+    SELECT COALESCE(MAX(orden), 0) + 1 as next_orden FROM proyecto_categorias_gastos WHERE proyecto_id = $1
   `,
         [projectId],
       );
 
       const result = await query<ProjectCategoryRow>(
         `
-    INSERT INTO project_expense_categories (project_id, category_id, nombre, codigo, color, activo, orden)
+    INSERT INTO proyecto_categorias_gastos (proyecto_id, categoria_id, nombre, codigo, color, activo, orden)
     VALUES ($1, NULL, $2, $3, $4, true, $5)
     RETURNING *
   `,
@@ -435,9 +435,9 @@ router.get(
       const categoriesResult = await query<BudgetCategoryRow>(
         `
     SELECT bc.*, pec.nombre as categoria_nombre, pec.codigo as categoria_codigo,
-           pec.color as categoria_color, pec.id as project_category_id
+           pec.color as categoria_color, pec.id as proyecto_categoria_id
     FROM categorias_presupuesto bc
-    JOIN project_expense_categories pec ON bc.project_category_id = pec.id
+    JOIN proyecto_categorias_gastos pec ON bc.proyecto_categoria_id = pec.id
     WHERE bc.proyecto_id = $1 AND pec.activo = true
     ORDER BY pec.nombre
   `,
@@ -446,12 +446,12 @@ router.get(
 
       const expensesResult = await query<ExpenseSummary>(
         `
-    SELECT pe.category_id, ec.nombre as categoria_nombre, ec.codigo as categoria_codigo,
+    SELECT pe.categoria_id, ec.nombre as categoria_nombre, ec.codigo as categoria_codigo,
            SUM(pe.monto) as total_gastado, COUNT(pe.id) as total_gastos
-    FROM project_expenses pe
-    JOIN expense_categories ec ON pe.category_id = ec.id
-    WHERE pe.project_id = $1 AND pe.tipo_gasto = 'real'
-    GROUP BY pe.category_id, ec.nombre, ec.codigo, ec.orden
+    FROM proyecto_gastos pe
+    JOIN expense_categories ec ON pe.categoria_id = ec.id
+    WHERE pe.proyecto_id = $1 AND pe.tipo_gasto = 'real'
+    GROUP BY pe.categoria_id, ec.nombre, ec.codigo, ec.orden
     ORDER BY ec.orden, ec.nombre
   `,
         [projectId],
@@ -509,7 +509,7 @@ router.post(
   [
     param('projectId').isInt().withMessage('ID de proyecto inválido'),
     body('categories').isArray().withMessage('Categorías debe ser un array'),
-    body('categories.*.project_category_id')
+    body('categories.*.proyecto_categoria_id')
       .isInt()
       .withMessage('ID de categoría inválido'),
     body('categories.*.presupuesto_inicial')
@@ -527,7 +527,7 @@ router.post(
         {
           notas?: string;
           categories: Array<{
-            project_category_id: number;
+            proyecto_categoria_id: number;
             presupuesto_inicial: number;
             presupuesto_actual: number;
           }>;
@@ -577,12 +577,12 @@ router.post(
         for (const category of categories) {
           await query(
             `
-        INSERT INTO categorias_presupuesto (proyecto_id, project_category_id, presupuesto_inicial, presupuesto_actual)
+        INSERT INTO categorias_presupuesto (proyecto_id, proyecto_categoria_id, presupuesto_inicial, presupuesto_actual)
         VALUES ($1, $2, $3, $4)
       `,
             [
               projectId,
-              category.project_category_id,
+              category.proyecto_categoria_id,
               category.presupuesto_inicial,
               category.presupuesto_actual,
             ],
@@ -635,12 +635,12 @@ router.get(
       } = req.query;
       const offset = (parseInt(page) - 1) * parseInt(limit);
 
-      let whereClause = 'WHERE pe.project_id = $1';
+      let whereClause = 'WHERE pe.proyecto_id = $1';
       const queryParams: unknown[] = [projectId];
       let paramCounter = 2;
 
       if (categoria) {
-        whereClause += ` AND pe.category_id = $${paramCounter}`;
+        whereClause += ` AND pe.categoria_id = $${paramCounter}`;
         queryParams.push(categoria);
         paramCounter++;
       }
@@ -680,10 +680,10 @@ router.get(
            COALESCE(pec.codigo, ec.codigo) as categoria_codigo,
            COALESCE(pec.color, ec.color) as categoria_color,
            u.nombre as creado_por_nombre
-    FROM project_expenses pe
-    LEFT JOIN project_expense_categories pec ON pe.project_category_id = pec.id
-    LEFT JOIN expense_categories ec ON COALESCE(pec.category_id, pe.category_id) = ec.id
-    LEFT JOIN users u ON pe.created_by = u.id
+    FROM proyecto_gastos pe
+    LEFT JOIN proyecto_categorias_gastos pec ON pe.proyecto_categoria_id = pec.id
+    LEFT JOIN expense_categories ec ON COALESCE(pec.categoria_id, pe.categoria_id) = ec.id
+    LEFT JOIN users u ON pe.creado_por = u.id
     ${whereClause}
     ORDER BY pe.fecha DESC, pe.created_at DESC
     LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
@@ -693,7 +693,7 @@ router.get(
 
       const countResult = await query<{ total: string }>(
         `
-    SELECT COUNT(*) as total FROM project_expenses pe ${whereClause}
+    SELECT COUNT(*) as total FROM proyecto_gastos pe ${whereClause}
   `,
         queryParams,
       );
@@ -736,7 +736,7 @@ router.post(
   authenticateToken,
   [
     param('projectId').isInt().withMessage('ID de proyecto inválido'),
-    body('category_id').isInt().withMessage('Categoría es requerida'),
+    body('proyecto_categoria_id').isInt().withMessage('Categoría es requerida'),
     body('fecha').isDate().withMessage('Fecha inválida'),
     body('concepto')
       .trim()
@@ -756,7 +756,7 @@ router.post(
         { projectId: string },
         object,
         {
-          category_id: number;
+          proyecto_categoria_id: number;
           fecha: string;
           concepto: string;
           descripcion?: string;
@@ -779,7 +779,7 @@ router.post(
 
       const { projectId } = req.params;
       const {
-        category_id: project_category_id,
+        proyecto_categoria_id,
         fecha,
         concepto,
         descripcion,
@@ -788,12 +788,12 @@ router.post(
         tipo_gasto = 'real',
       } = req.body;
 
-      // Look up the global category_id from project_expense_categories for backward compatibility
-      const categoryLookup = await query<{ category_id: number | null }>(
+      // Look up the global categoria_id from proyecto_categorias_gastos for backward compatibility
+      const categoryLookup = await query<{ categoria_id: number | null }>(
         `
-    SELECT category_id FROM project_expense_categories WHERE id = $1 AND project_id = $2
+    SELECT categoria_id FROM proyecto_categorias_gastos WHERE id = $1 AND proyecto_id = $2
   `,
-        [project_category_id, projectId],
+        [proyecto_categoria_id, projectId],
       );
 
       if (categoryLookup.rows.length === 0) {
@@ -804,17 +804,17 @@ router.post(
         return;
       }
 
-      const global_category_id = categoryLookup.rows[0].category_id;
+      const global_category_id = categoryLookup.rows[0].categoria_id;
 
       const result = await query<ExpenseRow>(
         `
-    INSERT INTO project_expenses (project_id, project_category_id, category_id, fecha, concepto, descripcion, monto, moneda, tipo_gasto, created_by)
+    INSERT INTO proyecto_gastos (proyecto_id, proyecto_categoria_id, categoria_id, fecha, concepto, descripcion, monto, moneda, tipo_gasto, creado_por)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     RETURNING *
   `,
         [
           projectId,
-          project_category_id,
+          proyecto_categoria_id,
           global_category_id,
           fecha,
           concepto,
@@ -862,7 +862,7 @@ router.delete(
 
       const expense = await query<{ id: number }>(
         `
-    SELECT id FROM project_expenses WHERE id = $1 AND project_id = $2
+    SELECT id FROM proyecto_gastos WHERE id = $1 AND proyecto_id = $2
   `,
         [expenseId, projectId],
       );
@@ -874,7 +874,7 @@ router.delete(
         return;
       }
 
-      await query('DELETE FROM project_expenses WHERE id = $1', [expenseId]);
+      await query('DELETE FROM proyecto_gastos WHERE id = $1', [expenseId]);
 
       res.json({ success: true, message: 'Gasto eliminado exitosamente' });
     },
@@ -922,7 +922,7 @@ router.get(
       );
 
       const expensesByCategory = await query<{
-        project_category_id: number;
+        proyecto_categoria_id: number;
         nombre: string;
         codigo: string;
         color: string;
@@ -932,18 +932,18 @@ router.get(
       }>(
         `
     SELECT
-      pec.id as project_category_id,
+      pec.id as proyecto_categoria_id,
       COALESCE(pec.nombre, ec.nombre) as nombre,
       COALESCE(pec.codigo, ec.codigo) as codigo,
       COALESCE(pec.color, ec.color) as color,
       COALESCE(bc.presupuesto_actual, 0) as presupuesto_actual,
       COALESCE(SUM(pe.monto), 0) as gastado,
       COUNT(pe.id) as total_gastos
-    FROM project_expense_categories pec
-    LEFT JOIN expense_categories ec ON pec.category_id = ec.id
-    LEFT JOIN categorias_presupuesto bc ON pec.id = bc.project_category_id AND bc.proyecto_id = $1
-    LEFT JOIN project_expenses pe ON pec.category_id = pe.category_id AND pe.project_id = $1 AND pe.tipo_gasto = 'real'
-    WHERE pec.project_id = $1 AND pec.activo = true
+    FROM proyecto_categorias_gastos pec
+    LEFT JOIN expense_categories ec ON pec.categoria_id = ec.id
+    LEFT JOIN categorias_presupuesto bc ON pec.id = bc.proyecto_categoria_id AND bc.proyecto_id = $1
+    LEFT JOIN proyecto_gastos pe ON pec.categoria_id = pe.categoria_id AND pe.proyecto_id = $1 AND pe.tipo_gasto = 'real'
+    WHERE pec.proyecto_id = $1 AND pec.activo = true
     GROUP BY pec.id, pec.nombre, pec.codigo, pec.color, ec.nombre, ec.codigo, ec.color, bc.presupuesto_actual
     ORDER BY COALESCE(pec.nombre, ec.nombre)
   `,
@@ -965,10 +965,10 @@ router.get(
       const recentExpenses = await query<ExpenseRow>(
         `
     SELECT pe.*, COALESCE(pec.nombre, ec.nombre) as categoria_nombre, COALESCE(pec.color, ec.color) as categoria_color
-    FROM project_expenses pe
-    LEFT JOIN expense_categories ec ON pe.category_id = ec.id
-    LEFT JOIN project_expense_categories pec ON pec.category_id = pe.category_id AND pec.project_id = pe.project_id
-    WHERE pe.project_id = $1
+    FROM proyecto_gastos pe
+    LEFT JOIN expense_categories ec ON pe.categoria_id = ec.id
+    LEFT JOIN proyecto_categorias_gastos pec ON pec.categoria_id = pe.categoria_id AND pec.proyecto_id = pe.proyecto_id
+    WHERE pe.proyecto_id = $1
     ORDER BY pe.created_at DESC
     LIMIT 10
   `,
@@ -978,8 +978,8 @@ router.get(
       const monthlyTrend = await query<{ mes: Date; total_mes: string }>(
         `
     SELECT DATE_TRUNC('month', fecha) as mes, SUM(monto) as total_mes
-    FROM project_expenses
-    WHERE project_id = $1 AND tipo_gasto = 'real' AND fecha >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '11 months')
+    FROM proyecto_gastos
+    WHERE proyecto_id = $1 AND tipo_gasto = 'real' AND fecha >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '11 months')
     GROUP BY DATE_TRUNC('month', fecha)
     ORDER BY mes
   `,

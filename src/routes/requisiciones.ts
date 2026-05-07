@@ -280,7 +280,7 @@ router.get(
         `
     SELECT ri.*, pec.nombre as categoria_nombre, pec.codigo as categoria_codigo, pec.color as categoria_color
     FROM requisicion_items ri
-    LEFT JOIN project_expense_categories pec ON ri.categoria_id = pec.id
+    LEFT JOIN proyecto_categorias_gastos pec ON ri.categoria_id = pec.id
     WHERE ri.requisicion_id = $1
     ORDER BY ri.id
   `,
@@ -698,7 +698,7 @@ router.patch(
 
         const gastoResult = await query<{ id: number }>(
           `
-      INSERT INTO project_expenses (project_id, descripcion, monto, fecha, tipo_gasto, created_by)
+      INSERT INTO proyecto_gastos (proyecto_id, descripcion, monto, fecha, tipo_gasto, creado_por)
       VALUES ($1, $2, $3, CURRENT_DATE, 'real', $4)
       RETURNING id
     `,
@@ -947,7 +947,7 @@ router.get(
     FROM requisicion_items ri
     JOIN requisiciones r ON ri.requisicion_id = r.id
     LEFT JOIN proyectos p ON r.project_id = p.id
-    LEFT JOIN project_expense_categories pec ON ri.categoria_id = pec.id
+    LEFT JOIN proyecto_categorias_gastos pec ON ri.categoria_id = pec.id
     ${whereClause}
     ORDER BY r.fecha DESC, ri.id
     LIMIT 100
