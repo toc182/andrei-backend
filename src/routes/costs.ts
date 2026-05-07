@@ -91,7 +91,7 @@ router.get(
     async (_req: Request, res: Response): Promise<void> => {
       const result = await query<CategoryRow>(`
     SELECT id, nombre, descripcion, codigo, color, orden, activo
-    FROM expense_categories
+    FROM categorias_gastos
     WHERE activo = true
     ORDER BY orden, nombre
   `);
@@ -161,7 +161,7 @@ router.post(
 
       const result = await query<CategoryRow>(
         `
-    INSERT INTO expense_categories (nombre, descripcion, codigo, color, orden)
+    INSERT INTO categorias_gastos (nombre, descripcion, codigo, color, orden)
     VALUES ($1, $2, $3, $4, $5)
     RETURNING *
   `,
@@ -213,7 +213,7 @@ router.get(
       pec.activo, pec.orden,
       CASE WHEN pec.categoria_id IS NOT NULL THEN false ELSE true END as is_custom
     FROM proyecto_categorias_gastos pec
-    LEFT JOIN expense_categories ec ON pec.categoria_id = ec.id
+    LEFT JOIN categorias_gastos ec ON pec.categoria_id = ec.id
     WHERE pec.proyecto_id = $1 AND pec.activo = true
     ORDER BY pec.orden, COALESCE(pec.nombre, ec.nombre)
   `,
@@ -241,7 +241,7 @@ router.get(
         `
     SELECT pec.id, pec.categoria_id, ec.nombre, ec.codigo, ec.color
     FROM proyecto_categorias_gastos pec
-    JOIN expense_categories ec ON pec.categoria_id = ec.id
+    JOIN categorias_gastos ec ON pec.categoria_id = ec.id
     WHERE pec.proyecto_id = $1 AND pec.activo = false
     ORDER BY ec.orden, ec.nombre
   `,
@@ -449,7 +449,7 @@ router.get(
     SELECT pe.categoria_id, ec.nombre as categoria_nombre, ec.codigo as categoria_codigo,
            SUM(pe.monto) as total_gastado, COUNT(pe.id) as total_gastos
     FROM proyecto_gastos pe
-    JOIN expense_categories ec ON pe.categoria_id = ec.id
+    JOIN categorias_gastos ec ON pe.categoria_id = ec.id
     WHERE pe.proyecto_id = $1 AND pe.tipo_gasto = 'real'
     GROUP BY pe.categoria_id, ec.nombre, ec.codigo, ec.orden
     ORDER BY ec.orden, ec.nombre
@@ -682,7 +682,7 @@ router.get(
            u.nombre as creado_por_nombre
     FROM proyecto_gastos pe
     LEFT JOIN proyecto_categorias_gastos pec ON pe.proyecto_categoria_id = pec.id
-    LEFT JOIN expense_categories ec ON COALESCE(pec.categoria_id, pe.categoria_id) = ec.id
+    LEFT JOIN categorias_gastos ec ON COALESCE(pec.categoria_id, pe.categoria_id) = ec.id
     LEFT JOIN users u ON pe.creado_por = u.id
     ${whereClause}
     ORDER BY pe.fecha DESC, pe.created_at DESC
@@ -940,7 +940,7 @@ router.get(
       COALESCE(SUM(pe.monto), 0) as gastado,
       COUNT(pe.id) as total_gastos
     FROM proyecto_categorias_gastos pec
-    LEFT JOIN expense_categories ec ON pec.categoria_id = ec.id
+    LEFT JOIN categorias_gastos ec ON pec.categoria_id = ec.id
     LEFT JOIN categorias_presupuesto bc ON pec.id = bc.proyecto_categoria_id AND bc.proyecto_id = $1
     LEFT JOIN proyecto_gastos pe ON pec.categoria_id = pe.categoria_id AND pe.proyecto_id = $1 AND pe.tipo_gasto = 'real'
     WHERE pec.proyecto_id = $1 AND pec.activo = true
@@ -966,7 +966,7 @@ router.get(
         `
     SELECT pe.*, COALESCE(pec.nombre, ec.nombre) as categoria_nombre, COALESCE(pec.color, ec.color) as categoria_color
     FROM proyecto_gastos pe
-    LEFT JOIN expense_categories ec ON pe.categoria_id = ec.id
+    LEFT JOIN categorias_gastos ec ON pe.categoria_id = ec.id
     LEFT JOIN proyecto_categorias_gastos pec ON pec.categoria_id = pe.categoria_id AND pec.proyecto_id = pe.proyecto_id
     WHERE pe.proyecto_id = $1
     ORDER BY pe.created_at DESC
