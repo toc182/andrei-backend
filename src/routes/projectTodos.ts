@@ -293,9 +293,9 @@ router.get(
     LEFT JOIN proyecto_categorias_tareas c ON t.categoria_id = c.id
     LEFT JOIN users u ON t.creado_por = u.id
     LEFT JOIN users uc ON t.completado_por = uc.id
-    LEFT JOIN project_members pm ON t.asignado_a = pm.id
+    LEFT JOIN proyecto_miembros pm ON t.asignado_a = pm.id
     LEFT JOIN users usr ON pm.user_id = usr.id AND pm.tipo_miembro = 'usuario'
-    LEFT JOIN external_contacts ec ON pm.external_contact_id = ec.id AND pm.tipo_miembro = 'externo'
+    LEFT JOIN external_contacts ec ON pm.contacto_externo_id = ec.id AND pm.tipo_miembro = 'externo'
     WHERE t.proyecto_id = $1
   `;
 

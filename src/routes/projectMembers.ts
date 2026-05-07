@@ -9,9 +9,9 @@ const router = Router();
 
 interface ProjectMemberRow {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   user_id?: number;
-  external_contact_id?: number;
+  contacto_externo_id?: number;
   tipo_miembro: 'usuario' | 'externo';
   rol_proyecto: MemberRole;
   activo: boolean;
@@ -42,14 +42,14 @@ interface ExternalContactRow {
 }
 
 interface AddMemberBody {
-  project_id: number;
+  proyecto_id: number;
   user_id: number;
   rol_proyecto?: MemberRole;
 }
 
 interface AddExternalMemberBody {
-  project_id: number;
-  external_contact_id: number;
+  proyecto_id: number;
+  contacto_externo_id: number;
   rol_proyecto?: MemberRole;
 }
 
@@ -68,9 +68,9 @@ router.get(
         `
     SELECT
       pm.id,
-      pm.project_id,
+      pm.proyecto_id,
       pm.user_id,
-      pm.external_contact_id,
+      pm.contacto_externo_id,
       pm.tipo_miembro,
       pm.rol_proyecto,
       pm.activo,
@@ -83,10 +83,10 @@ router.get(
       ec.email as externo_email,
       COALESCE(u.nombre, ec.nombre) as nombre_display,
       u.tipo_usuario
-    FROM project_members pm
+    FROM proyecto_miembros pm
     LEFT JOIN users u ON pm.user_id = u.id AND pm.tipo_miembro = 'usuario'
-    LEFT JOIN external_contacts ec ON pm.external_contact_id = ec.id AND pm.tipo_miembro = 'externo'
-    WHERE pm.project_id = $1 AND pm.activo = true
+    LEFT JOIN external_contacts ec ON pm.contacto_externo_id = ec.id AND pm.tipo_miembro = 'externo'
+    WHERE pm.proyecto_id = $1 AND pm.activo = true
     ORDER BY COALESCE(u.nombre, ec.nombre)
   `,
         [projectId],
@@ -147,12 +147,12 @@ router.post(
       req: Request<object, object, AddMemberBody>,
       res: Response,
     ): Promise<void> => {
-      const { project_id, user_id, rol_proyecto } = req.body;
+      const { proyecto_id, user_id, rol_proyecto } = req.body;
 
-      if (!project_id || !user_id) {
+      if (!proyecto_id || !user_id) {
         res.status(400).json({
           success: false,
-          message: 'project_id y user_id son requeridos',
+          message: 'proyecto_id y user_id son requeridos',
         });
         return;
       }
@@ -160,10 +160,10 @@ router.post(
       // Buscar fila existente (activa o inactiva) para este usuario y proyecto
       const existing = await query<{ id: number; activo: boolean }>(
         `
-    SELECT id, activo FROM project_members
-    WHERE project_id = $1 AND user_id = $2 AND tipo_miembro = 'usuario'
+    SELECT id, activo FROM proyecto_miembros
+    WHERE proyecto_id = $1 AND user_id = $2 AND tipo_miembro = 'usuario'
   `,
-        [project_id, user_id],
+        [proyecto_id, user_id],
       );
 
       if (existing.rows.length > 0 && existing.rows[0].activo) {
@@ -179,23 +179,23 @@ router.post(
         // Reactivar miembro previamente removido
         const updateResult = await query<ProjectMemberRow>(
           `
-      UPDATE project_members
+      UPDATE proyecto_miembros
       SET activo = true, rol_proyecto = $3, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $1 AND project_id = $2
+      WHERE id = $1 AND proyecto_id = $2
       RETURNING *
     `,
-          [existing.rows[0].id, project_id, rol_proyecto || 'miembro'],
+          [existing.rows[0].id, proyecto_id, rol_proyecto || 'miembro'],
         );
         memberRow = updateResult.rows[0];
       } else {
         // Insertar nuevo miembro
         const insertResult = await query<ProjectMemberRow>(
           `
-      INSERT INTO project_members (project_id, user_id, tipo_miembro, rol_proyecto)
+      INSERT INTO proyecto_miembros (proyecto_id, user_id, tipo_miembro, rol_proyecto)
       VALUES ($1, $2, 'usuario', $3)
       RETURNING *
     `,
-          [project_id, user_id, rol_proyecto || 'miembro'],
+          [proyecto_id, user_id, rol_proyecto || 'miembro'],
         );
         memberRow = insertResult.rows[0];
       }
@@ -218,12 +218,12 @@ router.post(
       req: Request<object, object, AddExternalMemberBody>,
       res: Response,
     ): Promise<void> => {
-      const { project_id, external_contact_id, rol_proyecto } = req.body;
+      const { proyecto_id, contacto_externo_id, rol_proyecto } = req.body;
 
-      if (!project_id || !external_contact_id) {
+      if (!proyecto_id || !contacto_externo_id) {
         res.status(400).json({
           success: false,
-          message: 'project_id y external_contact_id son requeridos',
+          message: 'proyecto_id y contacto_externo_id son requeridos',
         });
         return;
       }
@@ -231,10 +231,10 @@ router.post(
       // Buscar fila existente (activa o inactiva) para este contacto externo y proyecto
       const existing = await query<{ id: number; activo: boolean }>(
         `
-    SELECT id, activo FROM project_members
-    WHERE project_id = $1 AND external_contact_id = $2 AND tipo_miembro = 'externo'
+    SELECT id, activo FROM proyecto_miembros
+    WHERE proyecto_id = $1 AND contacto_externo_id = $2 AND tipo_miembro = 'externo'
   `,
-        [project_id, external_contact_id],
+        [proyecto_id, contacto_externo_id],
       );
 
       if (existing.rows.length > 0 && existing.rows[0].activo) {
@@ -250,7 +250,7 @@ router.post(
         // Reactivar contacto externo previamente removido
         result = await query<ProjectMemberRow>(
           `
-      UPDATE project_members
+      UPDATE proyecto_miembros
       SET activo = true, rol_proyecto = $2, updated_at = CURRENT_TIMESTAMP
       WHERE id = $1
       RETURNING *
@@ -261,11 +261,11 @@ router.post(
         // Insertar nuevo miembro externo
         result = await query<ProjectMemberRow>(
           `
-      INSERT INTO project_members (project_id, external_contact_id, tipo_miembro, rol_proyecto)
+      INSERT INTO proyecto_miembros (proyecto_id, contacto_externo_id, tipo_miembro, rol_proyecto)
       VALUES ($1, $2, 'externo', $3)
       RETURNING *
     `,
-          [project_id, external_contact_id, rol_proyecto || 'miembro'],
+          [proyecto_id, contacto_externo_id, rol_proyecto || 'miembro'],
         );
       }
 
@@ -274,8 +274,8 @@ router.post(
         `
     SELECT
       pm.id,
-      pm.project_id,
-      pm.external_contact_id,
+      pm.proyecto_id,
+      pm.contacto_externo_id,
       pm.tipo_miembro,
       pm.rol_proyecto,
       pm.activo,
@@ -284,8 +284,8 @@ router.post(
       ec.telefono as externo_telefono,
       ec.email as externo_email,
       ec.nombre as nombre_display
-    FROM project_members pm
-    JOIN external_contacts ec ON pm.external_contact_id = ec.id
+    FROM proyecto_miembros pm
+    JOIN external_contacts ec ON pm.contacto_externo_id = ec.id
     WHERE pm.id = $1
   `,
         [result.rows[0].id],
@@ -314,7 +314,7 @@ router.put(
 
       const result = await query<ProjectMemberRow>(
         `
-    UPDATE project_members
+    UPDATE proyecto_miembros
     SET rol_proyecto = $1, updated_at = CURRENT_TIMESTAMP
     WHERE id = $2
     RETURNING *
@@ -349,7 +349,7 @@ router.delete(
 
       const result = await query<ProjectMemberRow>(
         `
-    UPDATE project_members
+    UPDATE proyecto_miembros
     SET activo = false, updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
     RETURNING *

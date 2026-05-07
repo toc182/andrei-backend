@@ -240,8 +240,8 @@ router.delete(
       const assignmentsCheck = await query<{ count: string }>(
         `
     SELECT COUNT(*) as count
-    FROM project_members
-    WHERE external_contact_id = $1 AND activo = true
+    FROM proyecto_miembros
+    WHERE contacto_externo_id = $1 AND activo = true
   `,
         [id],
       );
