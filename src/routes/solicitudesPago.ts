@@ -70,7 +70,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
   );
 
   const totalAprobadoresResult = await query<{ count: string }>(
-    'SELECT COUNT(*) as count FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true',
+    'SELECT COUNT(*) as count FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1 AND activo = true',
     [sol.proyecto_id],
   );
   const totalAprobadores = parseInt(totalAprobadoresResult.rows[0].count);
@@ -80,7 +80,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     nombre: string;
     orden: number;
   }>(
-    'SELECT pas.user_id, u.nombre, pas.orden FROM project_approval_settings pas JOIN users u ON u.id = pas.user_id WHERE pas.proyecto_id = $1 AND pas.activo = true ORDER BY pas.orden',
+    'SELECT pas.user_id, u.nombre, pas.orden FROM proyecto_ajustes_aprobacion pas JOIN users u ON u.id = pas.user_id WHERE pas.proyecto_id = $1 AND pas.activo = true ORDER BY pas.orden',
     [sol.proyecto_id],
   );
 
@@ -754,7 +754,7 @@ router.get(
       `
     SELECT sp.proyecto_id, COUNT(*)::int as total
     FROM solicitudes_pago sp
-    JOIN project_approval_settings pas ON pas.proyecto_id = sp.proyecto_id
+    JOIN proyecto_ajustes_aprobacion pas ON pas.proyecto_id = sp.proyecto_id
       AND pas.user_id = $1 AND pas.activo = true
     WHERE sp.estado = 'pendiente'
       AND pas.orden = (
@@ -836,7 +836,7 @@ async function enrichWithAprobadoresEstado(
       nombre: string;
     }>(
       `SELECT pas.proyecto_id, pas.user_id, pas.orden, u.nombre
-       FROM project_approval_settings pas
+       FROM proyecto_ajustes_aprobacion pas
        JOIN users u ON pas.user_id = u.id
        WHERE pas.proyecto_id = ANY($1::int[]) AND pas.activo = true
        ORDER BY pas.proyecto_id, pas.orden`,
@@ -943,7 +943,7 @@ router.get(
       paramCount++;
       whereClause += ` AND sp.estado = 'pendiente'
       AND EXISTS (
-        SELECT 1 FROM project_approval_settings pas
+        SELECT 1 FROM proyecto_ajustes_aprobacion pas
         WHERE pas.proyecto_id = sp.proyecto_id
           AND pas.user_id = $${paramCount} AND pas.activo = true
           AND pas.orden = (
@@ -968,7 +968,7 @@ router.get(
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
       CASE WHEN sp.estado = 'pendiente' AND EXISTS (
-        SELECT 1 FROM project_approval_settings pas
+        SELECT 1 FROM proyecto_ajustes_aprobacion pas
         WHERE pas.proyecto_id = sp.proyecto_id
           AND pas.user_id = $1 AND pas.activo = true
           AND pas.orden = (
@@ -1033,7 +1033,7 @@ router.get(
         paramCount++;
         whereClause += ` AND sp.estado = 'pendiente'
       AND EXISTS (
-        SELECT 1 FROM project_approval_settings pas
+        SELECT 1 FROM proyecto_ajustes_aprobacion pas
         WHERE pas.proyecto_id = sp.proyecto_id
           AND pas.user_id = $${paramCount} AND pas.activo = true
           AND pas.orden = (
@@ -1058,7 +1058,7 @@ router.get(
       u2.nombre as solicitado_nombre,
       r.numero as requisicion_numero,
       CASE WHEN sp.estado = 'pendiente' AND EXISTS (
-        SELECT 1 FROM project_approval_settings pas
+        SELECT 1 FROM proyecto_ajustes_aprobacion pas
         WHERE pas.proyecto_id = sp.proyecto_id
           AND pas.user_id = $2 AND pas.activo = true
           AND pas.orden = (
@@ -1259,7 +1259,7 @@ router.get(
       const aprobadoresProyecto = await query(
         `
     SELECT pas.user_id, pas.orden, u.nombre, u.email
-    FROM project_approval_settings pas
+    FROM proyecto_ajustes_aprobacion pas
     JOIN users u ON pas.user_id = u.id
     WHERE pas.proyecto_id = $1 AND pas.activo = true
     ORDER BY pas.orden
@@ -1480,7 +1480,7 @@ router.post(
 
       // Verificar que el proyecto tiene aprobadores configurados
       const approvers = await query(
-        'SELECT id FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true',
+        'SELECT id FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1 AND activo = true',
         [proyecto_id],
       );
       if (approvers.rows.length === 0) {
@@ -1644,7 +1644,7 @@ router.post(
               nombre: string;
               email: string;
             }>(
-              `SELECT u.nombre, u.email FROM project_approval_settings pas
+              `SELECT u.nombre, u.email FROM proyecto_ajustes_aprobacion pas
            JOIN users u ON u.id = pas.user_id
            WHERE pas.proyecto_id = $1 AND pas.activo = true
            ORDER BY pas.orden ASC LIMIT 1`,
@@ -3048,7 +3048,7 @@ router.post(
 
         // Verificar turno
         const aprobadores = await query<{ user_id: number; orden: number }>(
-          'SELECT user_id, orden FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
+          'SELECT user_id, orden FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
           [solicitud.rows[0].proyecto_id],
         );
         const aprobaciones = await query<{ user_id: number }>(
@@ -3169,7 +3169,7 @@ router.post(
 
       // Obtener aprobadores del proyecto
       const aprobadores = await query<{ user_id: number; orden: number }>(
-        'SELECT user_id, orden FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
+        'SELECT user_id, orden FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
         [solicitud.rows[0].proyecto_id],
       );
 
@@ -3221,7 +3221,7 @@ router.post(
               nombre: string;
               email: string;
             }>(
-              `SELECT u.nombre, u.email FROM project_approval_settings pas
+              `SELECT u.nombre, u.email FROM proyecto_ajustes_aprobacion pas
            JOIN users u ON u.id = pas.user_id
            WHERE pas.proyecto_id = $1 AND pas.activo = true AND pas.orden > $2
            ORDER BY pas.orden ASC LIMIT 1`,
@@ -3316,7 +3316,7 @@ router.post(
 
       // Obtener aprobadores del proyecto
       const aprobadores = await query<{ user_id: number; orden: number }>(
-        'SELECT user_id, orden FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
+        'SELECT user_id, orden FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
         [solicitud.rows[0].proyecto_id],
       );
 
@@ -3426,7 +3426,7 @@ router.post(
 
       // Verificar turno
       const aprobadores = await query<{ user_id: number; orden: number }>(
-        'SELECT user_id, orden FROM project_approval_settings WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
+        'SELECT user_id, orden FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1 AND activo = true ORDER BY orden',
         [solicitud.rows[0].proyecto_id],
       );
       const aprobaciones = await query<{ user_id: number }>(

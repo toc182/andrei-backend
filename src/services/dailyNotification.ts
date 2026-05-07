@@ -116,7 +116,7 @@ export async function sendDailyNotifications(): Promise<NotificationResult> {
       u.email as aprobador_email
     FROM solicitudes_pago sp
     JOIN proyectos p ON sp.proyecto_id = p.id
-    JOIN project_approval_settings pas ON pas.proyecto_id = sp.proyecto_id AND pas.activo = true
+    JOIN proyecto_ajustes_aprobacion pas ON pas.proyecto_id = sp.proyecto_id AND pas.activo = true
     JOIN users u ON pas.user_id = u.id
     WHERE sp.estado = 'pendiente'
       AND pas.orden = (

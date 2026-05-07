@@ -39,7 +39,7 @@ router.get(
       const result = await query<ApproverRow>(
         `
     SELECT pas.*, u.nombre, u.email
-    FROM project_approval_settings pas
+    FROM proyecto_ajustes_aprobacion pas
     JOIN users u ON pas.user_id = u.id
     WHERE pas.proyecto_id = $1 AND pas.activo = true
     ORDER BY pas.orden
@@ -117,7 +117,7 @@ router.put(
 
         // Eliminar aprobadores actuales
         await query(
-          'DELETE FROM project_approval_settings WHERE proyecto_id = $1',
+          'DELETE FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1',
           [projectId],
         );
 
@@ -132,7 +132,7 @@ router.put(
           ];
           await query(
             `
-        INSERT INTO project_approval_settings (proyecto_id, user_id, orden, activo)
+        INSERT INTO proyecto_ajustes_aprobacion (proyecto_id, user_id, orden, activo)
         VALUES ${values}
       `,
             params,
@@ -149,7 +149,7 @@ router.put(
       const result = await query<ApproverRow>(
         `
     SELECT pas.*, u.nombre, u.email
-    FROM project_approval_settings pas
+    FROM proyecto_ajustes_aprobacion pas
     JOIN users u ON pas.user_id = u.id
     WHERE pas.proyecto_id = $1 AND pas.activo = true
     ORDER BY pas.orden
