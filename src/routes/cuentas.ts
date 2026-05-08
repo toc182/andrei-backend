@@ -90,7 +90,7 @@ interface CuentaRow {
   fecha_pagada: string | null;
   observaciones_pago: string | null;
   activo: boolean;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -428,7 +428,7 @@ router.post(
         `INSERT INTO cuentas (
           proyecto_id, numero, es_final, monto_total,
           periodo_inicio, periodo_fin, avance_porcentaje,
-          estado, created_by
+          estado, creado_por
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'borrador', $8)
         RETURNING id`,
         [
