@@ -30,8 +30,8 @@ interface LicitacionRow {
   observaciones?: string;
   estado_licitacion: LicitacionEstado;
   resultado?: string;
-  created_by: number;
-  created_by_name?: string;
+  creado_por: number;
+  creado_por_nombre?: string;
   tiene_proyecto_asociado?: boolean;
   proyecto_id?: number;
   created_at: Date;
@@ -85,11 +85,11 @@ router.get(
         `
     SELECT
       l.*,
-      u.nombre as created_by_name,
+      u.nombre as creado_por_nombre,
       CASE WHEN p.id IS NOT NULL THEN true ELSE false END as tiene_proyecto_asociado,
       p.id as proyecto_id
     FROM licitaciones l
-    LEFT JOIN users u ON l.created_by = u.id
+    LEFT JOIN users u ON l.creado_por = u.id
     LEFT JOIN proyectos p ON l.id = p.licitacion_id
     ${whereClause}
     ORDER BY l.fecha_cierre DESC, l.created_at DESC
@@ -184,7 +184,7 @@ router.post(
     INSERT INTO licitaciones (
       nombre, numero_licitacion, entidad_licitante, fecha_apertura, fecha_cierre,
       presupuesto_referencial, moneda, plazo_ejecucion_dias, documentos_licitacion,
-      requisitos_tecnicos, ubicacion_proyecto, observaciones, created_by
+      requisitos_tecnicos, ubicacion_proyecto, observaciones, creado_por
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     RETURNING *
   `,
