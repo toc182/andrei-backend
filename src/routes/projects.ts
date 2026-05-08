@@ -444,7 +444,7 @@ router.post(
           const tieneIpt = !!projInfo.rows[0]?.tiene_ipt;
           if (tipo !== 'privado' && tieneIpt) {
             await client.query(
-              `INSERT INTO cuentas_ipt (cuenta_id, estado, created_by) VALUES ($1, 'pendiente', $2)`,
+              `INSERT INTO cuentas_ipt (cuenta_id, estado, creado_por) VALUES ($1, 'pendiente', $2)`,
               [cuentaInsert.rows[0].id, user.id],
             );
           }
