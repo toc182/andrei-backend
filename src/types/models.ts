@@ -111,7 +111,7 @@ export interface Equipment {
   responsable?: string;
   estado: EquipmentStatus;
   observaciones?: string;
-  owner: EquipmentOwner;
+  propietario: EquipmentOwner;
   activo: boolean;
   created_at: Date;
   updated_at: Date;

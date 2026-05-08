@@ -27,7 +27,7 @@ interface EquipoRow {
   estado?: string;
   observaciones?: string;
   observaciones_status?: string;
-  owner: EquipoOwner;
+  propietario: EquipoOwner;
   activo: boolean;
   ultima_revision?: Date;
   created_at: Date;
@@ -49,7 +49,7 @@ interface CreateEquipoBody {
   responsable?: string;
   estado?: string;
   observaciones?: string;
-  owner: EquipoOwner;
+  propietario: EquipoOwner;
 }
 
 interface UpdateStatusBody {
@@ -61,7 +61,7 @@ interface UpdateStatusBody {
 }
 
 interface QueryParams {
-  owner?: string;
+  propietario?: string;
   search?: string;
   estado?: string;
 }
@@ -73,12 +73,12 @@ router.get(
   checkPermission('equipos_ver'),
   asyncHandler(async (_req: Request, res: Response): Promise<void> => {
     const result = await query<EquipoRow>(`
-    SELECT id, codigo, descripcion, marca, modelo, ano, estado, owner,
+    SELECT id, codigo, descripcion, marca, modelo, ano, estado, propietario,
            proyecto as ubicacion, updated_at as ultima_revision
     FROM equipos
     WHERE activo = true
     ORDER BY
-      CASE WHEN owner = 'Pinellas' THEN 0 ELSE 1 END,
+      CASE WHEN propietario = 'Pinellas' THEN 0 ELSE 1 END,
       descripcion ASC
   `);
 
@@ -106,15 +106,15 @@ router.get(
       req: Request<object, object, object, QueryParams>,
       res: Response,
     ): Promise<void> => {
-      const { owner, search, estado } = req.query;
+      const { propietario, search, estado } = req.query;
 
       let whereClause = 'WHERE activo = true';
       const queryParams: unknown[] = [];
       let paramCounter = 1;
 
-      if (owner) {
-        whereClause += ` AND owner = $${paramCounter}`;
-        queryParams.push(owner);
+      if (propietario) {
+        whereClause += ` AND propietario = $${paramCounter}`;
+        queryParams.push(propietario);
         paramCounter++;
       }
 
@@ -139,11 +139,11 @@ router.get(
         `
     SELECT id, codigo, descripcion, marca, modelo, ano, motor, chasis, costo,
            valor_actual, rata_mes, proyecto, responsable, estado, observaciones,
-           owner, created_at, updated_at
+           propietario, created_at, updated_at
     FROM equipos
     ${whereClause}
     ORDER BY
-      CASE WHEN owner = 'Pinellas' THEN 0 ELSE 1 END,
+      CASE WHEN propietario = 'Pinellas' THEN 0 ELSE 1 END,
       descripcion ASC
   `,
         queryParams,
@@ -182,7 +182,7 @@ router.get(
         `
     SELECT id, codigo, descripcion, marca, modelo, ano, motor, chasis, costo,
            valor_actual, rata_mes, proyecto, responsable, estado, observaciones,
-           owner, created_at, updated_at
+           propietario, created_at, updated_at
     FROM equipos
     WHERE id = $1 AND activo = true
   `,
@@ -216,9 +216,9 @@ router.post(
     body('ano')
       .isInt({ min: 1900, max: 2030 })
       .withMessage('Año debe ser un número válido entre 1900 y 2030'),
-    body('owner')
+    body('propietario')
       .isIn(['Pinellas', 'COCP'])
-      .withMessage('Owner debe ser Pinellas o COCP'),
+      .withMessage('Propietario debe ser Pinellas o COCP'),
     body('costo').optional({ nullable: true, checkFalsy: true }).isDecimal(),
     body('valor_actual')
       .optional({ nullable: true, checkFalsy: true })
@@ -255,7 +255,7 @@ router.post(
         responsable,
         estado,
         observaciones,
-        owner,
+        propietario,
       } = req.body;
 
       const result = await query<{ id: number }>(
@@ -263,7 +263,7 @@ router.post(
     INSERT INTO equipos (
       codigo, descripcion, marca, modelo, ano, motor, chasis,
       costo, valor_actual, rata_mes, proyecto, responsable,
-      estado, observaciones, owner
+      estado, observaciones, propietario
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     RETURNING id
   `,
@@ -282,7 +282,7 @@ router.post(
           responsable || null,
           estado || null,
           observaciones || null,
-          owner,
+          propietario,
         ],
       );
 
@@ -290,7 +290,7 @@ router.post(
         descripcion,
         marca,
         modelo,
-        owner,
+        propietario,
       });
 
       res.status(201).json({
@@ -318,9 +318,9 @@ router.put(
     body('ano')
       .isInt({ min: 1900, max: 2030 })
       .withMessage('Año debe ser un número válido entre 1900 y 2030'),
-    body('owner')
+    body('propietario')
       .isIn(['Pinellas', 'COCP'])
-      .withMessage('Owner debe ser Pinellas o COCP'),
+      .withMessage('Propietario debe ser Pinellas o COCP'),
   ],
   asyncHandler(
     async (
@@ -353,7 +353,7 @@ router.put(
         responsable,
         estado,
         observaciones,
-        owner,
+        propietario,
       } = req.body;
 
       const existsResult = await query<{ id: number }>(
@@ -372,7 +372,7 @@ router.put(
     UPDATE equipos SET
       codigo = $1, descripcion = $2, marca = $3, modelo = $4, ano = $5, motor = $6, chasis = $7,
       costo = $8, valor_actual = $9, rata_mes = $10, proyecto = $11, responsable = $12,
-      estado = $13, observaciones = $14, owner = $15, updated_at = CURRENT_TIMESTAMP
+      estado = $13, observaciones = $14, propietario = $15, updated_at = CURRENT_TIMESTAMP
     WHERE id = $16
   `,
         [
@@ -390,7 +390,7 @@ router.put(
           responsable || null,
           estado || null,
           observaciones || null,
-          owner,
+          propietario,
           id,
         ],
       );
@@ -399,7 +399,7 @@ router.put(
         descripcion,
         marca,
         modelo,
-        owner,
+        propietario,
       });
 
       res.json({ success: true, message: 'Equipo actualizado exitosamente' });
@@ -517,8 +517,8 @@ router.delete(
         return;
       }
 
-      const equipoData = await query<{ descripcion: string; owner: string }>(
-        'SELECT descripcion, owner FROM equipos WHERE id = $1',
+      const equipoData = await query<{ descripcion: string; propietario: string }>(
+        'SELECT descripcion, propietario FROM equipos WHERE id = $1',
         [id],
       );
       await query(
@@ -528,7 +528,7 @@ router.delete(
 
       await registrarAudit(req.user!.id, 'eliminar', 'equipo', parseInt(id), {
         descripcion: equipoData.rows[0]?.descripcion,
-        owner: equipoData.rows[0]?.owner,
+        propietario: equipoData.rows[0]?.propietario,
       });
 
       res.json({ success: true, message: 'Equipo eliminado exitosamente' });
