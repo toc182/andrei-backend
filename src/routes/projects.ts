@@ -419,7 +419,7 @@ router.post(
         // (matches the backfill migration 071_backfill_cuenta1.sql).
         const cuentaInsert = await client.query<{ id: number }>(
           `INSERT INTO cuentas (
-            proyecto_id, numero, es_final, monto_total, estado, periodo_inicio, created_by
+            proyecto_id, numero, es_final, monto_total, estado, periodo_inicio, creado_por
           ) VALUES ($1, 1, false, $2, 'borrador', $3, $4)
           RETURNING id`,
           [proyecto.id, monto_total ?? 0, fecha_inicio || null, user.id],

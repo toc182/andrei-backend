@@ -17,7 +17,7 @@ type RequisicionEstado =
 interface RequisicionRow {
   id: number;
   numero: string;
-  project_id: number;
+  proyecto_id: number;
   proveedor: string;
   concepto?: string;
   fecha: Date;
@@ -89,7 +89,7 @@ interface CreateItemBody {
 
 interface CreateRequisicionBody {
   numero: string;
-  project_id: number;
+  proyecto_id: number;
   proveedor: string;
   concepto?: string;
   fecha?: string;
@@ -100,7 +100,7 @@ interface CreateRequisicionBody {
 }
 
 interface QueryParams {
-  project_id?: string;
+  proyecto_id?: string;
   estado?: string;
   archivadas?: string;
   limit?: string;
@@ -117,7 +117,7 @@ router.get(
       res: Response,
     ): Promise<void> => {
       const {
-        project_id,
+        proyecto_id,
         estado,
         archivadas,
         limit = '50',
@@ -134,10 +134,10 @@ router.get(
         whereClause = 'WHERE 1=1';
       }
 
-      if (project_id) {
+      if (proyecto_id) {
         paramCount++;
-        whereClause += ` AND r.project_id = $${paramCount}`;
-        params.push(project_id);
+        whereClause += ` AND r.proyecto_id = $${paramCount}`;
+        params.push(proyecto_id);
       }
 
       if (estado) {
@@ -161,7 +161,7 @@ router.get(
            u_apr.nombre as aprobador_nombre, u_pag.nombre as pagador_nombre,
            (SELECT COUNT(*) FROM requisicion_items ri WHERE ri.requisicion_id = r.id) as items_count
     FROM requisiciones r
-    LEFT JOIN proyectos p ON r.project_id = p.id
+    LEFT JOIN proyectos p ON r.proyecto_id = p.id
     LEFT JOIN users u_creador ON r.solicitado_por = u_creador.id
     LEFT JOIN users u_solicitante ON r.solicitante_id = u_solicitante.id
     LEFT JOIN users u_apr ON r.aprobado_por = u_apr.id
@@ -210,13 +210,13 @@ router.get(
       const { estado, archivadas } = req.query;
 
       let whereClause =
-        'WHERE r.project_id = $1 AND (r.archivada = FALSE OR r.archivada IS NULL)';
+        'WHERE r.proyecto_id = $1 AND (r.archivada = FALSE OR r.archivada IS NULL)';
       const params: unknown[] = [projectId];
 
       if (archivadas === 'true') {
-        whereClause = 'WHERE r.project_id = $1 AND r.archivada = TRUE';
+        whereClause = 'WHERE r.proyecto_id = $1 AND r.archivada = TRUE';
       } else if (archivadas === 'all') {
-        whereClause = 'WHERE r.project_id = $1';
+        whereClause = 'WHERE r.proyecto_id = $1';
       }
 
       if (estado) {
@@ -259,7 +259,7 @@ router.get(
            u_creador.nombre as creador_nombre, u_solicitante.nombre as solicitante_nombre,
            u_apr.nombre as aprobador_nombre, u_pag.nombre as pagador_nombre
     FROM requisiciones r
-    LEFT JOIN proyectos p ON r.project_id = p.id
+    LEFT JOIN proyectos p ON r.proyecto_id = p.id
     LEFT JOIN users u_creador ON r.solicitado_por = u_creador.id
     LEFT JOIN users u_solicitante ON r.solicitante_id = u_solicitante.id
     LEFT JOIN users u_apr ON r.aprobado_por = u_apr.id
@@ -317,7 +317,7 @@ router.post(
       .trim()
       .notEmpty()
       .withMessage('Número de requisición requerido'),
-    body('project_id').isInt().withMessage('ID de proyecto inválido'),
+    body('proyecto_id').isInt().withMessage('ID de proyecto inválido'),
     body('proveedor').trim().notEmpty().withMessage('Proveedor requerido'),
     body('items')
       .isArray({ min: 1 })
@@ -350,7 +350,7 @@ router.post(
 
       const {
         numero,
-        project_id,
+        proyecto_id,
         proveedor,
         concepto,
         fecha,
@@ -391,14 +391,14 @@ router.post(
       const result = await query<RequisicionRow>(
         `
     INSERT INTO requisiciones (
-      numero, project_id, proveedor, concepto, fecha, pdf_url, pdf_nombre,
+      numero, proyecto_id, proveedor, concepto, fecha, pdf_url, pdf_nombre,
       solicitado_por, solicitante_id, estado, subtotal, itbms, monto_total
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pendiente', $10, $11, $12)
     RETURNING *
   `,
         [
           numero,
-          project_id,
+          proyecto_id,
           proveedor,
           concepto || null,
           fecha || new Date(),
@@ -703,7 +703,7 @@ router.patch(
       RETURNING id
     `,
           [
-            requisicion.project_id,
+            requisicion.proyecto_id,
             `Requisición ${requisicion.numero}: ${requisicion.concepto || requisicion.proveedor}`,
             requisicion.monto_total,
             req.user!.id,
@@ -902,11 +902,11 @@ router.get(
         object,
         object,
         object,
-        { q?: string; project_id?: string; categoria_id?: string }
+        { q?: string; proyecto_id?: string; categoria_id?: string }
       >,
       res: Response,
     ): Promise<void> => {
-      const { q, project_id, categoria_id } = req.query;
+      const { q, proyecto_id, categoria_id } = req.query;
 
       let whereClause = 'WHERE 1=1';
       const params: unknown[] = [];
@@ -918,10 +918,10 @@ router.get(
         params.push(`%${q}%`);
       }
 
-      if (project_id) {
+      if (proyecto_id) {
         paramCount++;
-        whereClause += ` AND r.project_id = $${paramCount}`;
-        params.push(project_id);
+        whereClause += ` AND r.proyecto_id = $${paramCount}`;
+        params.push(proyecto_id);
       }
 
       if (categoria_id) {
@@ -946,7 +946,7 @@ router.get(
            pec.nombre as categoria_nombre
     FROM requisicion_items ri
     JOIN requisiciones r ON ri.requisicion_id = r.id
-    LEFT JOIN proyectos p ON r.project_id = p.id
+    LEFT JOIN proyectos p ON r.proyecto_id = p.id
     LEFT JOIN proyecto_categorias_gastos pec ON ri.categoria_id = pec.id
     ${whereClause}
     ORDER BY r.fecha DESC, ri.id

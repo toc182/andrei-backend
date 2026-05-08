@@ -165,7 +165,7 @@ export type RequisicionStatus =
 
 export interface Requisicion {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   numero: string;
   fecha: Date;
   proveedor?: string;
@@ -175,7 +175,6 @@ export interface Requisicion {
   monto_total: number;
   estado: RequisicionStatus;
   solicitante_id?: number;
-  created_by: number;
   archivada: boolean;
   fecha_archivado?: Date;
   archivado_por?: number;
@@ -350,7 +349,7 @@ export type AdendaType = 'tiempo' | 'monto' | 'alcance' | 'otro';
 
 export interface Adenda {
   id: number;
-  project_id: number;
+  proyecto_id: number;
   numero: number;
   tipo: AdendaType;
   descripcion: string;
@@ -365,7 +364,7 @@ export interface Adenda {
 export interface AsignacionEquipo {
   id: number;
   equipo_id: number;
-  project_id?: number;
+  proyecto_id?: number;
   fecha_inicio: Date;
   fecha_fin?: Date;
   responsable?: string;
@@ -377,10 +376,10 @@ export interface AsignacionEquipo {
 export interface RegistroUsoEquipo {
   id: number;
   equipo_id: number;
-  project_id?: number;
+  proyecto_id?: number;
   fecha: Date;
   horas: number;
   descripcion?: string;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
 }
