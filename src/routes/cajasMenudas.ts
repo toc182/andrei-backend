@@ -28,7 +28,7 @@ interface CajaMenudaRow {
   nombre: string;
   monto_asignado: string; // NUMERIC comes as string from pg
   estado: string;
-  created_by: number;
+  creado_por: number;
   created_at: Date;
   updated_at: Date;
   proyecto_nombre?: string;
@@ -278,7 +278,7 @@ router.get(
 
       const result = await query<CajaMenudaRow>(
         `SELECT cm.id, cm.proyecto_id, cm.responsable_id, cm.nombre,
-              cm.monto_asignado, cm.estado, cm.created_by,
+              cm.monto_asignado, cm.estado, cm.creado_por,
               cm.created_at, cm.updated_at,
               cm.comprobante_cierre_r2_key, cm.comprobante_cierre_nombre,
               cm.comprobante_apertura_r2_key, cm.comprobante_apertura_nombre,
@@ -312,7 +312,7 @@ router.get(
               ) AS tiene_reembolso_pendiente,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
               u.nombre AS responsable_nombre,
-              creator.nombre AS created_by_nombre,
+              creator.nombre AS creado_por_nombre,
               cm.monto_asignado - COALESCE(
                 (SELECT SUM(g.monto_total) FROM cajas_menudas_gastos g
                  WHERE g.caja_menuda_id = cm.id
@@ -334,7 +334,7 @@ router.get(
        FROM cajas_menudas cm
        JOIN proyectos p ON p.id = cm.proyecto_id
        JOIN users u ON u.id = cm.responsable_id
-       JOIN users creator ON creator.id = cm.created_by
+       JOIN users creator ON creator.id = cm.creado_por
        LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id
        WHERE cm.id = $1`,
         [id],
@@ -411,7 +411,7 @@ router.post(
 
       // 1. Create caja menuda
       const result = await client.query<{ id: number }>(
-        `INSERT INTO cajas_menudas (proyecto_id, responsable_id, nombre, monto_asignado, created_by)
+        `INSERT INTO cajas_menudas (proyecto_id, responsable_id, nombre, monto_asignado, creado_por)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING id`,
         [proyecto_id, responsable_id, nombre, monto_asignado, user.id],
