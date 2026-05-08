@@ -35,11 +35,11 @@ interface OportunidadRow {
   siguiente_accion?: string;
   fecha_siguiente_seguimiento?: Date;
   origen?: string;
-  assigned_to?: number;
+  asignado_a?: number;
   estado_oportunidad: OportunidadEstado;
-  created_by: number;
-  created_by_name?: string;
-  assigned_to_name?: string;
+  creado_por: number;
+  creado_por_nombre?: string;
+  asignado_a_nombre?: string;
   tiene_proyecto_asociado?: boolean;
   proyecto_id?: number;
   created_at: Date;
@@ -62,12 +62,12 @@ interface CreateOportunidadBody {
   siguiente_accion?: string;
   fecha_siguiente_seguimiento?: string;
   origen?: string;
-  assigned_to?: number;
+  asignado_a?: number;
 }
 
 interface QueryParams {
   estado?: string;
-  assigned_to?: string;
+  asignado_a?: string;
   page?: string;
   limit?: string;
 }
@@ -82,7 +82,7 @@ router.get(
       req: Request<object, object, object, QueryParams>,
       res: Response,
     ): Promise<void> => {
-      const { estado, assigned_to, page = '1', limit = '10' } = req.query;
+      const { estado, asignado_a, page = '1', limit = '10' } = req.query;
       const offset = (parseInt(page) - 1) * parseInt(limit);
 
       let whereClause = 'WHERE 1=1';
@@ -95,9 +95,9 @@ router.get(
         paramCounter++;
       }
 
-      if (assigned_to) {
-        whereClause += ` AND assigned_to = $${paramCounter}`;
-        queryParams.push(assigned_to);
+      if (asignado_a) {
+        whereClause += ` AND asignado_a = $${paramCounter}`;
+        queryParams.push(asignado_a);
         paramCounter++;
       }
 
@@ -105,13 +105,13 @@ router.get(
         `
     SELECT
       o.*,
-      u1.nombre as created_by_name,
-      u2.nombre as assigned_to_name,
+      u1.nombre as creado_por_nombre,
+      u2.nombre as asignado_a_nombre,
       CASE WHEN p.id IS NOT NULL THEN true ELSE false END as tiene_proyecto_asociado,
       p.id as proyecto_id
     FROM oportunidades o
-    LEFT JOIN users u1 ON o.created_by = u1.id
-    LEFT JOIN users u2 ON o.assigned_to = u2.id
+    LEFT JOIN users u1 ON o.creado_por = u1.id
+    LEFT JOIN users u2 ON o.asignado_a = u2.id
     LEFT JOIN proyectos p ON o.id = p.oportunidad_id
     ${whereClause}
     ORDER BY o.fecha_siguiente_seguimiento ASC, o.created_at DESC
@@ -196,7 +196,7 @@ router.post(
         siguiente_accion,
         fecha_siguiente_seguimiento,
         origen,
-        assigned_to,
+        asignado_a,
       } = req.body;
 
       const result = await query<OportunidadRow>(
@@ -205,7 +205,7 @@ router.post(
       nombre_oportunidad, cliente_potencial, contacto_referido, telefono_contacto,
       email_contacto, valor_estimado, moneda, probabilidad_cierre, fecha_contacto_inicial,
       fecha_estimada_cierre, tipo_trabajo, notas_comerciales, siguiente_accion,
-      fecha_siguiente_seguimiento, origen, assigned_to, created_by
+      fecha_siguiente_seguimiento, origen, asignado_a, creado_por
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
     RETURNING *
   `,
@@ -225,7 +225,7 @@ router.post(
           siguiente_accion,
           fecha_siguiente_seguimiento,
           origen,
-          assigned_to,
+          asignado_a,
           req.user!.id,
         ],
       );
