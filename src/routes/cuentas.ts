@@ -326,7 +326,7 @@ router.get(
          FROM cuentas c
          JOIN proyectos p ON p.id = c.proyecto_id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
-         WHERE c.id = $1`,
+         WHERE c.id = $1 AND c.activo = TRUE`,
         [id],
       );
       if (cuentaRes.rows.length === 0) {
@@ -419,7 +419,7 @@ router.post(
       await client.query('BEGIN');
 
       const nextRes = await client.query<{ max: number | null }>(
-        `SELECT MAX(numero) AS max FROM cuentas WHERE proyecto_id = $1`,
+        `SELECT MAX(numero) AS max FROM cuentas WHERE proyecto_id = $1 AND activo = TRUE`,
         [proyecto_id],
       );
       const numero = (nextRes.rows[0].max ?? 0) + 1;
@@ -559,7 +559,7 @@ router.put(
       }
       params.push(id);
       await query(
-        `UPDATE cuentas SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length}`,
+        `UPDATE cuentas SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length} AND activo = TRUE`,
         params,
       );
 
@@ -674,7 +674,7 @@ router.post(
 
         params.push(id);
         await client.query(
-          `UPDATE cuentas SET ${sets.join(', ')} WHERE id = $${params.length}`,
+          `UPDATE cuentas SET ${sets.join(', ')} WHERE id = $${params.length} AND activo = TRUE`,
           params,
         );
 
@@ -807,7 +807,7 @@ router.get(
       }>(
         `SELECT a.r2_key, a.tipo_mime, a.nombre_original, c.proyecto_id
          FROM cuentas_adjuntos a
-         JOIN cuentas c ON c.id = a.cuenta_id
+         JOIN cuentas c ON c.id = a.cuenta_id AND c.activo = TRUE
          WHERE a.id = $1 AND a.cuenta_id = $2`,
         [adjuntoId, id],
       );
@@ -847,7 +847,7 @@ router.delete(
       const r = await query<{ r2_key: string; proyecto_id: number }>(
         `SELECT a.r2_key, c.proyecto_id
          FROM cuentas_adjuntos a
-         JOIN cuentas c ON c.id = a.cuenta_id
+         JOIN cuentas c ON c.id = a.cuenta_id AND c.activo = TRUE
          WHERE a.id = $1 AND a.cuenta_id = $2`,
         [adjuntoId, id],
       );
