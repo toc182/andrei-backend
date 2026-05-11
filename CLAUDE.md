@@ -56,16 +56,31 @@ res.json({ success: true, data: result.rows });
 ## Database
 
 - query() from src/database/config.ts — parameterized only, never string concat
-- Migrations: src/database/migrations/NNN_name.sql format, next is 061
+- Migrations: src/database/migrations/NNN_name.sql format. Look in the folder for the next number — never assume.
 - runAllMigrations() runs automatically on server start
 - Local: andrei_db / Production: DATABASE_URL (Railway)
 - MCP postgres tool available for local queries
 - Root-level routes/ and migrations/ folders are empty legacy dirs — ignore them
 
 Migration file format:
--- 061_description.sql
+-- NNN_description.sql
 ALTER TABLE nombre ADD COLUMN IF NOT EXISTS columna tipo;
 CREATE TABLE IF NOT EXISTS nueva_tabla (...);
+
+### audit_log polymorphic pattern
+
+The `audit_log` table is the one intentional exception to the project's
+FK discipline. Two columns work together as a polymorphic reference:
+
+- `entidad` (varchar) — the kind of record being audited, e.g.
+  `'solicitud_pago'`, `'requisicion'`, `'cuenta'`, `'equipo'`, etc.
+- `entidad_id` (integer) — the primary key of the row, *in whatever
+  table `entidad` names*.
+
+There is deliberately **no FK constraint** on `entidad_id`, because Postgres
+FKs target a single parent table and this column targets many. Treat the
+pair as "(table_name, row_id)". Filter audit queries by `entidad` first,
+then by `entidad_id`. Do not try to "fix" this with a FK.
 
 ## Services
 
