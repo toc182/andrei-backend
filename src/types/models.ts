@@ -107,8 +107,10 @@ export interface Equipment {
   costo?: number;
   valor_actual?: number;
   rata_mes?: number;
-  proyecto?: string;
-  responsable?: string;
+  proyecto_id?: number;
+  responsable_id?: number;
+  proyecto_nombre?: string;
+  responsable_nombre?: string;
   estado: EquipmentStatus;
   observaciones?: string;
   propietario: EquipmentOwner;

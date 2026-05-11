@@ -21,9 +21,11 @@ interface EquipoRow {
   costo?: number;
   valor_actual?: number;
   rata_mes?: number;
-  proyecto?: string;
+  proyecto_id?: number;
+  proyecto_nombre?: string;
   ubicacion?: string;
-  responsable?: string;
+  responsable_id?: number;
+  responsable_nombre?: string;
   estado?: string;
   observaciones?: string;
   observaciones_status?: string;
@@ -45,8 +47,8 @@ interface CreateEquipoBody {
   costo?: string | number;
   valor_actual?: string | number;
   rata_mes?: string | number;
-  proyecto?: string;
-  responsable?: string;
+  proyecto_id?: number;
+  responsable_id?: number;
   estado?: string;
   observaciones?: string;
   propietario: EquipoOwner;
@@ -54,8 +56,8 @@ interface CreateEquipoBody {
 
 interface UpdateStatusBody {
   estado?: string;
-  proyecto?: string;
-  responsable?: string;
+  proyecto_id?: number;
+  responsable_id?: number;
   rata_mes?: string | number;
   observaciones_status?: string;
 }
@@ -73,13 +75,14 @@ router.get(
   checkPermission('equipos_ver'),
   asyncHandler(async (_req: Request, res: Response): Promise<void> => {
     const result = await query<EquipoRow>(`
-    SELECT id, codigo, descripcion, marca, modelo, ano, estado, propietario,
-           proyecto as ubicacion, updated_at as ultima_revision
-    FROM equipos
-    WHERE activo = true
+    SELECT e.id, e.codigo, e.descripcion, e.marca, e.modelo, e.ano, e.estado, e.propietario,
+           p.nombre_corto as ubicacion, e.updated_at as ultima_revision
+    FROM equipos e
+    LEFT JOIN proyectos p ON p.id = e.proyecto_id
+    WHERE e.activo = true
     ORDER BY
-      CASE WHEN propietario = 'Pinellas' THEN 0 ELSE 1 END,
-      descripcion ASC
+      CASE WHEN e.propietario = 'Pinellas' THEN 0 ELSE 1 END,
+      e.descripcion ASC
   `);
 
     const equiposConEstado = result.rows.map((equipo) => ({
@@ -108,43 +111,46 @@ router.get(
     ): Promise<void> => {
       const { propietario, search, estado } = req.query;
 
-      let whereClause = 'WHERE activo = true';
+      let whereClause = 'WHERE e.activo = true';
       const queryParams: unknown[] = [];
       let paramCounter = 1;
 
       if (propietario) {
-        whereClause += ` AND propietario = $${paramCounter}`;
+        whereClause += ` AND e.propietario = $${paramCounter}`;
         queryParams.push(propietario);
         paramCounter++;
       }
 
       if (search) {
         whereClause += ` AND (
-      descripcion ILIKE $${paramCounter} OR
-      marca ILIKE $${paramCounter} OR
-      modelo ILIKE $${paramCounter} OR
-      codigo ILIKE $${paramCounter}
+      e.descripcion ILIKE $${paramCounter} OR
+      e.marca ILIKE $${paramCounter} OR
+      e.modelo ILIKE $${paramCounter} OR
+      e.codigo ILIKE $${paramCounter}
     )`;
         queryParams.push(`%${search}%`);
         paramCounter++;
       }
 
       if (estado) {
-        whereClause += ` AND estado = $${paramCounter}`;
+        whereClause += ` AND e.estado = $${paramCounter}`;
         queryParams.push(estado);
         paramCounter++;
       }
 
       const result = await query<EquipoRow>(
         `
-    SELECT id, codigo, descripcion, marca, modelo, ano, motor, chasis, costo,
-           valor_actual, rata_mes, proyecto, responsable, estado, observaciones,
-           propietario, created_at, updated_at
-    FROM equipos
+    SELECT e.id, e.codigo, e.descripcion, e.marca, e.modelo, e.ano, e.motor, e.chasis, e.costo,
+           e.valor_actual, e.rata_mes, e.proyecto_id, e.responsable_id, e.estado, e.observaciones,
+           e.propietario, e.created_at, e.updated_at,
+           p.nombre_corto as proyecto_nombre, u.nombre as responsable_nombre
+    FROM equipos e
+    LEFT JOIN proyectos p ON p.id = e.proyecto_id
+    LEFT JOIN users u ON u.id = e.responsable_id
     ${whereClause}
     ORDER BY
-      CASE WHEN propietario = 'Pinellas' THEN 0 ELSE 1 END,
-      descripcion ASC
+      CASE WHEN e.propietario = 'Pinellas' THEN 0 ELSE 1 END,
+      e.descripcion ASC
   `,
         queryParams,
       );
@@ -180,11 +186,14 @@ router.get(
 
       const result = await query<EquipoRow>(
         `
-    SELECT id, codigo, descripcion, marca, modelo, ano, motor, chasis, costo,
-           valor_actual, rata_mes, proyecto, responsable, estado, observaciones,
-           propietario, created_at, updated_at
-    FROM equipos
-    WHERE id = $1 AND activo = true
+    SELECT e.id, e.codigo, e.descripcion, e.marca, e.modelo, e.ano, e.motor, e.chasis, e.costo,
+           e.valor_actual, e.rata_mes, e.proyecto_id, e.responsable_id, e.estado, e.observaciones,
+           e.propietario, e.created_at, e.updated_at,
+           p.nombre_corto as proyecto_nombre, u.nombre as responsable_nombre
+    FROM equipos e
+    LEFT JOIN proyectos p ON p.id = e.proyecto_id
+    LEFT JOIN users u ON u.id = e.responsable_id
+    WHERE e.id = $1 AND e.activo = true
   `,
         [id],
       );
@@ -224,6 +233,14 @@ router.post(
       .optional({ nullable: true, checkFalsy: true })
       .isDecimal(),
     body('rata_mes').optional({ nullable: true, checkFalsy: true }).isDecimal(),
+    body('proyecto_id')
+      .optional({ nullable: true, checkFalsy: true })
+      .isInt()
+      .withMessage('ID de proyecto inválido'),
+    body('responsable_id')
+      .optional({ nullable: true, checkFalsy: true })
+      .isInt()
+      .withMessage('ID de responsable inválido'),
   ],
   asyncHandler(
     async (
@@ -251,8 +268,8 @@ router.post(
         costo,
         valor_actual,
         rata_mes,
-        proyecto,
-        responsable,
+        proyecto_id,
+        responsable_id,
         estado,
         observaciones,
         propietario,
@@ -262,7 +279,7 @@ router.post(
         `
     INSERT INTO equipos (
       codigo, descripcion, marca, modelo, ano, motor, chasis,
-      costo, valor_actual, rata_mes, proyecto, responsable,
+      costo, valor_actual, rata_mes, proyecto_id, responsable_id,
       estado, observaciones, propietario
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     RETURNING id
@@ -278,8 +295,8 @@ router.post(
           costo ? parseFloat(String(costo)) : null,
           valor_actual ? parseFloat(String(valor_actual)) : null,
           rata_mes ? parseFloat(String(rata_mes)) : null,
-          proyecto || null,
-          responsable || null,
+          proyecto_id || null,
+          responsable_id || null,
           estado || null,
           observaciones || null,
           propietario,
@@ -321,6 +338,14 @@ router.put(
     body('propietario')
       .isIn(['Pinellas', 'COCP'])
       .withMessage('Propietario debe ser Pinellas o COCP'),
+    body('proyecto_id')
+      .optional({ nullable: true, checkFalsy: true })
+      .isInt()
+      .withMessage('ID de proyecto inválido'),
+    body('responsable_id')
+      .optional({ nullable: true, checkFalsy: true })
+      .isInt()
+      .withMessage('ID de responsable inválido'),
   ],
   asyncHandler(
     async (
@@ -349,8 +374,8 @@ router.put(
         costo,
         valor_actual,
         rata_mes,
-        proyecto,
-        responsable,
+        proyecto_id,
+        responsable_id,
         estado,
         observaciones,
         propietario,
@@ -371,7 +396,7 @@ router.put(
         `
     UPDATE equipos SET
       codigo = $1, descripcion = $2, marca = $3, modelo = $4, ano = $5, motor = $6, chasis = $7,
-      costo = $8, valor_actual = $9, rata_mes = $10, proyecto = $11, responsable = $12,
+      costo = $8, valor_actual = $9, rata_mes = $10, proyecto_id = $11, responsable_id = $12,
       estado = $13, observaciones = $14, propietario = $15, updated_at = CURRENT_TIMESTAMP
     WHERE id = $16
   `,
@@ -386,8 +411,8 @@ router.put(
           costo ? parseFloat(String(costo)) : null,
           valor_actual ? parseFloat(String(valor_actual)) : null,
           rata_mes ? parseFloat(String(rata_mes)) : null,
-          proyecto || null,
-          responsable || null,
+          proyecto_id || null,
+          responsable_id || null,
           estado || null,
           observaciones || null,
           propietario,
@@ -418,6 +443,14 @@ router.put(
       .optional()
       .isDecimal()
       .withMessage('Rata mensual debe ser un número válido'),
+    body('proyecto_id')
+      .optional({ nullable: true, checkFalsy: true })
+      .isInt()
+      .withMessage('ID de proyecto inválido'),
+    body('responsable_id')
+      .optional({ nullable: true, checkFalsy: true })
+      .isInt()
+      .withMessage('ID de responsable inválido'),
   ],
   asyncHandler(
     async (
@@ -435,7 +468,7 @@ router.put(
       }
 
       const { id } = req.params;
-      const { estado, proyecto, responsable, rata_mes, observaciones_status } =
+      const { estado, proyecto_id, responsable_id, rata_mes, observaciones_status } =
         req.body;
 
       const existsResult = await query<{ id: number }>(
@@ -452,14 +485,14 @@ router.put(
       await query(
         `
     UPDATE equipos SET
-      estado = $1, proyecto = $2, responsable = $3, rata_mes = $4,
+      estado = $1, proyecto_id = $2, responsable_id = $3, rata_mes = $4,
       observaciones_status = $5, updated_at = CURRENT_TIMESTAMP
     WHERE id = $6
   `,
         [
           estado || null,
-          proyecto || null,
-          responsable || null,
+          proyecto_id || null,
+          responsable_id || null,
           rata_mes ? parseFloat(String(rata_mes)) : null,
           observaciones_status || null,
           id,
@@ -473,8 +506,8 @@ router.put(
         parseInt(id),
         {
           estado,
-          proyecto,
-          responsable,
+          proyecto_id,
+          responsable_id,
         },
       );
 
