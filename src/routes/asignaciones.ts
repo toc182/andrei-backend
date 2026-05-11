@@ -99,6 +99,10 @@ router.post(
     body('equipo_id').isInt().withMessage('ID de equipo requerido'),
     body('cliente_id').isInt().withMessage('ID de cliente requerido'),
     body('proyecto_id').isInt().withMessage('ID de proyecto requerido'),
+    body('responsable_id')
+      .optional({ nullable: true, checkFalsy: true })
+      .isInt()
+      .withMessage('ID de responsable inválido'),
     body('fecha_inicio').isISO8601().withMessage('Fecha de inicio requerida'),
     body('tipo_uso')
       .isIn(['propio', 'alquiler'])
