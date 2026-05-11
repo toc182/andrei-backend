@@ -344,7 +344,7 @@ router.get(
         `SELECT e.*, u.nombre AS creado_por_nombre
          FROM cuentas_eventos e
          JOIN users u ON u.id = e.creado_por
-         WHERE e.cuenta_id = $1
+         WHERE e.cuenta_id = $1 AND e.activo = true
          ORDER BY e.created_at ASC`,
         [id],
       );
