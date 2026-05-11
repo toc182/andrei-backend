@@ -216,6 +216,7 @@ router.post(
   authenticateToken,
   checkPermission('equipos_agregar'),
   [
+    body('codigo').trim().notEmpty().withMessage('Código es requerido'),
     body('descripcion')
       .trim()
       .notEmpty()
@@ -275,6 +276,18 @@ router.post(
         propietario,
       } = req.body;
 
+      const dupCheck = await query<{ id: number }>(
+        'SELECT id FROM equipos WHERE codigo = $1',
+        [codigo],
+      );
+      if (dupCheck.rows.length > 0) {
+        res.status(409).json({
+          success: false,
+          message: `Ya existe un equipo con el código "${codigo}"`,
+        });
+        return;
+      }
+
       const result = await query<{ id: number }>(
         `
     INSERT INTO equipos (
@@ -326,6 +339,7 @@ router.put(
   checkPermission('equipos_editar'),
   [
     param('id').isInt().withMessage('ID debe ser un número entero'),
+    body('codigo').trim().notEmpty().withMessage('Código es requerido'),
     body('descripcion')
       .trim()
       .notEmpty()
@@ -389,6 +403,18 @@ router.put(
         res
           .status(404)
           .json({ success: false, message: 'Equipo no encontrado' });
+        return;
+      }
+
+      const dupCheck = await query<{ id: number }>(
+        'SELECT id FROM equipos WHERE codigo = $1 AND id <> $2',
+        [codigo, id],
+      );
+      if (dupCheck.rows.length > 0) {
+        res.status(409).json({
+          success: false,
+          message: `Ya existe un equipo con el código "${codigo}"`,
+        });
         return;
       }
 
