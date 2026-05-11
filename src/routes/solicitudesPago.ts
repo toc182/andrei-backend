@@ -721,18 +721,21 @@ export async function generateNumero(
   // Apertura: count apertura rows only, strip the A suffix when reading the number.
   // Regular: count regular rows only.
   let countSql: string;
+  // NOTE: next-numero must include soft-deleted rows. numero is a unique
+  // sequence; reusing a soft-deleted row's numero would violate the unique
+  // constraint when inserting a new solicitud.
   if (tipo === 'reembolso') {
     countSql = `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
-       WHERE proyecto_id = $1 AND tipo = 'reembolso' AND activo = true`;
+       WHERE proyecto_id = $1 AND tipo = 'reembolso'`;
   } else if (tipo === 'apertura') {
     countSql = `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
-       WHERE proyecto_id = $1 AND tipo = 'apertura' AND activo = true`;
+       WHERE proyecto_id = $1 AND tipo = 'apertura'`;
   } else {
     countSql = `SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
-       WHERE proyecto_id = $1 AND tipo = 'regular' AND activo = true`;
+       WHERE proyecto_id = $1 AND tipo = 'regular'`;
   }
 
   const count = await q<{ total: string }>(countSql, [projectId]);
