@@ -127,7 +127,7 @@ router.get(
               ) AS historial_sin_comprobante,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
-                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id
+                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id AND sp.activo = true
                 WHERE h.caja_menuda_id = cm.id
                   AND h.solicitud_id IS NOT NULL
                   AND sp.estado != 'transferida'
@@ -140,6 +140,7 @@ router.get(
                   WHERE g.caja_menuda_id = cm.id
                     AND g.solicitud_reembolso_id IS NOT NULL
                 )
+                AND sp.activo = true
                 AND sp.estado != 'reembolsada'
               ) AS tiene_reembolso_pendiente,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
@@ -150,13 +151,14 @@ router.get(
                    AND NOT EXISTS (
                      SELECT 1 FROM solicitudes_pago sp
                      WHERE sp.id = g.solicitud_reembolso_id
+                       AND sp.activo = true
                        AND sp.estado = 'reembolsada'
                    )), 0
               ) AS saldo
        FROM cajas_menudas cm
        JOIN proyectos p ON p.id = cm.proyecto_id
        JOIN users u ON u.id = cm.responsable_id
-       LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id
+       LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id AND sa.activo = true
        ${whereClause}
        ORDER BY cm.created_at DESC`,
       params,
@@ -220,7 +222,7 @@ router.get(
               ) AS historial_sin_comprobante,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
-                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id
+                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id AND sp.activo = true
                 WHERE h.caja_menuda_id = cm.id
                   AND h.solicitud_id IS NOT NULL
                   AND sp.estado != 'transferida'
@@ -233,6 +235,7 @@ router.get(
                   WHERE g.caja_menuda_id = cm.id
                     AND g.solicitud_reembolso_id IS NOT NULL
                 )
+                AND sp.activo = true
                 AND sp.estado != 'reembolsada'
               ) AS tiene_reembolso_pendiente,
               u.nombre AS responsable_nombre,
@@ -242,12 +245,13 @@ router.get(
                    AND NOT EXISTS (
                      SELECT 1 FROM solicitudes_pago sp
                      WHERE sp.id = g.solicitud_reembolso_id
+                       AND sp.activo = true
                        AND sp.estado = 'reembolsada'
                    )), 0
               ) AS saldo
        FROM cajas_menudas cm
        JOIN users u ON u.id = cm.responsable_id
-       LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id
+       LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id AND sa.activo = true
        WHERE cm.proyecto_id = $1
        ORDER BY cm.created_at DESC`,
         [proyectoId],
@@ -295,7 +299,7 @@ router.get(
               ) AS historial_sin_comprobante,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
-                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id
+                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id AND sp.activo = true
                 WHERE h.caja_menuda_id = cm.id
                   AND h.solicitud_id IS NOT NULL
                   AND sp.estado != 'transferida'
@@ -308,6 +312,7 @@ router.get(
                   WHERE g.caja_menuda_id = cm.id
                     AND g.solicitud_reembolso_id IS NOT NULL
                 )
+                AND sp.activo = true
                 AND sp.estado != 'reembolsada'
               ) AS tiene_reembolso_pendiente,
               COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
@@ -319,6 +324,7 @@ router.get(
                    AND NOT EXISTS (
                      SELECT 1 FROM solicitudes_pago sp
                      WHERE sp.id = g.solicitud_reembolso_id
+                       AND sp.activo = true
                        AND sp.estado = 'reembolsada'
                    )), 0
               ) AS saldo,
@@ -328,6 +334,7 @@ router.get(
                    AND NOT EXISTS (
                      SELECT 1 FROM solicitudes_pago sp
                      WHERE sp.id = g.solicitud_reembolso_id
+                       AND sp.activo = true
                        AND sp.estado = 'reembolsada'
                    )), 0
               ) AS total_gastado
@@ -335,7 +342,7 @@ router.get(
        JOIN proyectos p ON p.id = cm.proyecto_id
        JOIN users u ON u.id = cm.responsable_id
        JOIN users creator ON creator.id = cm.creado_por
-       LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id
+       LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id AND sa.activo = true
        WHERE cm.id = $1`,
         [id],
       );
@@ -352,7 +359,7 @@ router.get(
                sp.id AS solicitud_id, sp.numero AS solicitud_numero, sp.estado AS solicitud_estado
        FROM cajas_menudas_historial_monto h
        JOIN users u ON u.id = h.cambiado_por
-       LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id
+       LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id AND sp.activo = true
        WHERE h.caja_menuda_id = $1
        ORDER BY h.created_at ASC`,
         [id],
@@ -366,6 +373,7 @@ router.get(
          FROM cajas_menudas_gastos g
          WHERE g.caja_menuda_id = $1 AND g.solicitud_reembolso_id IS NOT NULL
        )
+       AND sp.activo = true
        ORDER BY sp.created_at DESC`,
         [id],
       );
@@ -553,6 +561,7 @@ router.put(
              WHERE g.caja_menuda_id = $1
                AND g.solicitud_reembolso_id IS NOT NULL
            )
+           AND sp.activo = true
            AND sp.estado != 'reembolsada'`,
           [id],
         );
@@ -587,6 +596,7 @@ router.put(
              AND NOT EXISTS (
                SELECT 1 FROM solicitudes_pago sp
                WHERE sp.id = g.solicitud_reembolso_id
+                 AND sp.activo = true
                  AND sp.estado = 'reembolsada'
              )`,
           [id],
@@ -829,6 +839,7 @@ router.put(
            FROM solicitudes_pago sp
            WHERE sp.tipo = 'apertura'
              AND sp.estado = 'pendiente'
+             AND sp.activo = true
              AND (
                sp.id = (SELECT solicitud_apertura_id FROM cajas_menudas WHERE id = $1)
                OR sp.id IN (

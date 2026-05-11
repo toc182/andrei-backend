@@ -118,7 +118,7 @@ export async function sendDailyNotifications(): Promise<NotificationResult> {
     JOIN proyectos p ON sp.proyecto_id = p.id
     JOIN proyecto_ajustes_aprobacion pas ON pas.proyecto_id = sp.proyecto_id AND pas.activo = true
     JOIN users u ON pas.user_id = u.id
-    WHERE sp.estado = 'pendiente'
+    WHERE sp.estado = 'pendiente' AND sp.activo = true
       AND pas.orden = (
         SELECT COUNT(*) + 1
         FROM solicitud_aprobaciones sa

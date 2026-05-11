@@ -95,7 +95,7 @@ router.put(
       try {
         // Resetear solicitudes no finalizadas del proyecto
         const affected = await query<{ id: number }>(
-          `SELECT id FROM solicitudes_pago WHERE proyecto_id = $1 AND estado NOT IN ('pagada', 'facturada')`,
+          `SELECT id FROM solicitudes_pago WHERE proyecto_id = $1 AND estado NOT IN ('pagada', 'facturada') AND activo = true`,
           [projectId],
         );
 
@@ -110,7 +110,7 @@ router.put(
             [affectedIds],
           );
           await query(
-            `UPDATE solicitudes_pago SET estado = 'pendiente' WHERE id = ANY($1::int[])`,
+            `UPDATE solicitudes_pago SET estado = 'pendiente' WHERE id = ANY($1::int[]) AND activo = true`,
             [affectedIds],
           );
         }

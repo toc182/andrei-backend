@@ -205,7 +205,7 @@ router.post(
 
       // Verify solicitud exists
       const solicitud = await query(
-        'SELECT id FROM solicitudes_pago WHERE id = $1',
+        'SELECT id FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (solicitud.rows.length === 0) {

@@ -44,7 +44,7 @@ router.get(
       COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre
     FROM solicitudes_pago sp
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-    WHERE sp.codigo_verificacion = $1
+    WHERE sp.codigo_verificacion = $1 AND sp.activo = true
   `,
         [codigo.toUpperCase()],
       );
@@ -66,7 +66,7 @@ router.get(
     SELECT u.nombre as usuario_nombre, sa.fecha
     FROM solicitud_aprobaciones sa
     JOIN users u ON sa.user_id = u.id
-    JOIN solicitudes_pago sp ON sp.id = sa.solicitud_pago_id
+    JOIN solicitudes_pago sp ON sp.id = sa.solicitud_pago_id AND sp.activo = true
     WHERE sp.codigo_verificacion = $1 AND sa.accion = 'aprobado'
     ORDER BY sa.orden
   `,

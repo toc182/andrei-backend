@@ -35,7 +35,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
-    WHERE sp.id = $1
+    WHERE sp.id = $1 AND sp.activo = true
   `,
     [solicitudId],
   );
@@ -555,7 +555,7 @@ router.get(
       const { id } = req.params;
 
       const solicitud = await query<SolicitudRow>(
-        'SELECT numero FROM solicitudes_pago WHERE id = $1',
+        'SELECT numero FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -724,15 +724,15 @@ export async function generateNumero(
   if (tipo === 'reembolso') {
     countSql = `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
-       WHERE proyecto_id = $1 AND tipo = 'reembolso'`;
+       WHERE proyecto_id = $1 AND tipo = 'reembolso' AND activo = true`;
   } else if (tipo === 'apertura') {
     countSql = `SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(SPLIT_PART(numero, '-', 2), '[^0-9]', '', 'g') AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
-       WHERE proyecto_id = $1 AND tipo = 'apertura'`;
+       WHERE proyecto_id = $1 AND tipo = 'apertura' AND activo = true`;
   } else {
     countSql = `SELECT COALESCE(MAX(CAST(SPLIT_PART(numero, '-', 2) AS INTEGER)), 0)::text as total
        FROM solicitudes_pago
-       WHERE proyecto_id = $1 AND tipo = 'regular'`;
+       WHERE proyecto_id = $1 AND tipo = 'regular' AND activo = true`;
   }
 
   const count = await q<{ total: string }>(countSql, [projectId]);
@@ -756,7 +756,7 @@ router.get(
     FROM solicitudes_pago sp
     JOIN proyecto_ajustes_aprobacion pas ON pas.proyecto_id = sp.proyecto_id
       AND pas.user_id = $1 AND pas.activo = true
-    WHERE sp.estado = 'pendiente'
+    WHERE sp.estado = 'pendiente' AND sp.activo = true
       AND pas.orden = (
         SELECT COUNT(*) + 1
         FROM solicitud_aprobaciones sa
@@ -799,7 +799,7 @@ router.get(
     FROM solicitudes_pago sp
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
     LEFT JOIN reembolsos_pinellas rp ON rp.solicitud_id = sp.id
-    WHERE sp.pinellas_paga = true${projectFilter}
+    WHERE sp.pinellas_paga = true AND sp.activo = true${projectFilter}
     ORDER BY rp.id IS NOT NULL ASC, sp.created_at DESC
   `,
       params,
@@ -902,7 +902,7 @@ router.get(
     const { estado, proyecto_id } = req.query;
     const currentUserId = req.user!.id;
 
-    let whereClause = 'WHERE 1=1';
+    let whereClause = 'WHERE sp.activo = true';
     const params: unknown[] = [currentUserId];
     let paramCount = 1;
 
@@ -1006,7 +1006,7 @@ router.get(
       const { estado } = req.query;
       const currentUserId = req.user!.id;
 
-      let whereClause = 'WHERE sp.proyecto_id = $1';
+      let whereClause = 'WHERE sp.proyecto_id = $1 AND sp.activo = true';
       const params: unknown[] = [projectId, currentUserId];
       let paramCount = 2;
 
@@ -1208,7 +1208,7 @@ router.get(
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
     LEFT JOIN requisiciones r ON sp.requisicion_id = r.id
-    WHERE sp.id = $1
+    WHERE sp.id = $1 AND sp.activo = true
   `,
         [id],
       );
@@ -1719,7 +1719,7 @@ router.put(
 
       // Verificar que existe y está en estado editable
       const existing = await query<SolicitudRow & { preparado_por: number }>(
-        'SELECT id, estado, preparado_por FROM solicitudes_pago WHERE id = $1',
+        'SELECT id, estado, preparado_por FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (existing.rows.length === 0) {
@@ -1813,7 +1813,7 @@ router.put(
       subtotal = $5, descuentos = $6, impuestos = $7, monto_total = $8,
       observaciones = $9, beneficiario = $10, banco = $11, tipo_cuenta = $12,
       numero_cuenta = $13, urgente = $14, pinellas_paga = $15, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $16 RETURNING *
+    WHERE id = $16 AND activo = true RETURNING *
   `,
         [
           fecha || new Date().toISOString().split('T')[0],
@@ -1892,7 +1892,7 @@ router.put(
           [id],
         );
         await query(
-          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
           ['pendiente', id],
         );
       }
@@ -1922,7 +1922,7 @@ router.patch(
       const { pinellas_paga } = req.body;
 
       const existing = await query<SolicitudRow>(
-        'SELECT id, estado, pinellas_paga, preparado_por FROM solicitudes_pago WHERE id = $1',
+        'SELECT id, estado, pinellas_paga, preparado_por FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (existing.rows.length === 0) {
@@ -1961,7 +1961,7 @@ router.patch(
       }
 
       await query(
-        'UPDATE solicitudes_pago SET pinellas_paga = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        'UPDATE solicitudes_pago SET pinellas_paga = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
         [pinellas_paga, id],
       );
 
@@ -1995,7 +1995,7 @@ router.patch(
       const { estado } = req.body;
 
       const existing = await query<SolicitudRow>(
-        'SELECT id, estado, tipo FROM solicitudes_pago WHERE id = $1',
+        'SELECT id, estado, tipo FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (existing.rows.length === 0) {
@@ -2035,7 +2035,7 @@ router.patch(
       }
 
       const result = await query<SolicitudRow>(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true RETURNING *',
         [estado, id],
       );
 
@@ -2124,7 +2124,7 @@ router.post(
         `SELECT sp.*, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
          FROM solicitudes_pago sp
          LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-         WHERE sp.id = $1`,
+         WHERE sp.id = $1 AND sp.activo = true`,
         [id],
       );
       if (currentResult.rows.length === 0) {
@@ -2461,7 +2461,7 @@ router.post(
 
         updateValues.push(id);
         await client.query(
-          `UPDATE solicitudes_pago SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`,
+          `UPDATE solicitudes_pago SET ${updateFields.join(', ')} WHERE id = $${paramIndex} AND activo = true`,
           updateValues,
         );
 
@@ -2725,7 +2725,7 @@ router.post(
         `SELECT sp.id, sp.numero, sp.estado, sp.tipo, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
          FROM solicitudes_pago sp
          LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-         WHERE sp.id = $1`,
+         WHERE sp.id = $1 AND sp.activo = true`,
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -2778,7 +2778,7 @@ router.post(
 
       // Cambiar estado: pagada (regular) o reembolsada (reembolso)
       await query(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
         [targetEstado, id],
       );
 
@@ -2792,7 +2792,7 @@ router.post(
       } catch (archiveErr) {
         // Rollback estado change if archive fails
         await query(
-          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
           ['aprobada', id],
         );
         console.error(`Error archiving PDF at ${targetEstado}:`, archiveErr);
@@ -2883,7 +2883,7 @@ router.post(
         `SELECT sp.id, sp.numero, sp.estado, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
          FROM solicitudes_pago sp
          LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-         WHERE sp.id = $1`,
+         WHERE sp.id = $1 AND sp.activo = true`,
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -2928,7 +2928,7 @@ router.post(
 
       // Cambiar estado a facturada
       await query(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
         ['facturada', id],
       );
 
@@ -3011,7 +3011,7 @@ router.post(
     for (const solicitudId of ids) {
       try {
         const solicitud = await query<SolicitudRow>(
-          'SELECT * FROM solicitudes_pago WHERE id = $1',
+          'SELECT * FROM solicitudes_pago WHERE id = $1 AND activo = true',
           [solicitudId],
         );
         if (solicitud.rows.length === 0) {
@@ -3075,7 +3075,7 @@ router.post(
 
         if (aprobacionesHechas + 1 >= aprobadores.rows.length) {
           await query(
-            'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+            'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
             ['aprobada', solicitudId],
           );
         }
@@ -3149,7 +3149,7 @@ router.post(
 
       // Obtener la solicitud
       const solicitud = await query<SolicitudRow>(
-        'SELECT * FROM solicitudes_pago WHERE id = $1',
+        'SELECT * FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -3205,7 +3205,7 @@ router.post(
         aprobacionesHechas + 1 >= aprobadores.rows.length;
       if (esUltimoAprobador) {
         await query(
-          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
           ['aprobada', id],
         );
       }
@@ -3296,7 +3296,7 @@ router.post(
 
       // Obtener la solicitud
       const solicitud = await query<SolicitudRow>(
-        'SELECT * FROM solicitudes_pago WHERE id = $1',
+        'SELECT * FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -3349,7 +3349,7 @@ router.post(
 
       // Cambiar estado a rechazada
       await query(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
         ['rechazada', id],
       );
 
@@ -3406,7 +3406,7 @@ router.post(
       const userId = req.user!.id;
 
       const solicitud = await query<SolicitudRow>(
-        'SELECT * FROM solicitudes_pago WHERE id = $1',
+        'SELECT * FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -3504,7 +3504,7 @@ router.post(
 
       // Verificar que la solicitud existe y tiene pinellas_paga
       const solicitud = await query<SolicitudRow>(
-        'SELECT id, pinellas_paga, numero FROM solicitudes_pago WHERE id = $1',
+        'SELECT id, pinellas_paga, numero FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -3646,7 +3646,7 @@ router.post(
         `SELECT sp.id, sp.numero, sp.estado, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
          FROM solicitudes_pago sp
          LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-         WHERE sp.id = $1`,
+         WHERE sp.id = $1 AND sp.activo = true`,
         [id],
       );
       if (solicitud.rows.length === 0) {
@@ -3695,7 +3695,7 @@ router.post(
 
       // Cambiar estado a devolucion
       await query(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
         ['devolucion', id],
       );
 
@@ -3787,7 +3787,7 @@ router.delete(
       const existing = await query<
         SolicitudRow & { preparado_por: number; proyecto_id: number }
       >(
-        'SELECT id, numero, estado, preparado_por, proyecto_id FROM solicitudes_pago WHERE id = $1',
+        'SELECT id, numero, estado, preparado_por, proyecto_id FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (existing.rows.length === 0) {
@@ -3894,7 +3894,10 @@ router.delete(
       );
 
       const { numero, estado } = existing.rows[0];
-      await query('DELETE FROM solicitudes_pago WHERE id = $1', [id]);
+      await query(
+        'UPDATE solicitudes_pago SET activo = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+        [id],
+      );
       await registrarAudit(
         req.user!.id,
         'eliminar',
