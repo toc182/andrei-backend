@@ -58,7 +58,7 @@ function getFlow(proyectoTipo: string, tieneIpt: boolean): string {
 
 async function iptIsAprobado(cuentaId: number): Promise<boolean> {
   const r = await query<{ estado: string }>(
-    'SELECT estado FROM cuentas_ipt WHERE cuenta_id = $1',
+    'SELECT estado FROM cuentas_ipt WHERE cuenta_id = $1 AND activo = true',
     [cuentaId],
   );
   return r.rows.length > 0 && r.rows[0].estado === 'aprobado';
@@ -364,7 +364,7 @@ router.get(
          LEFT JOIN users um ON um.id = i.firma_ministro_por
          LEFT JOIN users ume ON ume.id = i.firma_mef_por
          LEFT JOIN users uc ON uc.id = i.firma_contralor_por
-         WHERE i.cuenta_id = $1`,
+         WHERE i.cuenta_id = $1 AND i.activo = true`,
         [id],
       );
 
@@ -945,7 +945,7 @@ router.patch(
       }
 
       const existing = await query<{ id: number }>(
-        'SELECT id FROM cuentas_ipt WHERE cuenta_id = $1',
+        'SELECT id FROM cuentas_ipt WHERE cuenta_id = $1 AND activo = true',
         [id],
       );
       if (existing.rows.length === 0) {
@@ -1013,7 +1013,7 @@ router.patch(
 
       params.push(id);
       await query(
-        `UPDATE cuentas_ipt SET ${sets.join(', ')} WHERE cuenta_id = $${params.length}`,
+        `UPDATE cuentas_ipt SET ${sets.join(', ')} WHERE cuenta_id = $${params.length} AND activo = true`,
         params,
       );
 
