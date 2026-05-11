@@ -561,8 +561,8 @@ router.post(
 
         await query(
           `
-      INSERT INTO proyecto_presupuestos (proyecto_id, moneda, notas, creado_por)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO proyecto_presupuestos (proyecto_id, moneda, notas, creado_por, actualizado_por)
+      VALUES ($1, $2, $3, $4, $4)
       ON CONFLICT (proyecto_id)
       DO UPDATE SET notas = $3, updated_at = CURRENT_TIMESTAMP, actualizado_por = $4
       RETURNING id
