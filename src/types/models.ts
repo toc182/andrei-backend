@@ -65,7 +65,6 @@ export interface Project {
   estado: ProjectStatus;
   contratista?: string;
   ingeniero_residente?: string;
-  codigo_proyecto?: string;
   contrato?: string;
   acto_publico?: string;
   tipo_contrato: ProjectContractType;

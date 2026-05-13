@@ -29,7 +29,6 @@ interface ProjectRow {
   estado: ProjectState;
   contratista?: string;
   ingeniero_residente?: string;
-  codigo_proyecto?: string;
   contrato?: string;
   acto_publico?: string;
   tipo_contrato?: 'publico' | 'privado';
@@ -62,7 +61,6 @@ interface CreateProjectBody {
   estado?: ProjectState;
   contratista?: string;
   ingeniero_residente?: string;
-  codigo_proyecto?: string;
   contrato?: string;
   acto_publico?: string;
   tipo_contrato?: 'publico' | 'privado';
@@ -137,7 +135,6 @@ router.get(
         whereClause += ` AND (
       p.nombre ILIKE $${paramCounter} OR
       p.nombre_corto ILIKE $${paramCounter} OR
-      p.codigo_proyecto ILIKE $${paramCounter} OR
       p.contratista ILIKE $${paramCounter} OR
       c.nombre ILIKE $${paramCounter}
     )`;
@@ -153,7 +150,7 @@ router.get(
         p.id, p.nombre, p.nombre_corto, p.cliente_id,
         TO_CHAR(p.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
         TO_CHAR(p.fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada,
-        p.estado, p.contratista, p.ingeniero_residente, p.codigo_proyecto, p.contrato,
+        p.estado, p.contratista, p.ingeniero_residente, p.contrato,
         p.acto_publico, p.tipo_contrato, p.monto_contrato_original,
         COALESCE(p.presupuesto_base, 0) as presupuesto_base,
         COALESCE(p.itbms, 0) as itbms,
@@ -175,7 +172,7 @@ router.get(
         p.id, p.nombre, p.nombre_corto, p.cliente_id,
         TO_CHAR(p.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
         TO_CHAR(p.fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada,
-        p.estado, p.contratista, p.ingeniero_residente, p.codigo_proyecto, p.contrato,
+        p.estado, p.contratista, p.ingeniero_residente, p.contrato,
         p.acto_publico, p.tipo_contrato, p.tiene_ipt, p.monto_contrato_original, 0 as presupuesto_base, 0 as itbms,
         p.monto_contrato_original as monto_total, p.datos_adicionales, p.created_at, p.updated_at,
         c.nombre as cliente_nombre, c.abreviatura as cliente_abreviatura, c.tipo as cliente_tipo
@@ -330,7 +327,6 @@ router.post(
         estado = 'planificacion',
         contratista,
         ingeniero_residente,
-        codigo_proyecto,
         contrato,
         acto_publico,
         tipo_contrato = 'privado',
@@ -354,9 +350,9 @@ router.post(
             `
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
-        estado, contratista, ingeniero_residente, codigo_proyecto,
+        estado, contratista, ingeniero_residente,
         contrato, acto_publico, tipo_contrato, monto_contrato_original, presupuesto_base, itbms, monto_total, datos_adicionales
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *
     `,
             [
@@ -368,7 +364,6 @@ router.post(
               estado,
               contratista,
               ingeniero_residente,
-              codigo_proyecto,
               contrato,
               acto_publico,
               tipo_contrato,
@@ -388,9 +383,9 @@ router.post(
             `
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
-        estado, contratista, ingeniero_residente, codigo_proyecto,
+        estado, contratista, ingeniero_residente,
         contrato, acto_publico, tipo_contrato, monto_contrato_original, datos_adicionales
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `,
             [
@@ -402,7 +397,6 @@ router.post(
               estado,
               contratista,
               ingeniero_residente,
-              codigo_proyecto,
               contrato,
               acto_publico,
               tipo_contrato,
@@ -533,7 +527,6 @@ router.put(
         'estado',
         'contratista',
         'ingeniero_residente',
-        'codigo_proyecto',
         'contrato',
         'acto_publico',
         'tipo_contrato',
