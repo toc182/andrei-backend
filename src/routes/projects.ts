@@ -278,7 +278,7 @@ router.post(
       .isLength({ min: 2 })
       .withMessage('Nombre debe tener al menos 2 caracteres'),
     body('nombre_corto').optional().trim().isLength({ max: 255 }),
-    body('cliente_id').optional({ nullable: true }).isInt(),
+    body('cliente_id').isInt({ min: 1 }).withMessage('El cliente es obligatorio'),
     body('fecha_inicio').optional({ nullable: true }).isISO8601(),
     body('fecha_fin_estimada').optional({ nullable: true }).isISO8601(),
     body('estado')
