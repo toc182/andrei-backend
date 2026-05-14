@@ -388,29 +388,47 @@ router.post(
       const montoTotal = subtotalGeneral + itbmsGeneral;
       const solicitanteIdFinal = solicitante_id || req.user!.id;
 
-      const result = await query<RequisicionRow>(
-        `
+      let result;
+      try {
+        result = await query<RequisicionRow>(
+          `
     INSERT INTO requisiciones (
       numero, proyecto_id, proveedor, concepto, fecha, pdf_url, pdf_nombre,
       solicitado_por, solicitante_id, estado, subtotal, itbms, monto_total
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pendiente', $10, $11, $12)
     RETURNING *
   `,
-        [
-          numero,
-          proyecto_id,
-          proveedor,
-          concepto || null,
-          fecha || new Date(),
-          pdf_url || null,
-          pdf_nombre || null,
-          req.user!.id,
-          solicitanteIdFinal,
-          subtotalGeneral,
-          itbmsGeneral,
-          montoTotal,
-        ],
-      );
+          [
+            numero,
+            proyecto_id,
+            proveedor,
+            concepto || null,
+            fecha || new Date(),
+            pdf_url || null,
+            pdf_nombre || null,
+            req.user!.id,
+            solicitanteIdFinal,
+            subtotalGeneral,
+            itbmsGeneral,
+            montoTotal,
+          ],
+        );
+      } catch (err) {
+        const dbErr = err as { code?: string; constraint?: string };
+        if (
+          dbErr.code === '23505' &&
+          dbErr.constraint === 'requisiciones_proyecto_id_numero_key'
+        ) {
+          res.status(400).json({
+            success: false,
+            field: 'numero',
+            message:
+              'Ya existe una requisición con este número en este proyecto',
+          });
+          return;
+        }
+        throw err;
+      }
 
       const requisicionId = result.rows[0].id;
 
