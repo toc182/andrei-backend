@@ -122,14 +122,14 @@ router.get(
                 SELECT 1 FROM cajas_menudas_historial_monto h
                 WHERE h.caja_menuda_id = cm.id
                   AND h.comprobante_r2_key IS NULL
-                  AND h.solicitud_id IS NULL
+                  AND h.solicitud_pago_id IS NULL
                   AND h.monto_nuevo < h.monto_anterior
               ) AS historial_sin_comprobante,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
-                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id AND sp.activo = true
+                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_pago_id AND sp.activo = true
                 WHERE h.caja_menuda_id = cm.id
-                  AND h.solicitud_id IS NOT NULL
+                  AND h.solicitud_pago_id IS NOT NULL
                   AND sp.estado != 'transferida'
               ) AS historial_pendiente_transferencia,
               EXISTS (
@@ -217,14 +217,14 @@ router.get(
                 SELECT 1 FROM cajas_menudas_historial_monto h
                 WHERE h.caja_menuda_id = cm.id
                   AND h.comprobante_r2_key IS NULL
-                  AND h.solicitud_id IS NULL
+                  AND h.solicitud_pago_id IS NULL
                   AND h.monto_nuevo < h.monto_anterior
               ) AS historial_sin_comprobante,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
-                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id AND sp.activo = true
+                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_pago_id AND sp.activo = true
                 WHERE h.caja_menuda_id = cm.id
-                  AND h.solicitud_id IS NOT NULL
+                  AND h.solicitud_pago_id IS NOT NULL
                   AND sp.estado != 'transferida'
               ) AS historial_pendiente_transferencia,
               EXISTS (
@@ -294,14 +294,14 @@ router.get(
                 SELECT 1 FROM cajas_menudas_historial_monto h
                 WHERE h.caja_menuda_id = cm.id
                   AND h.comprobante_r2_key IS NULL
-                  AND h.solicitud_id IS NULL
+                  AND h.solicitud_pago_id IS NULL
                   AND h.monto_nuevo < h.monto_anterior
               ) AS historial_sin_comprobante,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
-                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id AND sp.activo = true
+                LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_pago_id AND sp.activo = true
                 WHERE h.caja_menuda_id = cm.id
-                  AND h.solicitud_id IS NOT NULL
+                  AND h.solicitud_pago_id IS NOT NULL
                   AND sp.estado != 'transferida'
               ) AS historial_pendiente_transferencia,
               EXISTS (
@@ -359,7 +359,7 @@ router.get(
                sp.id AS solicitud_id, sp.numero AS solicitud_numero, sp.estado AS solicitud_estado
        FROM cajas_menudas_historial_monto h
        JOIN users u ON u.id = h.cambiado_por
-       LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_id AND sp.activo = true
+       LEFT JOIN solicitudes_pago sp ON sp.id = h.solicitud_pago_id AND sp.activo = true
        WHERE h.caja_menuda_id = $1
        ORDER BY h.created_at ASC`,
         [id],
@@ -843,8 +843,8 @@ router.put(
              AND (
                sp.id = (SELECT solicitud_apertura_id FROM cajas_menudas WHERE id = $1)
                OR sp.id IN (
-                 SELECT solicitud_id FROM cajas_menudas_historial_monto
-                 WHERE caja_menuda_id = $1 AND estado = 'activa' AND solicitud_id IS NOT NULL
+                 SELECT solicitud_pago_id FROM cajas_menudas_historial_monto
+                 WHERE caja_menuda_id = $1 AND estado = 'activa' AND solicitud_pago_id IS NOT NULL
                )
              )
            LIMIT 1`,
@@ -947,7 +947,7 @@ router.put(
 
           // Link solicitud to historial entry
           await client.query(
-            'UPDATE cajas_menudas_historial_monto SET solicitud_id = $1 WHERE id = $2',
+            'UPDATE cajas_menudas_historial_monto SET solicitud_pago_id = $1 WHERE id = $2',
             [solicitudId, historialId],
           );
         } else {

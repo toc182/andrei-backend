@@ -151,7 +151,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
       SELECT rp.fecha_reembolso, u.nombre as registrado_por_nombre
       FROM reembolsos_pinellas rp
       LEFT JOIN users u ON rp.registrado_por = u.id
-      WHERE rp.solicitud_id = $1
+      WHERE rp.solicitud_pago_id = $1
     `,
       [solicitudId],
     );
@@ -291,7 +291,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
       `SELECT ds.fecha_devolucion, ds.motivo, u.nombre as registrado_por_nombre
        FROM devoluciones_solicitud ds
        LEFT JOIN users u ON ds.registrado_por = u.id
-       WHERE ds.solicitud_id = $1`,
+       WHERE ds.solicitud_pago_id = $1`,
       [solicitudId],
     );
     if (devResult.rows.length > 0) {
@@ -348,7 +348,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     comprobante_url: string;
     comprobante_nombre: string;
   }>(
-    'SELECT comprobante_url, comprobante_nombre FROM devoluciones_solicitud WHERE solicitud_id = $1',
+    'SELECT comprobante_url, comprobante_nombre FROM devoluciones_solicitud WHERE solicitud_pago_id = $1',
     [solicitudId],
   );
 
@@ -801,7 +801,7 @@ router.get(
       rp.fecha_reembolso, rp.comprobante_nombre
     FROM solicitudes_pago sp
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-    LEFT JOIN reembolsos_pinellas rp ON rp.solicitud_id = sp.id
+    LEFT JOIN reembolsos_pinellas rp ON rp.solicitud_pago_id = sp.id
     WHERE sp.pinellas_paga = true AND sp.activo = true${projectFilter}
     ORDER BY rp.id IS NOT NULL ASC, sp.created_at DESC
   `,
@@ -851,10 +851,10 @@ async function enrichWithAprobadoresEstado(
        WHERE sa.solicitud_pago_id = ANY($1::int[])`,
       [solicitudIds],
     ),
-    query<{ solicitud_id: number }>(
-      `SELECT rp.solicitud_id
+    query<{ solicitud_pago_id: number }>(
+      `SELECT rp.solicitud_pago_id
        FROM reembolsos_pinellas rp
-       WHERE rp.solicitud_id = ANY($1::int[])`,
+       WHERE rp.solicitud_pago_id = ANY($1::int[])`,
       [solicitudIds],
     ),
   ]);
@@ -873,14 +873,14 @@ async function enrichWithAprobadoresEstado(
       .push({ user_id: row.user_id, nombre: row.nombre });
   }
 
-  // Index approvals by solicitud_id + user_id
+  // Index approvals by solicitud_pago_id + user_id
   const aprobacionesMap = new Map<string, string>();
   for (const row of aprobacionesRes.rows) {
     aprobacionesMap.set(`${row.solicitud_pago_id}-${row.user_id}`, row.accion);
   }
 
   // Set of solicitud IDs that have reembolso registered
-  const reembolsoIds = new Set(reembolsosRes.rows.map((r) => r.solicitud_id));
+  const reembolsoIds = new Set(reembolsosRes.rows.map((r) => r.solicitud_pago_id));
 
   return solicitudes.map((sol) => {
     const aprobadores = sol.proyecto_id
@@ -1361,7 +1361,7 @@ router.get(
       SELECT rp.*, u.nombre as registrado_por_nombre
       FROM reembolsos_pinellas rp
       LEFT JOIN users u ON rp.registrado_por = u.id
-      WHERE rp.solicitud_id = $1
+      WHERE rp.solicitud_pago_id = $1
     `,
           [id],
         );
@@ -1386,7 +1386,7 @@ router.get(
       SELECT ds.*, u.nombre as registrado_por_nombre
       FROM devoluciones_solicitud ds
       LEFT JOIN users u ON ds.registrado_por = u.id
-      WHERE ds.solicitud_id = $1
+      WHERE ds.solicitud_pago_id = $1
     `,
           [id],
         );
@@ -3377,7 +3377,7 @@ router.post(
           }>(
             `SELECT id, caja_menuda_id, monto_anterior
              FROM cajas_menudas_historial_monto
-             WHERE solicitud_id = $1`,
+             WHERE solicitud_pago_id = $1`,
             [id],
           );
           if (historial.rows.length > 0) {
@@ -3526,7 +3526,7 @@ router.post(
 
       // Verificar que no tenga ya un reembolso
       const existing = await query(
-        'SELECT id FROM reembolsos_pinellas WHERE solicitud_id = $1',
+        'SELECT id FROM reembolsos_pinellas WHERE solicitud_pago_id = $1',
         [id],
       );
       if (existing.rows.length > 0) {
@@ -3563,7 +3563,7 @@ router.post(
 
       await query(
         `
-    INSERT INTO reembolsos_pinellas (solicitud_id, comprobante_url, comprobante_nombre, fecha_reembolso, registrado_por)
+    INSERT INTO reembolsos_pinellas (solicitud_pago_id, comprobante_url, comprobante_nombre, fecha_reembolso, registrado_por)
     VALUES ($1, $2, $3, $4, $5)
   `,
         [
@@ -3672,7 +3672,7 @@ router.post(
 
       // Verificar que no tenga ya una devolución
       const existing = await query(
-        'SELECT id FROM devoluciones_solicitud WHERE solicitud_id = $1',
+        'SELECT id FROM devoluciones_solicitud WHERE solicitud_pago_id = $1',
         [id],
       );
       if (existing.rows.length > 0) {
@@ -3691,7 +3691,7 @@ router.post(
 
       // Insertar registro
       await query(
-        `INSERT INTO devoluciones_solicitud (solicitud_id, fecha_devolucion, motivo, comprobante_url, comprobante_nombre, registrado_por)
+        `INSERT INTO devoluciones_solicitud (solicitud_pago_id, fecha_devolucion, motivo, comprobante_url, comprobante_nombre, registrado_por)
          VALUES ($1, $2, $3, $4, $5, $6)`,
         [id, fecha_devolucion, motivo.trim(), r2Key, file.originalname, userId],
       );
@@ -3737,7 +3737,7 @@ router.get(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;
       const result = await query<{ comprobante_url: string }>(
-        'SELECT comprobante_url FROM devoluciones_solicitud WHERE solicitud_id = $1',
+        'SELECT comprobante_url FROM devoluciones_solicitud WHERE solicitud_pago_id = $1',
         [id],
       );
       if (result.rows.length === 0) {
@@ -3760,7 +3760,7 @@ router.get(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;
       const result = await query<{ comprobante_url: string }>(
-        'SELECT comprobante_url FROM reembolsos_pinellas WHERE solicitud_id = $1',
+        'SELECT comprobante_url FROM reembolsos_pinellas WHERE solicitud_pago_id = $1',
         [id],
       );
       if (result.rows.length === 0) {
@@ -3859,10 +3859,10 @@ router.delete(
 
       // Limpiar tablas relacionadas que no tengan ON DELETE CASCADE
       await query(
-        'DELETE FROM devoluciones_solicitud WHERE solicitud_id = $1',
+        'DELETE FROM devoluciones_solicitud WHERE solicitud_pago_id = $1',
         [id],
       );
-      await query('DELETE FROM reembolsos_pinellas WHERE solicitud_id = $1', [
+      await query('DELETE FROM reembolsos_pinellas WHERE solicitud_pago_id = $1', [
         id,
       ]);
       await query(
