@@ -33,7 +33,7 @@ interface RequisicionRow {
   fecha_aprobacion?: Date;
   pagado_por?: number;
   fecha_pago?: Date;
-  expense_id?: number;
+  gasto_id?: number;
   archivada: boolean;
   fecha_archivado?: Date;
   archivado_por?: number;
@@ -729,7 +729,7 @@ router.patch(
         );
 
         paramCount++;
-        updateFields += `, expense_id = $${paramCount}`;
+        updateFields += `, gasto_id = $${paramCount}`;
         params.push(gastoResult.rows[0].id);
       }
 
