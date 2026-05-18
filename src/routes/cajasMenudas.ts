@@ -13,6 +13,7 @@ import {
 } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { PDFDocument } from 'pdf-lib';
+import { generateConstanciaCierreCajaMenuda } from '../services/constanciaPdf.js';
 import { generateNumero } from './solicitudesPago.js';
 
 const router = Router();
@@ -675,43 +676,13 @@ router.put(
 
         const proyectoNombre = proyectoData.rows[0]?.nombre_corto || proyectoData.rows[0]?.nombre || '';
         const responsableNombre = responsableData.rows[0]?.nombre || '';
-        const fechaCierre = new Date().toLocaleDateString('es-PA', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric',
+
+        const pdfBuffer = await generateConstanciaCierreCajaMenuda({
+          cajaNombre: cajaRow.nombre,
+          proyectoNombre,
+          responsableNombre,
+          fechaCierre: new Date(),
         });
-
-        const pdfDoc = await PDFDocument.create();
-        const page = pdfDoc.addPage([595, 842]); // A4
-        const { height } = page.getSize();
-
-        const title = 'CONSTANCIA DE CIERRE DE CAJA MENUDA';
-        const body = [
-          `Caja Menuda: ${cajaRow.nombre}`,
-          `Proyecto: ${proyectoNombre}`,
-          `Fecha de cierre: ${fechaCierre}`,
-          `Saldo final: B/. 0.00`,
-          `Responsable: ${responsableNombre}`,
-          '',
-          'Se hace constar que la caja menuda indicada ha sido cerrada',
-          'con saldo cero, sin fondos pendientes de devolución.',
-        ];
-
-        page.drawText(title, { x: 50, y: height - 100, size: 16 });
-        let yPos = height - 150;
-        for (const line of body) {
-          page.drawText(line, { x: 50, y: yPos, size: 12 });
-          yPos -= 24;
-        }
-
-        page.drawText(`Generado automáticamente el ${fechaCierre}`, {
-          x: 50,
-          y: 80,
-          size: 9,
-        });
-
-        const pdfBytes = await pdfDoc.save();
-        const pdfBuffer = Buffer.from(pdfBytes);
         const pdfName = `constancia-cierre-${cajaRow.nombre.replace(/[^a-zA-Z0-9]/g, '-')}.pdf`;
         const r2Key = `cajas-menudas/${id}/comprobante-cierre-${crypto.randomUUID()}_${pdfName}`;
 
