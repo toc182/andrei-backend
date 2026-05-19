@@ -34,7 +34,41 @@ interface UpdateUserBody {
   rol?: UserRole;
 }
 
-// Todas las rutas requieren autenticación + admin
+interface SeleccionableRow {
+  id: number;
+  nombre: string;
+  tipo_usuario: UserType;
+}
+
+// GET /seleccionables — Lista mínima para dropdowns (id, nombre, tipo_usuario).
+// Cualquier usuario autenticado puede leerla. Se declara ANTES del router.use
+// admin-only para que no quede gateada por requireAdmin.
+router.get(
+  '/seleccionables',
+  authenticateToken,
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const tipo = req.query.tipo as string | undefined;
+
+    let sql = 'SELECT id, nombre, tipo_usuario FROM users WHERE activo = true';
+    const params: string[] = [];
+
+    if (tipo === 'interno' || tipo === 'externo') {
+      sql += ' AND tipo_usuario = $1';
+      params.push(tipo);
+    }
+
+    sql += ' ORDER BY tipo_usuario, nombre';
+
+    const result = await query<SeleccionableRow>(sql, params);
+
+    res.json({
+      success: true,
+      data: result.rows,
+    });
+  }),
+);
+
+// Todas las rutas siguientes requieren autenticación + admin
 router.use(authenticateToken, requireAdmin);
 
 // GET / — Listar usuarios (filtro opcional: ?tipo=interno|externo)
