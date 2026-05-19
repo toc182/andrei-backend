@@ -16,7 +16,10 @@ interface UserRow {
   debe_cambiar_password: boolean;
 }
 
-// Whitelist de permisos válidos para evitar SQL injection
+// Whitelist de permisos válidos. Es la única fuente de verdad para
+// (a) checkPermission() y (b) las columnas que se leen desde user_permissions.
+// Cada string DEBE coincidir exactamente con el nombre de columna en la tabla.
+// Agregar un permiso nuevo aquí lo expone automáticamente en login y verify.
 const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'acceso_global',
   'proyectos_crear',
@@ -40,6 +43,24 @@ const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'caja_menuda',
   'cuentas',
 ];
+
+const PERMISSIONS_SELECT = VALID_PERMISSIONS.join(', ');
+
+/**
+ * Carga el registro de permisos de un usuario con rol "usuario".
+ * Devuelve undefined si el usuario no tiene fila en user_permissions.
+ * Usado por authenticateToken y por el handler de login para mantener
+ * la misma forma de user.permissions en ambos flujos.
+ */
+export async function loadUserPermissions(
+  userId: number,
+): Promise<UserPermissions | undefined> {
+  const result = await query<UserPermissions>(
+    `SELECT ${PERMISSIONS_SELECT} FROM user_permissions WHERE user_id = $1`,
+    [userId],
+  );
+  return result.rows[0];
+}
 
 /**
  * Middleware para verificar token JWT
@@ -83,18 +104,9 @@ export async function authenticateToken(
 
     // Si es usuario, cargar permisos
     if (user.rol === 'usuario') {
-      const permsResult = await query<UserPermissions>(
-        `SELECT acceso_global, proyectos_crear, proyectos_editar, proyectos_eliminar,
-                clientes_agregar, clientes_editar, clientes_eliminar,
-                solicitudes_editar_todas, requisiciones_editar_todas,
-                equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
-                equipos_asignacion, equipos_uso, equipos_editar_asignacion,
-                documentos_acceso, oportunidades_ver, registrar_pago, caja_menuda, cuentas
-         FROM user_permissions WHERE user_id = $1`,
-        [user.id],
-      );
-      if (permsResult.rows.length > 0) {
-        user.permissions = permsResult.rows[0];
+      const permissions = await loadUserPermissions(user.id);
+      if (permissions) {
+        user.permissions = permissions;
       }
     }
 

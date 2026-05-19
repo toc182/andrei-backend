@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { body, validationResult } from 'express-validator';
 import rateLimit from 'express-rate-limit';
 import { query } from '../database/config.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, loadUserPermissions } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
 import type { UserRole, JWTPayload, UserPermissions } from '../types/auth.js';
@@ -189,23 +189,9 @@ router.post(
       // Remover password del objeto de respuesta
       const { password: _, ...userWithoutPassword } = user;
 
-      // Si es usuario, incluir permisos
-      let permissions: UserPermissions | undefined;
-      if (user.rol === 'usuario') {
-        const permsResult = await query<UserPermissions>(
-          `SELECT acceso_global, proyectos_crear, proyectos_editar, proyectos_eliminar,
-              clientes_agregar, clientes_editar, clientes_eliminar,
-              solicitudes_editar_todas, requisiciones_editar_todas,
-              equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
-              equipos_asignacion, equipos_uso, equipos_editar_asignacion,
-              documentos_acceso, oportunidades_ver, registrar_pago
-       FROM user_permissions WHERE user_id = $1`,
-          [user.id],
-        );
-        if (permsResult.rows.length > 0) {
-          permissions = permsResult.rows[0];
-        }
-      }
+      // Si es usuario, incluir permisos (misma forma que en authenticateToken)
+      const permissions: UserPermissions | undefined =
+        user.rol === 'usuario' ? await loadUserPermissions(user.id) : undefined;
 
       res.json({
         success: true,
