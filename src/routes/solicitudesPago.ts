@@ -604,12 +604,17 @@ interface SolicitudRow {
   urgente: boolean;
   pinellas_paga: boolean;
   codigo_verificacion: string;
+  mensaje: string | null;
+  mensaje_autor_id: number | null;
+  mensaje_updated_at: Date | null;
   created_at: Date;
   updated_at: Date;
   proyecto_nombre?: string;
   preparado_nombre?: string;
   solicitado_nombre?: string;
   requisicion_numero?: string;
+  mensaje_autor_nombre?: string | null;
+  mensaje_leido?: boolean | null;
 }
 
 interface ItemRow {
@@ -641,6 +646,7 @@ interface CreateBody {
   solicitado_por?: number;
   requisicion_id?: number;
   observaciones?: string;
+  mensaje?: string | null;
   beneficiario?: string;
   banco?: string;
   tipo_cuenta?: string;
@@ -970,6 +976,12 @@ router.get(
       COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
+      u3.nombre as mensaje_autor_nombre,
+      CASE
+        WHEN sp.mensaje IS NULL THEN NULL
+        WHEN lec.leido_at IS NOT NULL AND lec.leido_at >= sp.mensaje_updated_at THEN true
+        ELSE false
+      END as mensaje_leido,
       CASE WHEN sp.estado = 'pendiente' AND EXISTS (
         SELECT 1 FROM proyecto_ajustes_aprobacion pas
         WHERE pas.proyecto_id = sp.proyecto_id
@@ -985,6 +997,9 @@ router.get(
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
+    LEFT JOIN users u3 ON sp.mensaje_autor_id = u3.id
+    LEFT JOIN solicitud_mensaje_lecturas lec
+      ON lec.solicitud_pago_id = sp.id AND lec.user_id = $1
     ${revisadaJoin}
     ${whereClause}
     ORDER BY sp.created_at DESC
@@ -1059,7 +1074,13 @@ router.get(
     SELECT sp.*,
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
+      u3.nombre as mensaje_autor_nombre,
       r.numero as requisicion_numero,
+      CASE
+        WHEN sp.mensaje IS NULL THEN NULL
+        WHEN lec.leido_at IS NOT NULL AND lec.leido_at >= sp.mensaje_updated_at THEN true
+        ELSE false
+      END as mensaje_leido,
       CASE WHEN sp.estado = 'pendiente' AND EXISTS (
         SELECT 1 FROM proyecto_ajustes_aprobacion pas
         WHERE pas.proyecto_id = sp.proyecto_id
@@ -1074,6 +1095,9 @@ router.get(
     FROM solicitudes_pago sp
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
+    LEFT JOIN users u3 ON sp.mensaje_autor_id = u3.id
+    LEFT JOIN solicitud_mensaje_lecturas lec
+      ON lec.solicitud_pago_id = sp.id AND lec.user_id = $2
     LEFT JOIN requisiciones r ON sp.requisicion_id = r.id
     ${revisadaJoin}
     ${whereClause}
@@ -1204,12 +1228,14 @@ router.get(
       p.nombre as proyecto_nombre,
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
+      u3.nombre as mensaje_autor_nombre,
       r.numero as requisicion_numero,
       (SELECT COUNT(*) FROM correcciones_solicitud WHERE solicitud_pago_id = sp.id) as correcciones_count
     FROM solicitudes_pago sp
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
+    LEFT JOIN users u3 ON sp.mensaje_autor_id = u3.id
     LEFT JOIN requisiciones r ON sp.requisicion_id = r.id
     WHERE sp.id = $1 AND sp.activo = true
   `,
@@ -1471,6 +1497,7 @@ router.post(
         solicitado_por,
         requisicion_id,
         observaciones,
+        mensaje,
         beneficiario,
         banco,
         tipo_cuenta,
@@ -1622,6 +1649,24 @@ router.post(
               ajuste.monto,
               ajuste.orden,
             ],
+          );
+        }
+
+        // Mensaje opcional al crear: el autor queda como leído automáticamente
+        const newMensaje =
+          (typeof mensaje === 'string' ? mensaje.trim() : '') || null;
+        if (newMensaje) {
+          await client.query(
+            `UPDATE solicitudes_pago
+             SET mensaje = $1, mensaje_autor_id = $2, mensaje_updated_at = NOW()
+             WHERE id = $3`,
+            [newMensaje, req.user!.id, solicitudId],
+          );
+          await client.query(
+            `INSERT INTO solicitud_mensaje_lecturas (solicitud_pago_id, user_id, leido_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (solicitud_pago_id, user_id) DO UPDATE SET leido_at = NOW()`,
+            [solicitudId, req.user!.id],
           );
         }
 
@@ -1905,6 +1950,113 @@ router.put(
         message: 'Solicitud actualizada',
         solicitud: result.rows[0],
         aprobaciones_anuladas: tieneAprobaciones,
+      });
+    },
+  ),
+);
+
+// --- PUT /:id/mensaje — Editar o limpiar el mensaje corto de la solicitud ---
+// Cualquier usuario autenticado puede escribir/borrar. Último que escribe gana.
+// El editor queda automáticamente como "leído" para que no vea el dot en su
+// propio mensaje.
+router.put(
+  '/:id/mensaje',
+  [
+    param('id').isInt(),
+    body('mensaje')
+      .optional({ nullable: true })
+      .isString()
+      .withMessage('mensaje debe ser texto')
+      .isLength({ max: 1000 })
+      .withMessage('Mensaje muy largo (máx. 1000 caracteres)'),
+  ],
+  asyncHandler(
+    async (
+      req: Request<{ id: string }, object, { mensaje?: string | null }>,
+      res: Response,
+    ): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Datos inválidos',
+          errors: errors.array(),
+        });
+        return;
+      }
+
+      const { id } = req.params;
+      const userId = req.user!.id;
+      const { mensaje } = req.body;
+
+      const existing = await query<{ mensaje: string | null; activo: boolean }>(
+        'SELECT mensaje, activo FROM solicitudes_pago WHERE id = $1',
+        [id],
+      );
+      if (existing.rows.length === 0 || !existing.rows[0].activo) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Solicitud no encontrada' });
+        return;
+      }
+
+      const previo = existing.rows[0].mensaje;
+      const newMensaje =
+        (typeof mensaje === 'string' ? mensaje.trim() : '') || null;
+
+      if (newMensaje === null) {
+        await query(
+          `UPDATE solicitudes_pago
+           SET mensaje = NULL, mensaje_autor_id = NULL, mensaje_updated_at = NULL
+           WHERE id = $1`,
+          [id],
+        );
+      } else {
+        await query(
+          `UPDATE solicitudes_pago
+           SET mensaje = $1, mensaje_autor_id = $2, mensaje_updated_at = NOW()
+           WHERE id = $3 AND activo = true`,
+          [newMensaje, userId, id],
+        );
+        await query(
+          `INSERT INTO solicitud_mensaje_lecturas (solicitud_pago_id, user_id, leido_at)
+           VALUES ($1, $2, NOW())
+           ON CONFLICT (solicitud_pago_id, user_id) DO UPDATE SET leido_at = NOW()`,
+          [id, userId],
+        );
+      }
+
+      await registrarAudit(
+        userId,
+        'editar_mensaje',
+        'solicitud_pago',
+        parseInt(id),
+        {
+          length_previo: previo ? previo.length : 0,
+          length_nuevo: newMensaje ? newMensaje.length : 0,
+        },
+      );
+
+      const updated = await query<{
+        mensaje: string | null;
+        mensaje_autor_id: number | null;
+        mensaje_updated_at: Date | null;
+      }>(
+        'SELECT mensaje, mensaje_autor_id, mensaje_updated_at FROM solicitudes_pago WHERE id = $1',
+        [id],
+      );
+      const row = updated.rows[0];
+
+      res.json({
+        success: true,
+        mensaje: row.mensaje
+          ? {
+              mensaje: row.mensaje,
+              mensaje_autor_id: row.mensaje_autor_id,
+              mensaje_autor_nombre: req.user!.nombre,
+              mensaje_updated_at: row.mensaje_updated_at,
+            }
+          : null,
       });
     },
   ),
@@ -3470,6 +3622,43 @@ router.delete(
       );
 
       res.json({ success: true, message: 'Revisión desmarcada' });
+    },
+  ),
+);
+
+// --- POST /:id/mensaje/leer — Marca el mensaje como leído para el usuario actual ---
+router.post(
+  '/:id/mensaje/leer',
+  [param('id').isInt()],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const { id } = req.params;
+      const userId = req.user!.id;
+
+      const existing = await query<{ mensaje: string | null; activo: boolean }>(
+        'SELECT mensaje, activo FROM solicitudes_pago WHERE id = $1',
+        [id],
+      );
+      if (existing.rows.length === 0 || !existing.rows[0].activo) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Solicitud no encontrada' });
+        return;
+      }
+      if (!existing.rows[0].mensaje) {
+        // No hay mensaje que marcar como leído; no-op silencioso.
+        res.json({ success: true });
+        return;
+      }
+
+      await query(
+        `INSERT INTO solicitud_mensaje_lecturas (solicitud_pago_id, user_id, leido_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (solicitud_pago_id, user_id) DO UPDATE SET leido_at = NOW()`,
+        [id, userId],
+      );
+
+      res.json({ success: true });
     },
   ),
 );
