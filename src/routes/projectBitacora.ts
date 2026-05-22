@@ -462,6 +462,8 @@ router.delete(
     async (req: Request<{ entryId: string }>, res: Response): Promise<void> => {
       const { entryId } = req.params;
       const userId = req.user!.id;
+      const isAdmin =
+        req.user!.rol === 'admin' || req.user!.rol === 'co-admin';
 
       // Check ownership
       const existing = await query<{ creado_por: number }>(
@@ -476,7 +478,7 @@ router.delete(
         return;
       }
 
-      if (existing.rows[0].creado_por !== userId) {
+      if (!isAdmin && existing.rows[0].creado_por !== userId) {
         res
           .status(403)
           .json({ success: false, message: 'No puedes eliminar esta entrada' });
@@ -615,6 +617,30 @@ router.delete(
     ): Promise<void> => {
       const { commentId } = req.params;
       const userId = req.user!.id;
+      const isAdmin =
+        req.user!.rol === 'admin' || req.user!.rol === 'co-admin';
+
+      // Verify comment exists and capture ownership
+      const existing = await query<{ creado_por: number }>(
+        'SELECT creado_por FROM proyecto_bitacora_comentarios WHERE id = $1',
+        [commentId],
+      );
+
+      if (existing.rows.length === 0) {
+        res.status(404).json({
+          success: false,
+          message: 'Comentario no encontrado',
+        });
+        return;
+      }
+
+      if (!isAdmin && existing.rows[0].creado_por !== userId) {
+        res.status(403).json({
+          success: false,
+          message: 'No tienes permiso para eliminar este comentario',
+        });
+        return;
+      }
 
       // Get attachments to delete from R2
       const attachments = await query<{ r2_key: string }>(
@@ -634,8 +660,8 @@ router.delete(
       }
 
       const result = await query<{ id: number }>(
-        'DELETE FROM proyecto_bitacora_comentarios WHERE id = $1 AND creado_por = $2 RETURNING id',
-        [commentId, userId],
+        'DELETE FROM proyecto_bitacora_comentarios WHERE id = $1 RETURNING id',
+        [commentId],
       );
 
       if (result.rows.length === 0) {
@@ -733,6 +759,8 @@ router.delete(
     ): Promise<void> => {
       const { attachmentId } = req.params;
       const userId = req.user!.id;
+      const isAdmin =
+        req.user!.rol === 'admin' || req.user!.rol === 'co-admin';
 
       // Get attachment and verify ownership
       const attachment = await query<LogAttachmentRow & { creado_por: number }>(
@@ -752,7 +780,7 @@ router.delete(
         return;
       }
 
-      if (attachment.rows[0].creado_por !== userId) {
+      if (!isAdmin && attachment.rows[0].creado_por !== userId) {
         res
           .status(403)
           .json({ success: false, message: 'No puedes eliminar este archivo' });
