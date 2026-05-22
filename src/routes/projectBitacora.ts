@@ -5,15 +5,16 @@
 
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
+import crypto from 'crypto';
 import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { query } from '../database/config.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import {
+  uploadFile,
+  deleteFile,
+  getFileSignedUrl,
+} from '../services/storage.js';
 
 const router = Router();
 
@@ -45,11 +46,12 @@ interface LogAttachmentRow {
   bitacora_id?: number;
   comentario_id?: number;
   nombre_archivo: string;
-  ruta_archivo: string;
+  r2_key: string;
   tipo_mime: string;
   tamano: number;
   created_at: Date;
   creado_por?: number;
+  url?: string;
 }
 
 interface QueryParams {
@@ -66,31 +68,14 @@ interface CommentBody {
   contenido?: string;
 }
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    const uploadDir = path.join(__dirname, '../uploads/bitacora');
-    // Create directory if it doesn't exist
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (_req, file, cb) => {
-    // Generate unique filename: timestamp-originalname
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, uniqueSuffix + ext);
-  },
-});
-
+// Multer config: memory storage (we forward the buffer to R2). 10MB max,
+// images only. Matches the R2 storage pattern used by solicitudesPagoAdjuntos.
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB max
   },
   fileFilter: (_req, file, cb) => {
-    // Allow images only
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
     const extname = allowedTypes.test(
       path.extname(file.originalname).toLowerCase(),
@@ -103,6 +88,50 @@ const upload = multer({
     }
   },
 });
+
+// Sanitize an original filename so it can safely live inside an R2 key.
+// Mirrors solicitudesPagoAdjuntos.sanitizeFilename.
+function sanitizeFilename(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/_+/g, '_');
+}
+
+// Build the R2 key for a bitacora attachment.
+function buildBitacoraKey(
+  parent: { kind: 'entry'; entryId: number } | { kind: 'comment'; commentId: number },
+  originalName: string,
+): string {
+  const uuid = crypto.randomUUID();
+  const safe = sanitizeFilename(originalName);
+  const prefix =
+    parent.kind === 'entry'
+      ? `bitacora/entries/${parent.entryId}`
+      : `bitacora/comments/${parent.commentId}`;
+  return `${prefix}/${uuid}_${safe}`;
+}
+
+// Add a fresh signed URL to every attachment in an array. Skips legacy rows
+// where r2_key looks like a bare filename from the old disk-storage scheme
+// (they'd never resolve and would just fail authentication on R2).
+async function attachSignedUrls(
+  attachments: LogAttachmentRow[],
+): Promise<LogAttachmentRow[]> {
+  return Promise.all(
+    attachments.map(async (att) => {
+      if (!att.r2_key || !att.r2_key.includes('/')) return att;
+      try {
+        const url = await getFileSignedUrl(att.r2_key);
+        return { ...att, url };
+      } catch (err) {
+        console.error('Error signing bitacora attachment URL:', err);
+        return att;
+      }
+    }),
+  );
+}
 
 // ============================================
 // LOG ENTRIES ENDPOINTS
@@ -151,8 +180,10 @@ router.get(
           [entryIds],
         );
 
+        const signedAttachments = await attachSignedUrls(attachmentsResult.rows);
+
         // Group attachments by bitacora_id
-        attachmentsResult.rows.forEach((att) => {
+        signedAttachments.forEach((att) => {
           if (att.bitacora_id) {
             if (!attachmentsByEntry[att.bitacora_id]) {
               attachmentsByEntry[att.bitacora_id] = [];
@@ -236,6 +267,9 @@ router.get(
   `,
         [entryId],
       );
+      const signedEntryAttachments = await attachSignedUrls(
+        attachmentsResult.rows,
+      );
 
       // Get comment attachments
       const commentIds = commentsResult.rows.map((c) => c.id);
@@ -247,8 +281,12 @@ router.get(
           [commentIds],
         );
 
+        const signedCommentAttachments = await attachSignedUrls(
+          commentAttResult.rows,
+        );
+
         // Group by comentario_id
-        commentAttResult.rows.forEach((att) => {
+        signedCommentAttachments.forEach((att) => {
           if (att.comentario_id) {
             if (!commentAttachments[att.comentario_id]) {
               commentAttachments[att.comentario_id] = [];
@@ -269,7 +307,7 @@ router.get(
         entry: {
           ...entryResult.rows[0],
           comments: commentsWithAttachments,
-          attachments: attachmentsResult.rows,
+          attachments: signedEntryAttachments,
         },
       });
     },
@@ -309,19 +347,24 @@ router.post(
 
       const entry = entryResult.rows[0];
 
-      // Save attachments if any
+      // Save attachments if any (uploaded to R2 in-memory, then row inserted)
       const files = req.files as Express.Multer.File[];
       if (files && files.length > 0) {
         for (const file of files) {
+          const r2Key = buildBitacoraKey(
+            { kind: 'entry', entryId: entry.id },
+            file.originalname,
+          );
+          await uploadFile(r2Key, file.buffer, file.mimetype);
           await query(
             `
-        INSERT INTO proyecto_bitacora_adjuntos (bitacora_id, nombre_archivo, ruta_archivo, tipo_mime, tamano)
+        INSERT INTO proyecto_bitacora_adjuntos (bitacora_id, nombre_archivo, r2_key, tipo_mime, tamano)
         VALUES ($1, $2, $3, $4, $5)
       `,
             [
               entry.id,
               file.originalname,
-              file.filename,
+              r2Key,
               file.mimetype,
               file.size,
             ],
@@ -340,19 +383,20 @@ router.post(
         [entry.id],
       );
 
-      // Get attachments
+      // Get attachments + sign URLs
       const attachments = await query<LogAttachmentRow>(
         'SELECT * FROM proyecto_bitacora_adjuntos WHERE bitacora_id = $1',
         [entry.id],
       );
+      const signedAttachments = await attachSignedUrls(attachments.rows);
 
       res.status(201).json({
         success: true,
         entry: {
           ...completeEntry.rows[0],
-          attachments: attachments.rows,
+          attachments: signedAttachments,
           comment_count: 0,
-          attachment_count: attachments.rows.length,
+          attachment_count: signedAttachments.length,
         },
       });
     },
@@ -440,20 +484,25 @@ router.delete(
       }
 
       // Get attachments to delete files
-      const attachments = await query<{ ruta_archivo: string }>(
-        'SELECT ruta_archivo FROM proyecto_bitacora_adjuntos WHERE bitacora_id = $1',
+      // Collect all R2 keys for this entry: both the entry's direct
+      // attachments and attachments on any of its comments.
+      const attachments = await query<{ r2_key: string }>(
+        `SELECT r2_key FROM proyecto_bitacora_adjuntos
+         WHERE bitacora_id = $1
+            OR comentario_id IN (
+              SELECT id FROM proyecto_bitacora_comentarios WHERE bitacora_id = $1
+            )`,
         [entryId],
       );
 
-      // Delete files from disk
+      // Delete files from R2 (best-effort)
       for (const att of attachments.rows) {
-        const filePath = path.join(
-          __dirname,
-          '../uploads/bitacora',
-          att.ruta_archivo,
-        );
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
+        if (att.r2_key && att.r2_key.includes('/')) {
+          try {
+            await deleteFile(att.r2_key);
+          } catch (err) {
+            console.error('Error deleting R2 file (entry):', err);
+          }
         }
       }
 
@@ -508,21 +557,26 @@ router.post(
 
       const comment = result.rows[0];
 
-      // Save attachments if any
+      // Save attachments if any (R2 upload then DB insert)
       const attachments: LogAttachmentRow[] = [];
       const files = req.files as Express.Multer.File[];
       if (files && files.length > 0) {
         for (const file of files) {
+          const r2Key = buildBitacoraKey(
+            { kind: 'comment', commentId: comment.id },
+            file.originalname,
+          );
+          await uploadFile(r2Key, file.buffer, file.mimetype);
           const attResult = await query<LogAttachmentRow>(
             `
-        INSERT INTO proyecto_bitacora_adjuntos (comentario_id, nombre_archivo, ruta_archivo, tipo_mime, tamano)
+        INSERT INTO proyecto_bitacora_adjuntos (comentario_id, nombre_archivo, r2_key, tipo_mime, tamano)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING *
       `,
             [
               comment.id,
               file.originalname,
-              file.filename,
+              r2Key,
               file.mimetype,
               file.size,
             ],
@@ -530,6 +584,7 @@ router.post(
           attachments.push(attResult.rows[0]);
         }
       }
+      const signedAttachments = await attachSignedUrls(attachments);
 
       // Get user name
       const userResult = await query<{ nombre: string }>(
@@ -542,7 +597,7 @@ router.post(
         comment: {
           ...comment,
           creador_nombre: userResult.rows[0]?.nombre,
-          attachments,
+          attachments: signedAttachments,
         },
       });
     },
@@ -561,21 +616,20 @@ router.delete(
       const { commentId } = req.params;
       const userId = req.user!.id;
 
-      // Get attachments to delete files
-      const attachments = await query<{ ruta_archivo: string }>(
-        'SELECT ruta_archivo FROM proyecto_bitacora_adjuntos WHERE comentario_id = $1',
+      // Get attachments to delete from R2
+      const attachments = await query<{ r2_key: string }>(
+        'SELECT r2_key FROM proyecto_bitacora_adjuntos WHERE comentario_id = $1',
         [commentId],
       );
 
-      // Delete files from disk
+      // Delete files from R2 (best-effort: log on failure, don't block DB delete)
       for (const att of attachments.rows) {
-        const filePath = path.join(
-          __dirname,
-          '../uploads/bitacora',
-          att.ruta_archivo,
-        );
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
+        if (att.r2_key && att.r2_key.includes('/')) {
+          try {
+            await deleteFile(att.r2_key);
+          } catch (err) {
+            console.error('Error deleting R2 file (comment):', err);
+          }
         }
       }
 
@@ -643,20 +697,26 @@ router.post(
 
       const attachments: LogAttachmentRow[] = [];
       for (const file of files) {
+        const r2Key = buildBitacoraKey(
+          { kind: 'entry', entryId: parseInt(entryId) },
+          file.originalname,
+        );
+        await uploadFile(r2Key, file.buffer, file.mimetype);
         const result = await query<LogAttachmentRow>(
           `
-      INSERT INTO proyecto_bitacora_adjuntos (bitacora_id, nombre_archivo, ruta_archivo, tipo_mime, tamano)
+      INSERT INTO proyecto_bitacora_adjuntos (bitacora_id, nombre_archivo, r2_key, tipo_mime, tamano)
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `,
-          [entryId, file.originalname, file.filename, file.mimetype, file.size],
+          [entryId, file.originalname, r2Key, file.mimetype, file.size],
         );
         attachments.push(result.rows[0]);
       }
+      const signedAttachments = await attachSignedUrls(attachments);
 
       res.status(201).json({
         success: true,
-        attachments,
+        attachments: signedAttachments,
       });
     },
   ),
@@ -699,14 +759,14 @@ router.delete(
         return;
       }
 
-      // Delete file from disk
-      const filePath = path.join(
-        __dirname,
-        '../uploads/bitacora',
-        attachment.rows[0].ruta_archivo,
-      );
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+      // Delete file from R2 (best-effort)
+      const r2Key = attachment.rows[0].r2_key;
+      if (r2Key && r2Key.includes('/')) {
+        try {
+          await deleteFile(r2Key);
+        } catch (err) {
+          console.error('Error deleting R2 file (attachment):', err);
+        }
       }
 
       // Delete from database

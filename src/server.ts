@@ -1,13 +1,8 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Validación de variables de entorno críticas
 const requiredEnvVars = ['JWT_SECRET'];
@@ -125,9 +120,6 @@ app.use('/api/permissions', permissionsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/cajas-menudas', cajasMenudasRoutes);
 app.use('/api/cuentas', cuentasRoutes);
-
-// Servir archivos estáticos de uploads
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // Ruta de prueba
 app.get('/api/health', (_req: Request, res: Response) => {
