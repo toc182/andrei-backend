@@ -1424,6 +1424,7 @@ router.get(
       // Calculate puede_eliminar (mirrors DELETE /:id logic)
       const sol = solicitud.rows[0];
       const isAdmin = req.user?.rol === 'admin';
+      const isCoAdmin = req.user?.rol === 'co-admin';
       const testProjectId = process.env.TEST_PROJECT_ID
         ? parseInt(process.env.TEST_PROJECT_ID)
         : null;
@@ -1438,6 +1439,9 @@ router.get(
         // Admin can delete anything except protected states outside test project
         puede_eliminar =
           !isEstadoProtegido || sol.proyecto_id === testProjectId;
+      } else if (isCoAdmin) {
+        // Co-admin: pendiente or aprobada, no ownership check
+        puede_eliminar = isEstadoEditable;
       } else {
         // Non-admin: pendiente or aprobada (stages 1/2/3), own solicitud or solicitudes_editar_todas
         puede_eliminar =
