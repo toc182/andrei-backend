@@ -1094,11 +1094,42 @@ router.delete(
         });
         return;
       }
-      await query(
-        'UPDATE cuentas SET activo = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-        [id],
-      );
-      await registrarAudit(user.id, 'eliminar', 'cuenta', id, {});
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        await client.query(
+          'UPDATE cuentas SET activo = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+          [id],
+        );
+
+        // Shift every subsequent active cuenta down by 1 to keep the
+        // sequence gap-free. Two-step (negate, then assign positive) so
+        // PG can't transiently violate the partial unique index.
+        await client.query(
+          `UPDATE cuentas SET numero = -numero
+             WHERE proyecto_id = $1 AND activo = TRUE AND numero > $2`,
+          [cuenta.proyecto_id, cuenta.numero],
+        );
+        await client.query(
+          `UPDATE cuentas SET numero = -numero - 1, updated_at = CURRENT_TIMESTAMP
+             WHERE proyecto_id = $1 AND activo = TRUE AND numero < 0`,
+          [cuenta.proyecto_id],
+        );
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      await registrarAudit(user.id, 'eliminar', 'cuenta', id, {
+        proyecto_id: cuenta.proyecto_id,
+        numero: cuenta.numero,
+      });
       res.json({ success: true });
     },
   ),
