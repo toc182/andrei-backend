@@ -18,6 +18,7 @@ import {
 import { generateSolicitudPDF } from '../services/pdfGenerator.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { sendEmail } from '../services/emailService.js';
+import { fixFiles } from '../utils/fileEncoding.js';
 import { PDFDocument } from 'pdf-lib';
 import bcrypt from 'bcryptjs';
 
@@ -2254,6 +2255,7 @@ router.post(
         res.status(400).json({ success: false, message: err.message });
         return;
       }
+      fixFiles(req);
       next();
     });
   },
@@ -2852,6 +2854,7 @@ router.post(
         res.status(400).json({ success: false, message: err.message });
         return;
       }
+      fixFiles(req);
       next();
     });
   },
@@ -3010,6 +3013,7 @@ router.post(
         res.status(400).json({ success: false, message: err.message });
         return;
       }
+      fixFiles(req);
       next();
     });
   },
@@ -3689,6 +3693,7 @@ router.post(
         res.status(400).json({ success: false, message: err.message });
         return;
       }
+      fixFiles(req);
       next();
     });
   },
@@ -3803,6 +3808,7 @@ router.post(
         res.status(400).json({ success: false, message: err.message });
         return;
       }
+      fixFiles(req);
       next();
     });
   },

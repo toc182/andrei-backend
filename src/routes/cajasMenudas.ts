@@ -12,6 +12,7 @@ import {
   getFileSignedUrl,
 } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
+import { fixUploadEncoding } from '../utils/fileEncoding.js';
 import { PDFDocument } from 'pdf-lib';
 import { generateConstanciaCierreCajaMenuda } from '../services/constanciaPdf.js';
 import { generateNumero } from './solicitudesPago.js';
@@ -526,6 +527,7 @@ router.put(
     { name: 'comprobante_cierre', maxCount: 1 },
     { name: 'comprobante_apertura', maxCount: 1 },
   ]),
+  fixUploadEncoding,
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;
@@ -758,6 +760,7 @@ router.put(
 router.put(
   '/:id/monto',
   upload.single('comprobante'),
+  fixUploadEncoding,
   [param('id').isInt(), body('monto_asignado').isFloat({ gt: 0 })],
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
@@ -1257,6 +1260,7 @@ router.post(
   '/:id/adjuntos',
   [param('id').isInt()],
   upload.single('archivo'),
+  fixUploadEncoding,
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;
@@ -1431,6 +1435,7 @@ router.get(
 router.post(
   '/:id/historial-monto/:historialId/comprobante',
   upload.single('comprobante'),
+  fixUploadEncoding,
   [param('id').isInt(), param('historialId').isInt()],
   asyncHandler(
     async (

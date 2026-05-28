@@ -10,6 +10,7 @@ import {
   deleteFile,
   getFileSignedUrl,
 } from '../services/storage.js';
+import { fixFiles } from '../utils/fileEncoding.js';
 
 const router = Router();
 
@@ -188,6 +189,7 @@ router.post(
         res.status(400).json({ success: false, message: err.message });
         return;
       }
+      fixFiles(req);
       next();
     });
   },

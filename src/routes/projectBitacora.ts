@@ -15,6 +15,7 @@ import {
   deleteFile,
   getFileSignedUrl,
 } from '../services/storage.js';
+import { fixUploadEncoding } from '../utils/fileEncoding.js';
 
 const router = Router();
 
@@ -319,6 +320,7 @@ router.post(
   '/projects/:projectId',
   authenticateToken,
   upload.array('fotos', 10),
+  fixUploadEncoding,
   asyncHandler(
     async (
       req: Request<{ projectId: string }, object, CreateEntryBody>,
@@ -525,6 +527,7 @@ router.post(
   '/:entryId/comments',
   authenticateToken,
   upload.array('fotos', 5),
+  fixUploadEncoding,
   asyncHandler(
     async (
       req: Request<{ entryId: string }, object, CommentBody>,
@@ -687,6 +690,7 @@ router.post(
   '/:entryId/attachments',
   authenticateToken,
   upload.array('fotos', 10),
+  fixUploadEncoding,
   asyncHandler(
     async (req: Request<{ entryId: string }>, res: Response): Promise<void> => {
       const { entryId } = req.params;

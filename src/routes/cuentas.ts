@@ -7,6 +7,7 @@ import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { uploadFile, deleteFile, downloadFile } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
+import { fixUploadEncoding } from '../utils/fileEncoding.js';
 
 const router = Router();
 router.use(authenticateToken, checkPermission('cuentas'));
@@ -930,6 +931,7 @@ router.delete(
 router.post(
   '/:id/adjuntos',
   upload.single('file'),
+  fixUploadEncoding,
   [param('id').isInt()],
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
