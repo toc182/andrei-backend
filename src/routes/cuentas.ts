@@ -20,6 +20,48 @@ const upload = multer({
 const sanitizeFilename = (name: string): string =>
   name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
 
+// Pretty-printers for the historial "edicion" comentario.
+const FIELD_LABELS: Record<string, string> = {
+  monto_total: 'Monto',
+  periodo_inicio: 'Período inicio',
+  periodo_fin: 'Período fin',
+  avance_porcentaje: 'Avance',
+  es_final: 'Cuenta final',
+};
+
+const labelOf = (k: string): string => FIELD_LABELS[k] ?? k;
+
+function formatValue(field: string, val: unknown): string {
+  if (val === null || val === undefined || val === '') return '—';
+  if (field === 'monto_total') {
+    const n = Number(val);
+    if (Number.isNaN(n)) return String(val);
+    return `B/. ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  if (field === 'avance_porcentaje') {
+    const n = Number(val);
+    if (Number.isNaN(n)) return String(val);
+    return `${n.toFixed(2)}%`;
+  }
+  if (field === 'es_final') {
+    return val ? 'Sí' : 'No';
+  }
+  if (field === 'periodo_inicio' || field === 'periodo_fin') {
+    // pg returns DATE columns as JS Date at UTC midnight. Form values
+    // arrive as "YYYY-MM-DD" strings. Normalize both to DD/MM/YYYY.
+    if (val instanceof Date) {
+      const dd = String(val.getUTCDate()).padStart(2, '0');
+      const mm = String(val.getUTCMonth() + 1).padStart(2, '0');
+      return `${dd}/${mm}/${val.getUTCFullYear()}`;
+    }
+    if (typeof val === 'string') {
+      const [y, m, d] = val.slice(0, 10).split('-');
+      if (y && m && d) return `${d}/${m}/${y}`;
+    }
+  }
+  return String(val);
+}
+
 // Transiciones permitidas por tipo de flujo.
 const TRANSICIONES: Record<string, Record<string, string[]>> = {
   privado: {
@@ -598,7 +640,7 @@ router.put(
       // Log edit as event if the cuenta was already submitted (not borrador)
       if (cuenta.estado !== 'borrador' && Object.keys(changes).length > 0) {
         const changeDesc = Object.entries(changes)
-          .map(([k, v]) => `${k}: ${v.from ?? '—'} → ${v.to ?? '—'}`)
+          .map(([k, v]) => `${labelOf(k)}: ${formatValue(k, v.from)} → ${formatValue(k, v.to)}`)
           .join(', ');
         await query(
           `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
