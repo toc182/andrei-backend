@@ -360,7 +360,8 @@ router.get(
 
     const result = await query(
       `SELECT c.*, p.nombre AS proyecto_nombre, cl.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt,
-              cl.nombre AS cliente_nombre, cl.abreviatura AS cliente_abreviatura
+              cl.nombre AS cliente_nombre, cl.abreviatura AS cliente_abreviatura,
+              p.monto_total AS proyecto_monto_total
        FROM cuentas c
        JOIN proyectos p ON p.id = c.proyecto_id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
