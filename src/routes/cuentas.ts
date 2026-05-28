@@ -75,6 +75,23 @@ function isObservacionesEstado(estado: string): boolean {
   );
 }
 
+// Whitelist of every estado the cuentas table accepts.
+// Used as the only validation gate on POST /:id/transicion now that the
+// linear TRANSICIONES check is gone.
+const VALID_ESTADOS = new Set([
+  'borrador',
+  'enviada',
+  'observaciones',
+  'aprobada',
+  'enviada_institucion',
+  'observaciones_institucion',
+  'aprobada_institucion',
+  'enviada_contraloria',
+  'observaciones_contraloria',
+  'aprobada_contraloria',
+  'pagada',
+]);
+
 interface CuentaRow {
   id: number;
   proyecto_id: number;
@@ -299,7 +316,8 @@ router.get(
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
     const result = await query(
-      `SELECT c.*, p.nombre AS proyecto_nombre, cl.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt
+      `SELECT c.*, p.nombre AS proyecto_nombre, cl.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt,
+              cl.nombre AS cliente_nombre, cl.abreviatura AS cliente_abreviatura
        FROM cuentas c
        JOIN proyectos p ON p.id = c.proyecto_id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
@@ -321,8 +339,21 @@ router.get(
       const user = req.user!;
       const id = Number(req.params.id);
 
-      const cuentaRes = await query<CuentaRow & { proyecto_nombre: string; proyecto_tipo: string; proyecto_tiene_ipt: boolean }>(
-        `SELECT c.*, p.nombre AS proyecto_nombre, cl.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt
+      const cuentaRes = await query<
+        CuentaRow & {
+          proyecto_nombre: string;
+          proyecto_tipo: string;
+          proyecto_tiene_ipt: boolean;
+          cliente_nombre: string | null;
+          cliente_abreviatura: string | null;
+        }
+      >(
+        `SELECT c.*,
+                p.nombre AS proyecto_nombre,
+                cl.tipo AS proyecto_tipo,
+                p.tiene_ipt AS proyecto_tiene_ipt,
+                cl.nombre AS cliente_nombre,
+                cl.abreviatura AS cliente_abreviatura
          FROM cuentas c
          JOIN proyectos p ON p.id = c.proyecto_id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
@@ -623,19 +654,10 @@ router.post(
       }
 
       const flow = getFlow(cuenta.proyecto_tipo, cuenta.proyecto_tiene_ipt);
-      const matrix = TRANSICIONES[flow];
-      if (!matrix) {
+      if (!VALID_ESTADOS.has(estado_hacia)) {
         res.status(400).json({
           success: false,
-          error: `Flujo "${flow}" no soportado aún`,
-        });
-        return;
-      }
-      const permitidos = matrix[cuenta.estado] || [];
-      if (!permitidos.includes(estado_hacia)) {
-        res.status(400).json({
-          success: false,
-          error: `Transición no permitida: "${cuenta.estado}" → "${estado_hacia}"`,
+          error: `Estado desconocido: "${estado_hacia}"`,
         });
         return;
       }
@@ -733,6 +755,172 @@ router.post(
       );
 
       await registrarAudit(user.id, 'comentario', 'cuenta', id, { comentario });
+      res.json({ success: true });
+    },
+  ),
+);
+
+// PATCH /:id/evento/:eventoId — editar comentario, estados o fecha de un evento.
+// Cualquier usuario con permiso `cuentas` (y acceso al proyecto) puede editar
+// cualquier fila del historial. Cada edición queda registrada en audit_log.
+router.patch(
+  '/:id/evento/:eventoId',
+  [
+    param('id').isInt(),
+    param('eventoId').isInt(),
+    body('comentario').optional({ nullable: true }).isString(),
+    body('estado_desde').optional({ nullable: true }).isString(),
+    body('estado_hacia').optional({ nullable: true }).isString(),
+    body('fecha').optional({ nullable: true }).isString().matches(/^\d{4}-\d{2}-\d{2}$/),
+  ],
+  asyncHandler(
+    async (
+      req: Request<{ id: string; eventoId: string }>,
+      res: Response,
+    ): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({ success: false, error: 'Datos inválidos' });
+        return;
+      }
+
+      const user = req.user!;
+      const cuentaId = Number(req.params.id);
+      const eventoId = Number(req.params.eventoId);
+
+      const body = req.body as {
+        comentario?: string | null;
+        estado_desde?: string | null;
+        estado_hacia?: string | null;
+        fecha?: string | null;
+      };
+
+      // Validate estado values against the whitelist (null allowed).
+      for (const key of ['estado_desde', 'estado_hacia'] as const) {
+        const v = body[key];
+        if (v !== undefined && v !== null && !VALID_ESTADOS.has(v)) {
+          res.status(400).json({
+            success: false,
+            error: `Estado desconocido en ${key}: "${v}"`,
+          });
+          return;
+        }
+      }
+
+      // Verify cuenta + project access.
+      const cur = await query<{ proyecto_id: number }>(
+        'SELECT proyecto_id FROM cuentas WHERE id = $1 AND activo = TRUE',
+        [cuentaId],
+      );
+      if (cur.rows.length === 0) {
+        res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+        return;
+      }
+      if (!(await userCanAccessProject(user.id, user.rol, cur.rows[0].proyecto_id))) {
+        res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+        return;
+      }
+
+      // Verify evento exists, belongs to this cuenta, is active.
+      const evRes = await query<{ id: number }>(
+        'SELECT id FROM cuentas_eventos WHERE id = $1 AND cuenta_id = $2 AND activo = TRUE',
+        [eventoId, cuentaId],
+      );
+      if (evRes.rows.length === 0) {
+        res.status(404).json({ success: false, error: 'Evento no encontrado' });
+        return;
+      }
+
+      // Build dynamic UPDATE. Only the fields the body actually sent.
+      const sets: string[] = [];
+      const params: unknown[] = [];
+      const cambios: Record<string, unknown> = {};
+
+      if ('comentario' in body) {
+        const c =
+          typeof body.comentario === 'string' ? body.comentario.trim() : null;
+        params.push(c && c.length > 0 ? c : null);
+        sets.push(`comentario = $${params.length}`);
+        cambios.comentario = c;
+      }
+      if ('estado_desde' in body) {
+        params.push(body.estado_desde ?? null);
+        sets.push(`estado_desde = $${params.length}`);
+        cambios.estado_desde = body.estado_desde ?? null;
+      }
+      if ('estado_hacia' in body) {
+        params.push(body.estado_hacia ?? null);
+        sets.push(`estado_hacia = $${params.length}`);
+        cambios.estado_hacia = body.estado_hacia ?? null;
+      }
+      if ('fecha' in body && body.fecha) {
+        // Store at noon UTC to keep the date stable across timezones.
+        params.push(`${body.fecha} 12:00:00`);
+        sets.push(`created_at = $${params.length}::timestamp`);
+        cambios.fecha = body.fecha;
+      }
+
+      if (sets.length === 0) {
+        res.json({ success: true, evento_id: eventoId });
+        return;
+      }
+
+      params.push(eventoId);
+      await query(
+        `UPDATE cuentas_eventos SET ${sets.join(', ')} WHERE id = $${params.length}`,
+        params,
+      );
+
+      await registrarAudit(user.id, 'editar_evento', 'cuenta', cuentaId, {
+        evento_id: eventoId,
+        cambios,
+      });
+
+      res.json({ success: true, evento_id: eventoId });
+    },
+  ),
+);
+
+// DELETE /:id/evento/:eventoId — soft-delete una fila del historial.
+router.delete(
+  '/:id/evento/:eventoId',
+  [param('id').isInt(), param('eventoId').isInt()],
+  asyncHandler(
+    async (
+      req: Request<{ id: string; eventoId: string }>,
+      res: Response,
+    ): Promise<void> => {
+      const user = req.user!;
+      const cuentaId = Number(req.params.id);
+      const eventoId = Number(req.params.eventoId);
+
+      const cur = await query<{ proyecto_id: number }>(
+        'SELECT proyecto_id FROM cuentas WHERE id = $1 AND activo = TRUE',
+        [cuentaId],
+      );
+      if (cur.rows.length === 0) {
+        res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+        return;
+      }
+      if (!(await userCanAccessProject(user.id, user.rol, cur.rows[0].proyecto_id))) {
+        res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+        return;
+      }
+
+      const r = await query(
+        `UPDATE cuentas_eventos
+            SET activo = false
+          WHERE id = $1 AND cuenta_id = $2 AND activo = TRUE`,
+        [eventoId, cuentaId],
+      );
+      if (r.rowCount === 0) {
+        res.status(404).json({ success: false, error: 'Evento no encontrado' });
+        return;
+      }
+
+      await registrarAudit(user.id, 'eliminar_evento', 'cuenta', cuentaId, {
+        evento_id: eventoId,
+      });
       res.json({ success: true });
     },
   ),
