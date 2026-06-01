@@ -67,6 +67,11 @@ import { startScheduler } from './cron/scheduler.js';
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Railway puts a single reverse proxy in front of the app. Without this,
+// req.ip resolves to the proxy and express-rate-limit can't identify
+// individual users by IP — every request looks like one shared client.
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(
   cors({
