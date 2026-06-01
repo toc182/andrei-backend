@@ -390,6 +390,7 @@ router.get(
           proyecto_tiene_ipt: boolean;
           cliente_nombre: string | null;
           cliente_abreviatura: string | null;
+          avance_acumulado: string;
         }
       >(
         `SELECT c.*,
@@ -397,7 +398,14 @@ router.get(
                 cl.tipo AS proyecto_tipo,
                 p.tiene_ipt AS proyecto_tiene_ipt,
                 cl.nombre AS cliente_nombre,
-                cl.abreviatura AS cliente_abreviatura
+                cl.abreviatura AS cliente_abreviatura,
+                (
+                  SELECT COALESCE(SUM(c2.avance_porcentaje), 0)
+                  FROM cuentas c2
+                  WHERE c2.proyecto_id = c.proyecto_id
+                    AND c2.activo = TRUE
+                    AND c2.numero <= c.numero
+                ) AS avance_acumulado
          FROM cuentas c
          JOIN proyectos p ON p.id = c.proyecto_id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
@@ -443,6 +451,14 @@ router.get(
         [id],
       );
 
+      const ajustes = await query(
+        `SELECT id, tipo, descripcion, monto, orden
+         FROM cuenta_ajustes
+         WHERE cuenta_id = $1
+         ORDER BY orden ASC, id ASC`,
+        [id],
+      );
+
       res.json({
         success: true,
         data: {
@@ -450,6 +466,7 @@ router.get(
           eventos: eventos.rows,
           adjuntos: adjuntos.rows,
           ipt: iptRes.rows[0] || null,
+          ajustes: ajustes.rows,
         },
       });
     },
@@ -560,7 +577,14 @@ router.post(
   }),
 );
 
-// PUT /:id — editar header (solo en borrador).
+// PUT /:id — editar header y/o ajustes (no permitido en estados LOCKED).
+interface AjusteInput {
+  tipo: 'aumento' | 'disminucion';
+  descripcion: string;
+  monto: number;
+  orden?: number;
+}
+
 router.put(
   '/:id',
   [
@@ -570,6 +594,11 @@ router.put(
     body('periodo_fin').optional({ nullable: true }).isISO8601(),
     body('avance_porcentaje').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
     body('es_final').optional().isBoolean(),
+    body('ajustes').optional().isArray(),
+    body('ajustes.*.tipo').optional().isIn(['aumento', 'disminucion']),
+    body('ajustes.*.descripcion').optional().isString().trim().notEmpty(),
+    body('ajustes.*.monto').optional().isFloat({ min: 0 }),
+    body('ajustes.*.orden').optional().isInt({ min: 0 }),
   ],
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
@@ -607,47 +636,89 @@ router.put(
         return;
       }
 
-      const sets: string[] = [];
-      const params: unknown[] = [];
-      const fields = [
+      const headerFields = [
         'monto_total',
         'periodo_inicio',
         'periodo_fin',
         'avance_porcentaje',
         'es_final',
       ] as const;
-      const changes: Record<string, { from: unknown; to: unknown }> = {};
-      for (const f of fields) {
-        if (f in req.body) {
-          const oldVal = cuenta[f as keyof CuentaRow];
-          const newVal = req.body[f];
-          if (String(oldVal ?? '') !== String(newVal ?? '')) {
-            changes[f] = { from: oldVal, to: newVal };
-          }
-          params.push(req.body[f]);
-          sets.push(`${f} = $${params.length}`);
-        }
-      }
-      if (sets.length === 0) {
+      const hasHeaderUpdate = headerFields.some((f) => f in req.body);
+      const ajustesIncoming = (req.body as { ajustes?: AjusteInput[] }).ajustes;
+      const hasAjustesUpdate = Array.isArray(ajustesIncoming);
+
+      if (!hasHeaderUpdate && !hasAjustesUpdate) {
         res.status(400).json({ success: false, error: 'Nada que actualizar' });
         return;
       }
-      params.push(id);
-      await query(
-        `UPDATE cuentas SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length} AND activo = TRUE`,
-        params,
-      );
 
-      // Log edit as event if the cuenta was already submitted (not borrador)
-      if (cuenta.estado !== 'borrador' && Object.keys(changes).length > 0) {
-        const changeDesc = Object.entries(changes)
-          .map(([k, v]) => `${labelOf(k)}: ${formatValue(k, v.from)} → ${formatValue(k, v.to)}`)
-          .join(', ');
-        await query(
-          `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
-           VALUES ($1, 'edicion', $2, $3)`,
-          [id, changeDesc, user.id],
-        );
+      const changes: Record<string, { from: unknown; to: unknown }> = {};
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        if (hasHeaderUpdate) {
+          const sets: string[] = [];
+          const params: unknown[] = [];
+          for (const f of headerFields) {
+            if (f in req.body) {
+              const oldVal = cuenta[f as keyof CuentaRow];
+              const newVal = req.body[f];
+              if (String(oldVal ?? '') !== String(newVal ?? '')) {
+                changes[f] = { from: oldVal, to: newVal };
+              }
+              params.push(req.body[f]);
+              sets.push(`${f} = $${params.length}`);
+            }
+          }
+          params.push(id);
+          await client.query(
+            `UPDATE cuentas SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length} AND activo = TRUE`,
+            params,
+          );
+        }
+
+        if (hasAjustesUpdate) {
+          await client.query('DELETE FROM cuenta_ajustes WHERE cuenta_id = $1', [id]);
+          let orden = 0;
+          for (const aj of ajustesIncoming!) {
+            await client.query(
+              `INSERT INTO cuenta_ajustes (cuenta_id, tipo, descripcion, monto, orden, creado_por)
+               VALUES ($1, $2, $3, $4, $5, $6)`,
+              [
+                id,
+                aj.tipo,
+                aj.descripcion.trim(),
+                aj.monto,
+                aj.orden ?? orden,
+                user.id,
+              ],
+            );
+            orden++;
+          }
+        }
+
+        // Log edit as event if the cuenta was already submitted (not borrador)
+        // and at least one header field actually changed. Ajustes-only edits
+        // are intentionally NOT logged to the timeline — they're financial
+        // line items, not state transitions, and tracked in audit_log only.
+        if (cuenta.estado !== 'borrador' && Object.keys(changes).length > 0) {
+          const changeDesc = Object.entries(changes)
+            .map(([k, v]) => `${labelOf(k)}: ${formatValue(k, v.from)} → ${formatValue(k, v.to)}`)
+            .join(', ');
+          await client.query(
+            `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
+             VALUES ($1, 'edicion', $2, $3)`,
+            [id, changeDesc, user.id],
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
 
       await registrarAudit(user.id, 'editar', 'cuenta', id, req.body);
