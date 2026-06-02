@@ -538,13 +538,24 @@ router.get(
         [id],
       );
 
-      const ajusteOpciones = await query(
+      const ajusteOpcionesProyecto = await query(
         `SELECT id, tipo, descripcion, orden
          FROM cuenta_ajuste_opciones
          WHERE proyecto_id = $1
          ORDER BY orden ASC, id ASC`,
         [cuenta.proyecto_id],
       );
+
+      const ajusteOpcionesGlobales = await query(
+        `SELECT id, tipo, descripcion, orden
+         FROM cuenta_ajuste_opciones_globales
+         ORDER BY orden ASC, id ASC`,
+      );
+
+      const ajusteOpciones = [
+        ...ajusteOpcionesGlobales.rows.map((r) => ({ ...r, es_global: true })),
+        ...ajusteOpcionesProyecto.rows.map((r) => ({ ...r, es_global: false })),
+      ];
 
       res.json({
         success: true,
@@ -554,7 +565,7 @@ router.get(
           adjuntos: adjuntos.rows,
           ipt: iptRes.rows[0] || null,
           ajustes: ajustes.rows,
-          ajuste_opciones: ajusteOpciones.rows,
+          ajuste_opciones: ajusteOpciones,
         },
       });
     },
