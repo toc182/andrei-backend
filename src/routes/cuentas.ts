@@ -22,7 +22,7 @@ const sanitizeFilename = (name: string): string =>
 
 // Pretty-printers for the historial "edicion" comentario.
 const FIELD_LABELS: Record<string, string> = {
-  monto_total: 'Monto',
+  monto_total: 'Monto bruto',
   periodo_inicio: 'Período inicio',
   periodo_fin: 'Período fin',
   avance_porcentaje: 'Avance',
@@ -30,6 +30,85 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const labelOf = (k: string): string => FIELD_LABELS[k] ?? k;
+
+const TIPO_LABELS: Record<string, string> = {
+  aumento: 'Aumento',
+  disminucion: 'Disminución',
+};
+
+function formatMontoCurrency(n: number): string {
+  return `B/. ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// Normalize values for change-detection. The DB returns DATE columns as
+// JS Date at UTC midnight and NUMERIC columns as strings, but the request
+// body has YYYY-MM-DD strings and numeric values — naive String() comparison
+// always reports a change. Normalize both sides to a canonical form first.
+function normalizeForCompare(field: string, val: unknown): string {
+  if (val === null || val === undefined || val === '') return '';
+  if (field === 'periodo_inicio' || field === 'periodo_fin') {
+    if (val instanceof Date) {
+      const y = val.getUTCFullYear();
+      const m = String(val.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(val.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    if (typeof val === 'string') return val.slice(0, 10);
+    return String(val);
+  }
+  if (field === 'monto_total' || field === 'avance_porcentaje') {
+    const n = Number(val);
+    return Number.isFinite(n) ? n.toString() : String(val);
+  }
+  if (field === 'es_final') return val ? 'true' : 'false';
+  return String(val);
+}
+
+type AjusteCmp = { tipo: string; descripcion: string; monto: number };
+
+function ajusteSummary(a: AjusteCmp): string {
+  const label = TIPO_LABELS[a.tipo] ?? a.tipo;
+  return `${label} ${a.descripcion} (${formatMontoCurrency(a.monto)})`;
+}
+
+function diffAjustesLog(oldList: AjusteCmp[], newList: AjusteCmp[]): string[] {
+  const out: string[] = [];
+  const matchedOld = new Set<number>();
+  const matchedNew = new Set<number>();
+
+  // Match by (tipo, descripcion). Detect monto-only changes as "modificado".
+  for (let i = 0; i < oldList.length; i++) {
+    const o = oldList[i];
+    for (let j = 0; j < newList.length; j++) {
+      if (matchedNew.has(j)) continue;
+      const n = newList[j];
+      if (o.descripcion === n.descripcion && o.tipo === n.tipo) {
+        matchedOld.add(i);
+        matchedNew.add(j);
+        if (Math.abs(o.monto - n.monto) > 0.0001) {
+          out.push(
+            `Ajuste modificado: ${TIPO_LABELS[o.tipo] ?? o.tipo} ${o.descripcion} (${formatMontoCurrency(o.monto)} → ${formatMontoCurrency(n.monto)})`,
+          );
+        }
+        break;
+      }
+    }
+  }
+  for (let i = 0; i < oldList.length; i++) {
+    if (!matchedOld.has(i)) out.push(`Ajuste eliminado: ${ajusteSummary(oldList[i])}`);
+  }
+  for (let j = 0; j < newList.length; j++) {
+    if (!matchedNew.has(j)) out.push(`Ajuste agregado: ${ajusteSummary(newList[j])}`);
+  }
+  return out;
+}
+
+function computeMontoAPagar(monto: number, ajustes: AjusteCmp[]): number {
+  return ajustes.reduce(
+    (acc, a) => acc + (a.tipo === 'aumento' ? a.monto : -a.monto),
+    monto,
+  );
+}
 
 function formatValue(field: string, val: unknown): string {
   if (val === null || val === undefined || val === '') return '—';
@@ -653,9 +732,26 @@ router.put(
       }
 
       const changes: Record<string, { from: unknown; to: unknown }> = {};
+      const shouldLog = cuenta.estado !== 'borrador';
+      let oldAjustes: AjusteCmp[] = [];
+
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+
+        // Capture current ajustes BEFORE the snapshot-replace, so the
+        // historial diff and the Monto a pagar before/after can be computed.
+        if (shouldLog) {
+          const r = await client.query<{ tipo: string; descripcion: string; monto: string }>(
+            'SELECT tipo, descripcion, monto FROM cuenta_ajustes WHERE cuenta_id = $1 ORDER BY orden',
+            [id],
+          );
+          oldAjustes = r.rows.map((a) => ({
+            tipo: a.tipo,
+            descripcion: a.descripcion,
+            monto: Number(a.monto),
+          }));
+        }
 
         if (hasHeaderUpdate) {
           const sets: string[] = [];
@@ -664,7 +760,7 @@ router.put(
             if (f in req.body) {
               const oldVal = cuenta[f as keyof CuentaRow];
               const newVal = req.body[f];
-              if (String(oldVal ?? '') !== String(newVal ?? '')) {
+              if (normalizeForCompare(f, oldVal) !== normalizeForCompare(f, newVal)) {
                 changes[f] = { from: oldVal, to: newVal };
               }
               params.push(req.body[f]);
@@ -698,19 +794,54 @@ router.put(
           }
         }
 
-        // Log edit as event if the cuenta was already submitted (not borrador)
-        // and at least one header field actually changed. Ajustes-only edits
-        // are intentionally NOT logged to the timeline — they're financial
-        // line items, not state transitions, and tracked in audit_log only.
-        if (cuenta.estado !== 'borrador' && Object.keys(changes).length > 0) {
-          const changeDesc = Object.entries(changes)
-            .map(([k, v]) => `${labelOf(k)}: ${formatValue(k, v.from)} → ${formatValue(k, v.to)}`)
-            .join(', ');
-          await client.query(
-            `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
-             VALUES ($1, 'edicion', $2, $3)`,
-            [id, changeDesc, user.id],
-          );
+        // Build the "edicion" timeline comentario from:
+        //   - header field changes,
+        //   - per-ajuste diff (agregado / eliminado / modificado),
+        //   - the resulting Monto a pagar delta.
+        // Only logged for non-borrador cuentas (an in-progress draft is the
+        // user's scratchpad and doesn't need a timeline entry on every edit).
+        if (shouldLog) {
+          const lines: string[] = [];
+
+          for (const [k, v] of Object.entries(changes)) {
+            lines.push(`${labelOf(k)}: ${formatValue(k, v.from)} → ${formatValue(k, v.to)}`);
+          }
+
+          if (hasAjustesUpdate) {
+            const newAjustes: AjusteCmp[] = ajustesIncoming!.map((a) => ({
+              tipo: a.tipo,
+              descripcion: a.descripcion.trim(),
+              monto: Number(a.monto),
+            }));
+            lines.push(...diffAjustesLog(oldAjustes, newAjustes));
+          }
+
+          // Monto a pagar delta — captures the effective change to what the
+          // client receives. Computed from monto_total + signed ajustes both
+          // before and after this PUT.
+          const oldMontoTotal = Number(cuenta.monto_total) || 0;
+          const newMontoTotal =
+            'monto_total' in req.body ? Number(req.body.monto_total) : oldMontoTotal;
+          const effectiveNewAjustes: AjusteCmp[] = hasAjustesUpdate
+            ? ajustesIncoming!.map((a) => ({
+                tipo: a.tipo,
+                descripcion: a.descripcion.trim(),
+                monto: Number(a.monto),
+              }))
+            : oldAjustes;
+          const oldMP = computeMontoAPagar(oldMontoTotal, oldAjustes);
+          const newMP = computeMontoAPagar(newMontoTotal, effectiveNewAjustes);
+          if (Math.abs(oldMP - newMP) > 0.0001) {
+            lines.push(`Monto a pagar: ${formatMontoCurrency(oldMP)} → ${formatMontoCurrency(newMP)}`);
+          }
+
+          if (lines.length > 0) {
+            await client.query(
+              `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
+               VALUES ($1, 'edicion', $2, $3)`,
+              [id, lines.join('\n'), user.id],
+            );
+          }
         }
 
         await client.query('COMMIT');
