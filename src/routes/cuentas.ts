@@ -538,6 +538,14 @@ router.get(
         [id],
       );
 
+      const ajusteOpciones = await query(
+        `SELECT id, tipo, descripcion, orden
+         FROM cuenta_ajuste_opciones
+         WHERE proyecto_id = $1
+         ORDER BY orden ASC, id ASC`,
+        [cuenta.proyecto_id],
+      );
+
       res.json({
         success: true,
         data: {
@@ -546,6 +554,7 @@ router.get(
           adjuntos: adjuntos.rows,
           ipt: iptRes.rows[0] || null,
           ajustes: ajustes.rows,
+          ajuste_opciones: ajusteOpciones.rows,
         },
       });
     },
@@ -854,6 +863,85 @@ router.put(
 
       await registrarAudit(user.id, 'editar', 'cuenta', id, req.body);
       res.json({ success: true });
+    },
+  ),
+);
+
+// POST /:id/ajuste-opciones — crear una opción de ajuste para el proyecto
+// de esta cuenta. Devuelve la opción creada para que el cliente la auto-
+// seleccione en la fila que disparó el "Crear nueva opción".
+router.post(
+  '/:id/ajuste-opciones',
+  [
+    param('id').isInt(),
+    body('tipo').isIn(['aumento', 'disminucion']),
+    body('descripcion').isString().trim().notEmpty(),
+  ],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({ success: false, error: 'Datos inválidos' });
+        return;
+      }
+
+      const user = req.user!;
+      const id = Number(req.params.id);
+      const { tipo, descripcion } = req.body as { tipo: string; descripcion: string };
+      const trimmed = descripcion.trim();
+
+      const cur = await query<{ proyecto_id: number }>(
+        'SELECT proyecto_id FROM cuentas WHERE id = $1 AND activo = TRUE',
+        [id],
+      );
+      if (cur.rows.length === 0) {
+        res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+        return;
+      }
+      const proyectoId = cur.rows[0].proyecto_id;
+      if (!(await userCanAccessProject(user.id, user.rol, proyectoId))) {
+        res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+        return;
+      }
+
+      const nextOrden = await query<{ max: number | null }>(
+        'SELECT MAX(orden) AS max FROM cuenta_ajuste_opciones WHERE proyecto_id = $1',
+        [proyectoId],
+      );
+      const orden = (nextOrden.rows[0].max ?? -1) + 1;
+
+      let inserted;
+      try {
+        inserted = await query<{
+          id: number;
+          tipo: string;
+          descripcion: string;
+          orden: number;
+        }>(
+          `INSERT INTO cuenta_ajuste_opciones (proyecto_id, tipo, descripcion, orden, creado_por)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id, tipo, descripcion, orden`,
+          [proyectoId, tipo, trimmed, orden, user.id],
+        );
+      } catch (err) {
+        const e = err as { code?: string };
+        if (e.code === '23505') {
+          res.status(409).json({
+            success: false,
+            error: 'Ya existe una opción con ese tipo y descripción',
+          });
+          return;
+        }
+        throw err;
+      }
+
+      await registrarAudit(user.id, 'crear', 'cuenta_ajuste_opcion', inserted.rows[0].id, {
+        proyecto_id: proyectoId,
+        tipo,
+        descripcion: trimmed,
+      });
+
+      res.status(201).json({ success: true, data: inserted.rows[0] });
     },
   ),
 );
