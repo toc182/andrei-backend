@@ -582,6 +582,10 @@ router.post(
     body('periodo_fin').optional().isISO8601(),
     body('avance_porcentaje').optional().isFloat({ min: 0, max: 100 }),
     body('es_final').optional().isBoolean(),
+    body('ajustes').optional().isArray(),
+    body('ajustes.*.tipo').optional().isIn(['aumento', 'disminucion']),
+    body('ajustes.*.descripcion').optional().isString().trim().notEmpty(),
+    body('ajustes.*.monto').optional().isFloat({ min: 0 }),
   ],
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const errors = validationResult(req);
@@ -599,6 +603,7 @@ router.post(
       avance_porcentaje,
       es_final,
     } = req.body;
+    const ajustesIncoming = (req.body as { ajustes?: AjusteInput[] }).ajustes;
 
     if (!(await userCanAccessProject(user.id, user.rol, proyecto_id))) {
       res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
@@ -655,6 +660,25 @@ router.post(
           `INSERT INTO cuentas_ipt (cuenta_id, estado, creado_por) VALUES ($1, 'pendiente', $2)`,
           [insert.rows[0].id, user.id],
         );
+      }
+
+      if (ajustesIncoming && ajustesIncoming.length > 0) {
+        let orden = 0;
+        for (const aj of ajustesIncoming) {
+          await client.query(
+            `INSERT INTO cuenta_ajustes (cuenta_id, tipo, descripcion, monto, orden, creado_por)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              insert.rows[0].id,
+              aj.tipo,
+              aj.descripcion.trim(),
+              aj.monto,
+              aj.orden ?? orden,
+              user.id,
+            ],
+          );
+          orden++;
+        }
       }
 
       await client.query('COMMIT');
@@ -948,6 +972,123 @@ router.post(
 
       await registrarAudit(user.id, 'crear', 'cuenta_ajuste_opcion', inserted.rows[0].id, {
         proyecto_id: proyectoId,
+        tipo,
+        descripcion: trimmed,
+      });
+
+      res.status(201).json({ success: true, data: inserted.rows[0] });
+    },
+  ),
+);
+
+// GET /proyecto/:projectId/ajuste-opciones — opciones para usar al crear
+// una cuenta nueva, antes de que exista la cuenta. Devuelve los globales
+// + los del proyecto, con la misma forma que GET /cuentas/:id retorna
+// en su campo ajuste_opciones.
+router.get(
+  '/proyecto/:projectId/ajuste-opciones',
+  [param('projectId').isInt()],
+  asyncHandler(
+    async (req: Request<{ projectId: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({ success: false, error: 'Datos inválidos' });
+        return;
+      }
+
+      const user = req.user!;
+      const projectId = Number(req.params.projectId);
+
+      if (!(await userCanAccessProject(user.id, user.rol, projectId))) {
+        res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+        return;
+      }
+
+      const proyecto = await query(
+        `SELECT id, tipo, descripcion, orden
+         FROM cuenta_ajuste_opciones
+         WHERE proyecto_id = $1
+         ORDER BY orden ASC, id ASC`,
+        [projectId],
+      );
+
+      const globales = await query(
+        `SELECT id, tipo, descripcion, orden
+         FROM cuenta_ajuste_opciones_globales
+         ORDER BY orden ASC, id ASC`,
+      );
+
+      const merged = [
+        ...globales.rows.map((r) => ({ ...r, es_global: true })),
+        ...proyecto.rows.map((r) => ({ ...r, es_global: false })),
+      ];
+
+      res.json({ success: true, data: merged });
+    },
+  ),
+);
+
+// POST /proyecto/:projectId/ajuste-opciones — crear una opción de ajuste
+// para un proyecto sin necesidad de tener una cuenta. Misma semántica
+// que POST /:id/ajuste-opciones pero ataca el proyecto directamente.
+router.post(
+  '/proyecto/:projectId/ajuste-opciones',
+  [
+    param('projectId').isInt(),
+    body('tipo').isIn(['aumento', 'disminucion']),
+    body('descripcion').isString().trim().notEmpty(),
+  ],
+  asyncHandler(
+    async (req: Request<{ projectId: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({ success: false, error: 'Datos inválidos' });
+        return;
+      }
+
+      const user = req.user!;
+      const projectId = Number(req.params.projectId);
+      const { tipo, descripcion } = req.body as { tipo: string; descripcion: string };
+      const trimmed = descripcion.trim();
+
+      if (!(await userCanAccessProject(user.id, user.rol, projectId))) {
+        res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+        return;
+      }
+
+      const nextOrden = await query<{ max: number | null }>(
+        'SELECT MAX(orden) AS max FROM cuenta_ajuste_opciones WHERE proyecto_id = $1',
+        [projectId],
+      );
+      const orden = (nextOrden.rows[0].max ?? -1) + 1;
+
+      let inserted;
+      try {
+        inserted = await query<{
+          id: number;
+          tipo: string;
+          descripcion: string;
+          orden: number;
+        }>(
+          `INSERT INTO cuenta_ajuste_opciones (proyecto_id, tipo, descripcion, orden, creado_por)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id, tipo, descripcion, orden`,
+          [projectId, tipo, trimmed, orden, user.id],
+        );
+      } catch (err) {
+        const e = err as { code?: string };
+        if (e.code === '23505') {
+          res.status(409).json({
+            success: false,
+            error: 'Ya existe una opción con ese tipo y descripción',
+          });
+          return;
+        }
+        throw err;
+      }
+
+      await registrarAudit(user.id, 'crear', 'cuenta_ajuste_opcion', inserted.rows[0].id, {
+        proyecto_id: projectId,
         tipo,
         descripcion: trimmed,
       });
