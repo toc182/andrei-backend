@@ -2912,57 +2912,65 @@ router.post(
         : tipoSol === 'apertura' ? 'transferencia'
         : 'pago';
 
-      // Crear comprobante
-      await query(
-        'INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por) VALUES ($1, $2, $3)',
-        [id, fecha_pago, userId],
-      );
-
-      // Upload archivos a R2 y registrar en adjuntos
+      // All DB writes run inside one transaction so a failure at any step
+      // (R2 upload, PDF render, etc.) rolls back cleanly and leaves no
+      // debris. The comprobante insert is idempotent: a previous failed
+      // attempt that left a row gets overwritten instead of colliding with
+      // the UNIQUE (solicitud_pago_id) constraint. R2 objects can't be
+      // rolled back, but orphaned R2 files are harmless.
       const archivosInfo: string[] = [];
-      for (const file of files) {
-        const uuid = crypto.randomUUID();
-        const safeName = sanitizeFilename(file.originalname);
-        const r2Key = `solicitudes-pago/${id}/comprobantes/${uuid}_${safeName}`;
-
-        await uploadFile(r2Key, file.buffer, file.mimetype);
-
-        await query(
-          `
-      INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
-      VALUES ($1, $2, $3, $4, $5, $6, 'comprobante')
-    `,
-          [id, file.originalname, r2Key, file.mimetype, file.size, userId],
-        );
-
-        archivosInfo.push(file.originalname);
-      }
-
-      // Cambiar estado: pagada (regular) o reembolsada (reembolso)
-      await query(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
-        [targetEstado, id],
-      );
-
-      // Archive immutable PDF copy to R2
+      const client = await pool.connect();
       try {
-        const pdfBuffer = await generateFullPDF(parseInt(id));
-        const nombreCorto = solicitud.rows[0].nombre_corto;
-        const numero = solicitud.rows[0].numero;
-        const archiveKey = `${nombreCorto}/solicitudes/${numero}.pdf`;
-        await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
-      } catch (archiveErr) {
-        // Rollback estado change if archive fails
-        await query(
-          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
-          ['aprobada', id],
+        await client.query('BEGIN');
+
+        await client.query(
+          `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (solicitud_pago_id)
+           DO UPDATE SET fecha_pago = EXCLUDED.fecha_pago, registrado_por = EXCLUDED.registrado_por`,
+          [id, fecha_pago, userId],
         );
-        console.error(`Error archiving PDF at ${targetEstado}:`, archiveErr);
+
+        for (const file of files) {
+          const uuid = crypto.randomUUID();
+          const safeName = sanitizeFilename(file.originalname);
+          const r2Key = `solicitudes-pago/${id}/comprobantes/${uuid}_${safeName}`;
+
+          await uploadFile(r2Key, file.buffer, file.mimetype);
+
+          await client.query(
+            `INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
+             VALUES ($1, $2, $3, $4, $5, $6, 'comprobante')`,
+            [id, file.originalname, r2Key, file.mimetype, file.size, userId],
+          );
+
+          archivosInfo.push(file.originalname);
+        }
+
+        // Cambiar estado: pagada (regular), reembolsada (reembolso) o
+        // transferida (apertura).
+        await client.query(
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
+          [targetEstado, id],
+        );
+
+        // Archive immutable PDF copy to R2. If this throws, the catch below
+        // rolls back the whole transaction — no manual estado revert needed.
+        const pdfBuffer = await generateFullPDF(parseInt(id));
+        const archiveKey = `${solicitud.rows[0].nombre_corto}/solicitudes/${solicitud.rows[0].numero}.pdf`;
+        await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        console.error(`Error registrando ${actionLabel} (solicitud ${id}):`, err);
         res.status(500).json({
           success: false,
-          message: 'Error al guardar copia del PDF. Intente nuevamente.',
+          message: 'No se pudo registrar el pago. No se guardó ningún cambio. Intente nuevamente.',
         });
         return;
+      } finally {
+        client.release();
       }
 
       await registrarAudit(
