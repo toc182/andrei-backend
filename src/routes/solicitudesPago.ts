@@ -3071,47 +3071,74 @@ router.post(
         return;
       }
 
-      // Crear registro de factura/recibo
-      await query(
-        'INSERT INTO facturas_solicitud (solicitud_pago_id, fecha_factura, numero_factura, registrado_por, tipo) VALUES ($1, $2, $3, $4, $5)',
-        [id, fecha_factura, numero_factura || null, userId, tipoDoc],
-      );
-
-      // Upload archivos a R2 y registrar en adjuntos
+      // All DB writes run inside one transaction so a failure at any step
+      // rolls back cleanly and leaves no debris. The factura insert is
+      // idempotent: a previous failed attempt that left a row gets
+      // overwritten instead of colliding with the UNIQUE (solicitud_pago_id)
+      // constraint, which would otherwise block every retry with a
+      // duplicate-key 500. R2 objects can't roll back, but orphaned files
+      // are harmless.
       const archivosInfo: string[] = [];
-      for (const file of files) {
-        const uuid = crypto.randomUUID();
-        const safeName = sanitizeFilename(file.originalname);
-        const r2Key = `solicitudes-pago/${id}/facturas/${uuid}_${safeName}`;
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
 
-        await uploadFile(r2Key, file.buffer, file.mimetype);
-
-        await query(
-          `
-      INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
-      VALUES ($1, $2, $3, $4, $5, $6, 'factura')
-    `,
-          [id, file.originalname, r2Key, file.mimetype, file.size, userId],
+        await client.query(
+          `INSERT INTO facturas_solicitud (solicitud_pago_id, fecha_factura, numero_factura, registrado_por, tipo)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (solicitud_pago_id)
+           DO UPDATE SET fecha_factura = EXCLUDED.fecha_factura,
+                         numero_factura = EXCLUDED.numero_factura,
+                         registrado_por = EXCLUDED.registrado_por,
+                         tipo = EXCLUDED.tipo`,
+          [id, fecha_factura, numero_factura || null, userId, tipoDoc],
         );
 
-        archivosInfo.push(file.originalname);
-      }
+        for (const file of files) {
+          const uuid = crypto.randomUUID();
+          const safeName = sanitizeFilename(file.originalname);
+          const r2Key = `solicitudes-pago/${id}/facturas/${uuid}_${safeName}`;
 
-      // Cambiar estado a facturada
-      await query(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
-        ['facturada', id],
-      );
+          await uploadFile(r2Key, file.buffer, file.mimetype);
 
-      // Archive immutable copy of factura file to project folder
-      try {
-        const nombreCorto = solicitud.rows[0].nombre_corto;
-        const numero = solicitud.rows[0].numero;
-        const firstFile = files[0];
-        const archiveKey = `${nombreCorto}/solicitudes/${numero}-factura.pdf`;
-        await uploadFile(archiveKey, firstFile.buffer, firstFile.mimetype);
-      } catch (archiveErr) {
-        console.error('Error archiving factura file:', archiveErr);
+          await client.query(
+            `INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
+             VALUES ($1, $2, $3, $4, $5, $6, 'factura')`,
+            [id, file.originalname, r2Key, file.mimetype, file.size, userId],
+          );
+
+          archivosInfo.push(file.originalname);
+        }
+
+        await client.query(
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
+          ['facturada', id],
+        );
+
+        // Archive an immutable copy of the factura file to the project
+        // folder. This is best-effort: a failure here only logs and does
+        // NOT roll back the registration (same as before).
+        try {
+          const nombreCorto = solicitud.rows[0].nombre_corto;
+          const numero = solicitud.rows[0].numero;
+          const firstFile = files[0];
+          const archiveKey = `${nombreCorto}/solicitudes/${numero}-factura.pdf`;
+          await uploadFile(archiveKey, firstFile.buffer, firstFile.mimetype);
+        } catch (archiveErr) {
+          console.error('Error archiving factura file:', archiveErr);
+        }
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        console.error(`Error registrando ${tipoDoc} (solicitud ${id}):`, err);
+        res.status(500).json({
+          success: false,
+          message: 'No se pudo registrar la factura. No se guardó ningún cambio. Intente nuevamente.',
+        });
+        return;
+      } finally {
+        client.release();
       }
 
       await registrarAudit(
