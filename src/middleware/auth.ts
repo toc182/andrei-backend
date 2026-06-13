@@ -42,6 +42,7 @@ const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'registrar_pago',
   'caja_menuda',
   'cuentas',
+  'cotizaciones',
 ];
 
 const PERMISSIONS_SELECT = VALID_PERMISSIONS.join(', ');

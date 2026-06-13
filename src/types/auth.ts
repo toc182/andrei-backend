@@ -31,6 +31,7 @@ export interface UserPermissions {
   registrar_pago: boolean;
   caja_menuda: boolean;
   cuentas: boolean;
+  cotizaciones: boolean;
 }
 
 /**
