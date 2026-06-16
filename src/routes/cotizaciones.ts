@@ -93,7 +93,7 @@ router.get(
   asyncHandler(async (_req: Request, res: Response): Promise<void> => {
     const result = await query(
       `SELECT c.id, c.descripcion, c.descripcion_larga, c.tipo, c.proyecto_id, c.ambito,
-              p.nombre AS proyecto_nombre, c.created_at
+              COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre, c.created_at
        FROM cotizaciones c
        LEFT JOIN proyectos p ON p.id = c.proyecto_id
        WHERE c.activo = TRUE
@@ -110,7 +110,7 @@ router.get(
     const result = await query(
       `SELECT o.id, o.cotizacion_id, o.proveedor, o.monto, o.nota, o.elegida,
               o.created_at, c.descripcion, c.tipo, c.proyecto_id, c.ambito,
-              p.nombre AS proyecto_nombre, u.nombre AS agregado_por_nombre,
+              COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre, u.nombre AS agregado_por_nombre,
               COUNT(a.id)::int AS archivos_count
        FROM cotizacion_ofertas o
        JOIN cotizaciones c ON c.id = o.cotizacion_id AND c.activo = TRUE
@@ -557,7 +557,7 @@ router.get(
       const { id } = req.params;
 
       const cot = await query(
-        `SELECT c.*, p.nombre AS proyecto_nombre, u.nombre AS pedido_por_nombre
+        `SELECT c.*, COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre, u.nombre AS pedido_por_nombre
          FROM cotizaciones c
          LEFT JOIN proyectos p ON p.id = c.proyecto_id
          LEFT JOIN users u ON u.id = c.creado_por
