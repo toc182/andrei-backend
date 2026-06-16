@@ -118,7 +118,7 @@ router.get(
        LEFT JOIN users u ON u.id = o.creado_por
        LEFT JOIN cotizacion_archivos a ON a.oferta_id = o.id
        WHERE o.activo = TRUE
-       GROUP BY o.id, c.descripcion, c.tipo, c.proyecto_id, c.ambito, p.nombre, u.nombre
+       GROUP BY o.id, c.descripcion, c.tipo, c.proyecto_id, c.ambito, p.nombre_corto, p.nombre, u.nombre
        ORDER BY o.created_at DESC`,
     );
     res.json({ success: true, data: result.rows });
