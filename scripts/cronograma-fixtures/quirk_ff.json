@@ -1,0 +1,136 @@
+{
+  "project": {
+    "id": "q-ff",
+    "name": "QUIRK FF",
+    "startDate": "2026-01-05",
+    "workWeek": "5",
+    "baseline": null
+  },
+  "tasks": [
+    {
+      "id": "A",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "A",
+      "duration": 10,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 0
+    },
+    {
+      "id": "X",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "X",
+      "duration": 30,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 1
+    },
+    {
+      "id": "B",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "B (FF de A, lag 2)",
+      "duration": 8,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "A",
+          "type": "FF",
+          "lag": 2
+        }
+      ],
+      "order": 2
+    },
+    {
+      "id": "C",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "C (X FS, luego A FF)",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "X",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "A",
+          "type": "FF",
+          "lag": 0
+        }
+      ],
+      "order": 3
+    },
+    {
+      "id": "D",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "D (A FF, luego X FF)",
+      "duration": 6,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "A",
+          "type": "FF",
+          "lag": 0
+        },
+        {
+          "taskId": "X",
+          "type": "FF",
+          "lag": 0
+        }
+      ],
+      "order": 4
+    }
+  ],
+  "expected": {
+    "schedule": {
+      "A": {
+        "s": "2026-01-05",
+        "f": "2026-01-16"
+      },
+      "X": {
+        "s": "2026-01-05",
+        "f": "2026-02-13"
+      },
+      "B": {
+        "s": "2026-01-09",
+        "f": "2026-01-20"
+      },
+      "C": {
+        "s": "2026-02-16",
+        "f": "2026-01-16"
+      },
+      "D": {
+        "s": "2026-02-06",
+        "f": "2026-02-13"
+      }
+    },
+    "rollup": {},
+    "violations": [],
+    "critical": [
+      "C",
+      "D",
+      "X"
+    ],
+    "cycle": false
+  }
+}

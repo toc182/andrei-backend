@@ -1,0 +1,84 @@
+{
+  "project": {
+    "id": "q-sf",
+    "name": "QUIRK SF",
+    "startDate": "2026-01-05",
+    "workWeek": "5",
+    "baseline": null
+  },
+  "tasks": [
+    {
+      "id": "A",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "A",
+      "duration": 10,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 0
+    },
+    {
+      "id": "B",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "B (SF de A, lag 0)",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "A",
+          "type": "SF",
+          "lag": 0
+        }
+      ],
+      "order": 1
+    },
+    {
+      "id": "C",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "C (SF de A, lag 3)",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "A",
+          "type": "SF",
+          "lag": 3
+        }
+      ],
+      "order": 2
+    }
+  ],
+  "expected": {
+    "schedule": {
+      "A": {
+        "s": "2026-01-05",
+        "f": "2026-01-16"
+      },
+      "B": {
+        "s": "2026-01-05",
+        "f": "2026-01-09"
+      },
+      "C": {
+        "s": "2026-01-08",
+        "f": "2026-01-14"
+      }
+    },
+    "rollup": {},
+    "violations": [],
+    "critical": [
+      "A"
+    ],
+    "cycle": false
+  }
+}

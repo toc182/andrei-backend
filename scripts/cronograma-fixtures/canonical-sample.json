@@ -1,0 +1,790 @@
+{
+  "project": {
+    "id": "gc-master",
+    "name": "Gran Central — Master Schedule",
+    "startDate": "2026-01-05",
+    "workWeek": "5",
+    "baseline": null
+  },
+  "tasks": [
+    {
+      "parentId": null,
+      "milestoneType": null,
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 0,
+      "type": "group",
+      "id": "g1",
+      "name": "Preconstrucción"
+    },
+    {
+      "parentId": "g1",
+      "milestoneType": null,
+      "duration": 30,
+      "manualDate": null,
+      "percentComplete": 100,
+      "color": null,
+      "predecessors": [],
+      "order": 1,
+      "type": "task",
+      "id": "t01",
+      "name": "Permisos y licencias"
+    },
+    {
+      "parentId": "g1",
+      "milestoneType": null,
+      "duration": 25,
+      "manualDate": null,
+      "percentComplete": 100,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t01",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 2,
+      "type": "task",
+      "id": "t02",
+      "name": "Licitación de obra"
+    },
+    {
+      "parentId": "g1",
+      "milestoneType": null,
+      "duration": 15,
+      "manualDate": null,
+      "percentComplete": 80,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t02",
+          "type": "FS",
+          "lag": 2
+        }
+      ],
+      "order": 3,
+      "type": "task",
+      "id": "t03",
+      "name": "Contratación contratista"
+    },
+    {
+      "parentId": "g1",
+      "milestoneType": "fixed",
+      "duration": 0,
+      "manualDate": "2026-03-16",
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t03",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 4,
+      "type": "milestone",
+      "id": "m1",
+      "name": "Inicio de obra"
+    },
+    {
+      "parentId": null,
+      "milestoneType": null,
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 5,
+      "type": "group",
+      "id": "g2",
+      "name": "Cimentación"
+    },
+    {
+      "parentId": "g2",
+      "milestoneType": null,
+      "duration": 20,
+      "manualDate": null,
+      "percentComplete": 50,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "m1",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 6,
+      "type": "task",
+      "id": "t04",
+      "name": "Excavación"
+    },
+    {
+      "parentId": "g2",
+      "milestoneType": null,
+      "duration": 30,
+      "manualDate": null,
+      "percentComplete": 20,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t04",
+          "type": "SS",
+          "lag": 5
+        }
+      ],
+      "order": 7,
+      "type": "task",
+      "id": "t05",
+      "name": "Pilotaje"
+    },
+    {
+      "parentId": "g2",
+      "milestoneType": null,
+      "duration": 25,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t05",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t04",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 8,
+      "type": "task",
+      "id": "t06",
+      "name": "Fundaciones"
+    },
+    {
+      "parentId": null,
+      "milestoneType": null,
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 9,
+      "type": "group",
+      "id": "g3",
+      "name": "Estructura"
+    },
+    {
+      "parentId": "g3",
+      "milestoneType": null,
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 10,
+      "type": "group",
+      "id": "g3a",
+      "name": "Torre A"
+    },
+    {
+      "parentId": "g3a",
+      "milestoneType": null,
+      "duration": 40,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t06",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 11,
+      "type": "task",
+      "id": "t07",
+      "name": "Columnas N1-N5 Torre A"
+    },
+    {
+      "parentId": "g3a",
+      "milestoneType": null,
+      "duration": 35,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t07",
+          "type": "SS",
+          "lag": 10
+        }
+      ],
+      "order": 12,
+      "type": "task",
+      "id": "t08",
+      "name": "Losas N1-N5 Torre A"
+    },
+    {
+      "parentId": "g3a",
+      "milestoneType": null,
+      "duration": 40,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t07",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 13,
+      "type": "task",
+      "id": "t09",
+      "name": "Columnas N6-N10 Torre A"
+    },
+    {
+      "parentId": "g3a",
+      "milestoneType": null,
+      "duration": 35,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t09",
+          "type": "SS",
+          "lag": 10
+        },
+        {
+          "taskId": "t08",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 14,
+      "type": "task",
+      "id": "t10",
+      "name": "Losas N6-N10 Torre A"
+    },
+    {
+      "parentId": "g3",
+      "milestoneType": null,
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 15,
+      "type": "group",
+      "id": "g3b",
+      "name": "Torre B"
+    },
+    {
+      "parentId": "g3b",
+      "milestoneType": null,
+      "duration": 40,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t06",
+          "type": "FS",
+          "lag": 10
+        }
+      ],
+      "order": 16,
+      "type": "task",
+      "id": "t11",
+      "name": "Columnas N1-N5 Torre B"
+    },
+    {
+      "parentId": "g3b",
+      "milestoneType": null,
+      "duration": 35,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t11",
+          "type": "SS",
+          "lag": 10
+        }
+      ],
+      "order": 17,
+      "type": "task",
+      "id": "t12",
+      "name": "Losas N1-N5 Torre B"
+    },
+    {
+      "parentId": "g3b",
+      "milestoneType": null,
+      "duration": 40,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t11",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 18,
+      "type": "task",
+      "id": "t13",
+      "name": "Columnas N6-N10 Torre B"
+    },
+    {
+      "parentId": "g3b",
+      "milestoneType": null,
+      "duration": 35,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t13",
+          "type": "SS",
+          "lag": 10
+        },
+        {
+          "taskId": "t12",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 19,
+      "type": "task",
+      "id": "t14",
+      "name": "Losas N6-N10 Torre B"
+    },
+    {
+      "parentId": "g3",
+      "milestoneType": "calculated",
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t10",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t14",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 20,
+      "type": "milestone",
+      "id": "m2",
+      "name": "Estructura completa"
+    },
+    {
+      "parentId": null,
+      "milestoneType": null,
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 21,
+      "type": "group",
+      "id": "g4",
+      "name": "Envolvente"
+    },
+    {
+      "parentId": "g4",
+      "milestoneType": null,
+      "duration": 50,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "m2",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 22,
+      "type": "task",
+      "id": "t15",
+      "name": "Mampostería"
+    },
+    {
+      "parentId": "g4",
+      "milestoneType": null,
+      "duration": 30,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t15",
+          "type": "SS",
+          "lag": 20
+        }
+      ],
+      "order": 23,
+      "type": "task",
+      "id": "t16",
+      "name": "Ventanería"
+    },
+    {
+      "parentId": "g4",
+      "milestoneType": null,
+      "duration": 15,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t13",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t09",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 24,
+      "type": "task",
+      "id": "t17",
+      "name": "Impermeabilización azotea"
+    },
+    {
+      "parentId": null,
+      "milestoneType": null,
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 25,
+      "type": "group",
+      "id": "g5",
+      "name": "MEP"
+    },
+    {
+      "parentId": "g5",
+      "milestoneType": null,
+      "duration": 45,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t15",
+          "type": "SS",
+          "lag": 10
+        }
+      ],
+      "order": 26,
+      "type": "task",
+      "id": "t18",
+      "name": "Rough-in eléctrico"
+    },
+    {
+      "parentId": "g5",
+      "milestoneType": null,
+      "duration": 40,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t15",
+          "type": "SS",
+          "lag": 10
+        }
+      ],
+      "order": 27,
+      "type": "task",
+      "id": "t19",
+      "name": "Rough-in plomería"
+    },
+    {
+      "parentId": "g5",
+      "milestoneType": null,
+      "duration": 50,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t15",
+          "type": "SS",
+          "lag": 15
+        }
+      ],
+      "order": 28,
+      "type": "task",
+      "id": "t20",
+      "name": "Rough-in HVAC"
+    },
+    {
+      "parentId": "g5",
+      "milestoneType": null,
+      "duration": 30,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t18",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t20",
+          "type": "SS",
+          "lag": 10
+        }
+      ],
+      "order": 29,
+      "type": "task",
+      "id": "t21",
+      "name": "Ductos y bandejas"
+    },
+    {
+      "parentId": null,
+      "milestoneType": null,
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 30,
+      "type": "group",
+      "id": "g6",
+      "name": "Acabados"
+    },
+    {
+      "parentId": "g6",
+      "milestoneType": null,
+      "duration": 40,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t18",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t19",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 31,
+      "type": "task",
+      "id": "t22",
+      "name": "Repello y pisos"
+    },
+    {
+      "parentId": "g6",
+      "milestoneType": null,
+      "duration": 25,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t21",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 32,
+      "type": "task",
+      "id": "t23",
+      "name": "Cielo raso"
+    },
+    {
+      "parentId": "g6",
+      "milestoneType": null,
+      "duration": 30,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t22",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t23",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 33,
+      "type": "task",
+      "id": "t24",
+      "name": "Pintura"
+    },
+    {
+      "parentId": "g6",
+      "milestoneType": null,
+      "duration": 20,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t24",
+          "type": "SS",
+          "lag": 10
+        }
+      ],
+      "order": 34,
+      "type": "task",
+      "id": "t25",
+      "name": "Carpintería y closets"
+    },
+    {
+      "parentId": "g6",
+      "milestoneType": null,
+      "duration": 15,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t24",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t23",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 35,
+      "type": "task",
+      "id": "t26",
+      "name": "Aparatos y luminarias"
+    },
+    {
+      "parentId": null,
+      "milestoneType": null,
+      "duration": 0,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 36,
+      "type": "group",
+      "id": "g7",
+      "name": "Entrega"
+    },
+    {
+      "parentId": "g7",
+      "milestoneType": null,
+      "duration": 20,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t26",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t25",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t16",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 37,
+      "type": "task",
+      "id": "t27",
+      "name": "Pruebas y comisionamiento"
+    },
+    {
+      "parentId": "g7",
+      "milestoneType": null,
+      "duration": 10,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t27",
+          "type": "SS",
+          "lag": 10
+        }
+      ],
+      "order": 38,
+      "type": "task",
+      "id": "t28",
+      "name": "Limpieza final"
+    },
+    {
+      "parentId": "g7",
+      "milestoneType": null,
+      "duration": 8,
+      "manualDate": "2027-08-02",
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t27",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 39,
+      "type": "task",
+      "id": "t29",
+      "name": "Inspecciones municipales"
+    },
+    {
+      "parentId": "g7",
+      "milestoneType": "fixed",
+      "duration": 0,
+      "manualDate": "2027-09-30",
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "t28",
+          "type": "FS",
+          "lag": 0
+        },
+        {
+          "taskId": "t29",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 40,
+      "type": "milestone",
+      "id": "m3",
+      "name": "Entrega final"
+    }
+  ]
+}

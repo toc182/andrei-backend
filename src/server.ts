@@ -63,6 +63,7 @@ import notificationsRoutes from './routes/notifications.js';
 import cajasMenudasRoutes from './routes/cajasMenudas.js';
 import cuentasRoutes from './routes/cuentas.js';
 import cotizacionesRoutes from './routes/cotizaciones.js';
+import cronogramasRoutes from './routes/cronogramas.js';
 import { startScheduler } from './cron/scheduler.js';
 
 const app = express();
@@ -127,6 +128,7 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/cajas-menudas', cajasMenudasRoutes);
 app.use('/api/cuentas', cuentasRoutes);
 app.use('/api/cotizaciones', cotizacionesRoutes);
+app.use('/api/cronogramas', cronogramasRoutes);
 
 // Ruta de prueba
 app.get('/api/health', (_req: Request, res: Response) => {

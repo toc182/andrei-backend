@@ -1,0 +1,56 @@
+{
+  "project": {
+    "id": "q-cycle",
+    "name": "QUIRK ciclo",
+    "startDate": "2026-01-05",
+    "workWeek": "5",
+    "baseline": null
+  },
+  "tasks": [
+    {
+      "id": "A",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "A",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "B",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 0
+    },
+    {
+      "id": "B",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "B",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        {
+          "taskId": "A",
+          "type": "FS",
+          "lag": 0
+        }
+      ],
+      "order": 1
+    }
+  ],
+  "expected": {
+    "schedule": {},
+    "rollup": {},
+    "violations": [],
+    "critical": [],
+    "cycle": true
+  }
+}
