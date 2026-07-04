@@ -32,6 +32,7 @@ export interface UserPermissions {
   caja_menuda: boolean;
   cuentas: boolean;
   cotizaciones: boolean;
+  cronogramas_ver: boolean;
 }
 
 /**

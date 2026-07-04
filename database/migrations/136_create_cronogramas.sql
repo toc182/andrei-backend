@@ -79,8 +79,9 @@ CREATE INDEX IF NOT EXISTS idx_cronograma_deps_crono
 CREATE INDEX IF NOT EXISTS idx_cronograma_deps_tarea
   ON cronograma_dependencias (tarea_id);
 
--- Granular permission for rol 'usuario' (admin/co-admin bypass). Added now but NOT
--- yet consulted: v1 is gated by EMAIL (only ivan@pinellaspanama.com) because the
--- permission system can't hide a feature from other admins. Flipping the gate to
--- this column later is a one-line change in canUseCronogramas (both repos).
+-- Granular permission for rol 'usuario' (admin/co-admin bypass). Consulted by
+-- checkPermission('cronogramas_ver') in routes/cronogramas.ts and mirrored by
+-- canUseCronogramas on the frontend; grantable from the Permisos page.
+-- (Comment updated when the v1 single-email beta gate was retired — the runner
+-- tracks migrations by filename, so this file never re-executes.)
 ALTER TABLE user_permissions ADD COLUMN IF NOT EXISTS cronogramas_ver BOOLEAN DEFAULT FALSE;

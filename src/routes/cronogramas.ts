@@ -4,7 +4,8 @@
 // Persisted = config + tasks + dependencies; the schedule (dates) is COMPUTED by
 // the shared engine on read and validated (cycle rejection) on save, never stored.
 //
-// v1 is gated to a single user by EMAIL (betaFeatureSingleUser) — see cronogramaGate.ts.
+// Gated by the `cronogramas_ver` permission (admin/co-admin bypass, like every
+// checkPermission route). Grantable per-usuario from the Permisos page.
 //
 // Wire shape mirrors the standalone Gantto `{project, tasks}` format (tasks carry
 // embedded predecessors), so import/export round-trips and the frontend feeds tasks
@@ -12,8 +13,7 @@
 
 import { Router, Request, Response } from 'express';
 import { query, pool } from '../database/config.js';
-import { authenticateToken } from '../middleware/auth.js';
-import { betaFeatureSingleUser } from '../middleware/cronogramaGate.js';
+import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import {
   computeSchedule,
@@ -38,7 +38,7 @@ import type {
 import type { PoolClient } from 'pg';
 
 const router = Router();
-router.use(authenticateToken, betaFeatureSingleUser);
+router.use(authenticateToken, checkPermission('cronogramas_ver'));
 
 // ---------- DB row types ----------
 interface CronogramaRow {
