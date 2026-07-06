@@ -15,6 +15,7 @@ import { Router, Request, Response } from 'express';
 import { query, pool } from '../database/config.js';
 import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 import {
   computeSchedule,
   computeRollup,
@@ -372,6 +373,10 @@ router.post(
         user.id,
       ],
     );
+    await registrarAudit(user.id, 'crear', 'cronograma', r.rows[0].id, {
+      nombre: name,
+      proyecto_id: proyectoId ?? null,
+    });
     res.status(201).json({ success: true, data: { id: r.rows[0].id } });
   }),
 );
@@ -380,6 +385,7 @@ router.post(
 router.put(
   '/:id/save',
   asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
+    const user = req.user!;
     const id = parseInt(req.params.id, 10);
     const body = req.body as SaveCronogramaBody;
     const tasks = body.tasks || [];
@@ -399,8 +405,8 @@ router.put(
       await client.query('BEGIN');
 
       // Lock the row and read its current version for the optimistic-concurrency precondition.
-      const cur = await client.query<{ updated_at: string }>(
-        `SELECT ${UPDATED_AT_SQL} AS updated_at FROM cronogramas WHERE id = $1 AND activo = TRUE FOR UPDATE`,
+      const cur = await client.query<{ nombre: string; updated_at: string }>(
+        `SELECT nombre, ${UPDATED_AT_SQL} AS updated_at FROM cronogramas WHERE id = $1 AND activo = TRUE FOR UPDATE`,
         [id],
       );
       if (!cur.rows.length) {
@@ -447,6 +453,28 @@ router.put(
       );
       await client.query('COMMIT');
 
+      // Audit AFTER the commit (never a rolled-back save). Autosave fires every few seconds
+      // while editing, so throttle to one 'editar' entry per user/cronograma per 30 minutes —
+      // session granularity, not keystroke granularity. Wrapped so an audit_log hiccup can
+      // never fail a save that already committed.
+      try {
+        const recent = await query(
+          `SELECT 1 FROM audit_log
+           WHERE user_id = $1 AND entidad = 'cronograma' AND entidad_id = $2
+             AND accion = 'editar' AND created_at > NOW() - INTERVAL '30 minutes'
+           LIMIT 1`,
+          [user.id, id],
+        );
+        if (!recent.rows.length) {
+          await registrarAudit(user.id, 'editar', 'cronograma', id, {
+            nombre: cur.rows[0].nombre,
+            tareas: tasks.length,
+          });
+        }
+      } catch (auditErr) {
+        console.error('Error registrando audit de cronograma:', auditErr);
+      }
+
       const detail = await loadDetail(id);
       if (!detail) {
         // Soft-deleted in the post-commit read window — don't return success with empty data
@@ -483,14 +511,16 @@ router.delete(
   '/:id',
   asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
     const id = parseInt(req.params.id, 10);
-    const r = await query(
-      `UPDATE cronogramas SET activo = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND activo = TRUE`,
+    const r = await query<{ nombre: string }>(
+      `UPDATE cronogramas SET activo = FALSE, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND activo = TRUE RETURNING nombre`,
       [id],
     );
     if (!r.rowCount) {
       res.status(404).json({ success: false, message: 'Cronograma no encontrado' });
       return;
     }
+    await registrarAudit(req.user!.id, 'eliminar', 'cronograma', id, { nombre: r.rows[0].nombre });
     res.json({ success: true });
   }),
 );
@@ -542,6 +572,10 @@ router.post(
       const newId = created.rows[0].id;
       await persistTree(client, newId, tasks);
       await client.query('COMMIT');
+      await registrarAudit(user.id, 'importar', 'cronograma', newId, {
+        nombre: body.nombre || body.project.name || 'Cronograma importado',
+        tareas: tasks.length,
+      });
       res.status(201).json({ success: true, data: { id: newId } });
     } catch (err) {
       await client.query('ROLLBACK');

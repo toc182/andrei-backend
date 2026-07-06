@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { query } from '../database/config.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 import type { UserPermissions } from '../types/auth.js';
 
 const router = Router();
@@ -168,6 +169,10 @@ router.put(
         ],
       );
 
+      await registrarAudit(req.user!.id, 'editar_permisos', 'user', parseInt(userId, 10), {
+        ...permissions,
+      });
+
       res.json({
         success: true,
         message: 'Permisos actualizados',
@@ -228,6 +233,10 @@ router.put(
           [userId, ...projectIds],
         );
       }
+
+      await registrarAudit(req.user!.id, 'editar_proyectos_asignados', 'user', parseInt(userId, 10), {
+        proyectos: projectIds,
+      });
 
       res.json({
         success: true,
