@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { query } from '../database/config.js';
+import { query, pool } from '../database/config.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
@@ -220,18 +220,28 @@ router.put(
         return;
       }
 
-      // DELETE existing
-      await query('DELETE FROM user_project_access WHERE user_id = $1', [
-        userId,
-      ]);
-
-      // INSERT new ones
-      if (projectIds.length > 0) {
-        const values = projectIds.map((pid, i) => `($1, $${i + 2})`).join(', ');
-        await query(
-          `INSERT INTO user_project_access (user_id, proyecto_id) VALUES ${values} ON CONFLICT DO NOTHING`,
-          [userId, ...projectIds],
-        );
+      // DELETE + INSERT atomically: without the transaction, a failure between the two
+      // steps would leave the user assigned to zero projects (old list gone, new one
+      // never written). ROLLBACK restores the old list on any mid-way error.
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM user_project_access WHERE user_id = $1', [
+          userId,
+        ]);
+        if (projectIds.length > 0) {
+          const values = projectIds.map((pid, i) => `($1, $${i + 2})`).join(', ');
+          await client.query(
+            `INSERT INTO user_project_access (user_id, proyecto_id) VALUES ${values} ON CONFLICT DO NOTHING`,
+            [userId, ...projectIds],
+          );
+        }
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
 
       await registrarAudit(req.user!.id, 'editar_proyectos_asignados', 'user', parseInt(userId, 10), {
