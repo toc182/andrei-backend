@@ -526,7 +526,8 @@ router.put(
       res.status(400).json({ success: false, message: 'ajustes_impresion debe ser un objeto' });
       return;
     }
-    if (Buffer.byteLength(JSON.stringify(body), 'utf8') > AJUSTES_MAX_BYTES) {
+    const json = JSON.stringify(body);
+    if (Buffer.byteLength(json, 'utf8') > AJUSTES_MAX_BYTES) {
       res.status(400).json({
         success: false,
         message: 'Los ajustes de impresión exceden 600 KB (logos demasiado grandes).',
@@ -537,7 +538,7 @@ router.put(
       `UPDATE cronogramas SET ajustes_impresion = $1
         WHERE id = $2 AND activo = TRUE
         RETURNING id, nombre`,
-      [JSON.stringify(body), id],
+      [json, id],
     );
     if (!r.rows.length) {
       res.status(404).json({ success: false, message: 'Cronograma no encontrado' });
