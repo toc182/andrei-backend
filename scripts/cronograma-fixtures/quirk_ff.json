@@ -127,10 +127,10 @@
     "rollup": {},
     "violations": [],
     "critical": [
-      "C",
       "D",
       "X"
     ],
+    "_critical_note_D1": "Re-derived 2026-07-08 under DEVIATION-D1. C dropped: it is Q2-compressed (FF pins f=2026-01-16 to A while FS from X pushes s=2026-02-16), has NO successors, and its finish sits ~4 weeks before projEnd 2026-02-13 — slipping C moves nothing, so it carries float. The old rigid-bar backward pass (and gantto) marked it critical by deriving a start bound from the finish bound, invalid for compressed bars. D (finish = projEnd via X's FF pin) and X (drives D) remain critical; hand-verified.",
     "cycle": false
   }
 }

@@ -1,0 +1,79 @@
+{
+  "_note": "DEVIATION-D1 regression fixture (2026-07-08), from the adversarial review's counterexample: T is Q2-compressed (FF from C pins T.f=2026-01-07; FS from P2 pushes T.s=2026-01-06; dur 5 squeezed). T's finish drives S (which ends the project), so C -> T -> S are critical. P2 must NOT be critical: T's start is decoupled from its pinned finish, so slipping P2 slides T.s without moving T.f, S, or the project end. The pre-fix rigid-bar backward pass falsely marked P2 critical. All expectations hand-computed (ww 5, start 2026-01-05).",
+  "project": {
+    "id": "d1-ffcomp",
+    "name": "D1 — FF comprimido, pred con holgura",
+    "startDate": "2026-01-05",
+    "workWeek": "5",
+    "baseline": null
+  },
+  "tasks": [
+    {
+      "id": "C",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "C (3d, pin del fin de T)",
+      "duration": 3,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 0
+    },
+    {
+      "id": "P2",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "P2 (1d, empuja el inicio de T)",
+      "duration": 1,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 1
+    },
+    {
+      "id": "T",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "T (5d, FS P2 + FF C — comprimida)",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        { "taskId": "P2", "type": "FS", "lag": 0 },
+        { "taskId": "C", "type": "FF", "lag": 0 }
+      ],
+      "order": 2
+    },
+    {
+      "id": "S",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "S (10d, FS T — cierra el proyecto)",
+      "duration": 10,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [{ "taskId": "T", "type": "FS", "lag": 0 }],
+      "order": 3
+    }
+  ],
+  "expected": {
+    "schedule": {
+      "C": { "s": "2026-01-05", "f": "2026-01-07" },
+      "P2": { "s": "2026-01-05", "f": "2026-01-05" },
+      "T": { "s": "2026-01-06", "f": "2026-01-07" },
+      "S": { "s": "2026-01-08", "f": "2026-01-21" }
+    },
+    "rollup": {},
+    "violations": [],
+    "critical": ["C", "S", "T"],
+    "cycle": false
+  }
+}

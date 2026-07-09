@@ -1,4 +1,4 @@
-// Cronograma scheduling engine — VERBATIM PORT of Gantto/ganttoweb/engine.js.
+// Cronograma scheduling engine — port of Gantto/ganttoweb/engine.js.
 //
 // Duplicated BYTE-FOR-BYTE IDENTICAL in two repos — keep them in sync:
 //   andrei-backend/src/services/cronogramaEngine.ts   (scheduling authority)
@@ -8,6 +8,12 @@
 // Dates are "YYYY-MM-DD" strings compared lexicographically (zero-padding is load-bearing).
 // Replicates the 3 documented quirks: Q1 SF≈SS, Q2 FF short-circuit (last FF wins), Q3 FS lag+1.
 // `holidays` (optional array of "YYYY-MM-DD") — a holiday is never a work day.
+//
+// DEVIATION-D1 (2026-07-07, deliberate — the ONE divergence from gantto): computeCritical's
+// backward pass inverts each dependency BY ITS TYPE. Gantto dropped the type and inverted every
+// link as FS, which dragged whole SS/FF/SF chains into the critical set (branches with weeks of
+// float rendered critical). computeSchedule (all dates) remains a verbatim port; fixture
+// `critical` expectations were re-derived and hand-verified under D1.
 //
 // Id-type-agnostic: ids may be string (web/test fixtures) or number (DB SERIAL in the ERP).
 
@@ -260,17 +266,15 @@ export function computeCritical(tasks: EngineTask[], proj: EngineProject, sched:
   if (!sched.size) return crit;
   const ww = parseInt(String(proj.workWeek)) || 5;
   const hol = new Set<string>(proj.holidays || []);
+  // DEVIATION-D1: projEnd is simply the schedule's real end (max finish over everything).
+  // gantto instead used the LATEST FIXED MILESTONE when one existed — with an interim fixed
+  // milestone (e.g. "Inicio de obra") as the only one, that made a mid-project date the
+  // "deadline" and painted the entire tail critical. Fixed milestones still exert deadline
+  // pressure, but per-milestone via the pinned-date cap below (scoped to their feeding chain).
   let projEnd: string | null = null;
-  for (const t of tasks) {
-    if (t.type === 'milestone' && t.milestoneType === 'fixed' && t.manualDate) {
-      const m = sched.get(t.id);
-      if (m && (!projEnd || m.f > projEnd)) projEnd = m.f;
-    }
+  for (const [, sc] of sched) {
+    if (!projEnd || sc.f > projEnd) projEnd = sc.f;
   }
-  if (!projEnd)
-    for (const [, sc] of sched) {
-      if (!projEnd || sc.f > projEnd) projEnd = sc.f;
-    }
   if (!projEnd) return crit;
   let sorted: EngineTask[];
   try {
@@ -278,27 +282,71 @@ export function computeCritical(tasks: EngineTask[], proj: EngineProject, sched:
   } catch {
     return crit;
   }
-  const succ = new Map<TaskId, { id: TaskId; lag: number }[]>(tasks.map((t) => [t.id, []]));
+  // DEVIATION-D1: invert each successor link by its TYPE, mirroring the forward pass.
+  //   FS (Q3: forward adds lag+1)      -> bounds this task's late FINISH from succ late start
+  //   SS / SF (Q1: SF forwards as SS)  -> bounds this task's late START  from succ late start
+  //   FF                               -> bounds this task's late FINISH from succ late finish
+  // (Multi-FF "last wins" (Q2) is honored forward only; backward all FF links bound
+  // conservatively — the critical flag is a highlight, never a scheduling input.)
+  const succ = new Map<TaskId, { id: TaskId; type: DepType; lag: number }[]>(tasks.map((t) => [t.id, []]));
   for (const t of tasks)
     for (const p of t.predecessors || [])
-      if (succ.has(p.taskId)) succ.get(p.taskId)!.push({ id: t.id, lag: p.lag || 0 });
+      if (succ.has(p.taskId)) succ.get(p.taskId)!.push({ id: t.id, type: p.type, lag: p.lag || 0 });
   const lateStart = new Map<TaskId, string>();
+  const lateFinish = new Map<TaskId, string>();
   for (const t of [...sorted].reverse()) {
     if (t.type === 'group') continue;
     const sc = sched.get(t.id);
     if (!sc) continue;
     const dur = t.type === 'milestone' ? 0 : Math.max(1, t.duration || 1);
-    let lf: string | null = null;
+    // EVERY task's late finish is seeded by the project end (P6-style), then tightened by
+    // successor bounds. Without the seed, a task whose only successors are SS/SF has an
+    // unbounded finish and the end-defining task of the schedule would never show critical.
+    let lf: string = projEnd;
+    let lsb: string | null = null; // tightest bound on this task's late start (SS/SF links)
     for (const s of succ.get(t.id) || []) {
-      const ls = lateStart.get(s.id);
-      if (ls == null) continue;
-      const cand = addWorkDays(ls, -s.lag - 1, ww, hol);
-      if (lf == null || cand < lf) lf = cand;
+      if (s.type === 'SS' || s.type === 'SF') {
+        const sls = lateStart.get(s.id);
+        if (sls == null) continue;
+        const cand = s.lag !== 0 ? addWorkDays(sls, -s.lag, ww, hol) : sls;
+        if (lsb == null || cand < lsb) lsb = cand;
+      } else if (s.type === 'FF') {
+        const slf = lateFinish.get(s.id);
+        if (slf == null) continue;
+        const cand = s.lag !== 0 ? addWorkDays(slf, -s.lag, ww, hol) : slf;
+        if (cand < lf) lf = cand;
+      } else {
+        const sls = lateStart.get(s.id);
+        if (sls == null) continue;
+        const cand = addWorkDays(sls, -s.lag - 1, ww, hol);
+        if (cand < lf) lf = cand;
+      }
     }
-    if (lf == null) lf = projEnd;
-    const ls = t.type === 'milestone' ? lf : addWorkDays(lf, -(dur - 1), ww, hol);
-    lateStart.set(t.id, ls);
-    if (ls <= sc.s) crit.add(t.id);
+    const lsFromLf = t.type === 'milestone' ? lf : addWorkDays(lf, -(dur - 1), ww, hol);
+    let ls = lsb == null || lsFromLf < lsb ? lsFromLf : lsb;
+    // A FIXED milestone is pinned (Must-Finish-On): its late date is capped by its own pinned
+    // date, so a chain running late against it inherits negative float and shows critical.
+    // (A chain finishing exactly ON the pin is critical without a violation triangle — Q3's
+    // lag+1 means the milestone would already need to land the next work day.)
+    const isPinned = t.type === 'milestone' && t.milestoneType === 'fixed' && !!t.manualDate;
+    if (isPinned && sc.s < ls) ls = sc.s;
+    // The folded lateFinish (= min(lf, lsb + dur - 1)) is exact even for Q2-compressed tasks:
+    // it carries both FF channels back to the FF predecessor (finish pin f = pred.f + lag, and
+    // the start push ff - (dur - 1)).
+    const lfOut = t.type === 'milestone' ? ls : addWorkDays(ls, dur - 1, ww, hol);
+    lateFinish.set(t.id, lfOut);
+    if (!isPinned && (t.predecessors || []).some((p) => p.type === 'FF')) {
+      // Q2-compressed (FF-fed) task: the forward pass pins its FINISH to the FF predecessor and
+      // decouples it from the start (the bar can even compress, f < s). The rigid-bar ls is NOT
+      // a valid start bound here — deriving one falsely marks FS/SS/SF predecessors critical.
+      // Only a real successor start-need (lsb) constrains the start; criticality is judged by
+      // the finish (or that genuine start-need).
+      if (lsb != null) lateStart.set(t.id, lsb);
+      if (lfOut <= sc.f || (lsb != null && lsb <= sc.s)) crit.add(t.id);
+    } else {
+      lateStart.set(t.id, ls);
+      if (ls <= sc.s) crit.add(t.id);
+    }
   }
   return crit;
 }

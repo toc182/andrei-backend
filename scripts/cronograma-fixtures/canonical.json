@@ -970,24 +970,12 @@
     ],
     "critical": [
       "m1",
-      "m2",
       "m3",
       "t01",
       "t02",
-      "t03",
-      "t04",
-      "t05",
-      "t06",
-      "t07",
-      "t08",
-      "t09",
-      "t10",
-      "t11",
-      "t12",
-      "t13",
-      "t14",
-      "t15"
+      "t03"
     ],
+    "_critical_note_D1": "Re-derived 2026-07-07 under engine DEVIATION-D1 (per-type backward pass + P6-style projEnd seed + fixed-milestone pinned-date cap). The old 18-item set was the SS-inverted-as-FS artifact. Hand-verified: m3 fixed 2027-09-30 sits ~7wk after the last work (t29 f 2027-08-11) so the whole work chain has float against the delivery; m1 fixed 2026-03-16 is VIOLATED (feeding chain t01→t02→t03 ends 2026-04-14), so the pinned cap propagates negative float to exactly t01,t02,t03.",
     "cycle": false
   }
 }

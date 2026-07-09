@@ -1,0 +1,107 @@
+{
+  "_note": "DEVIATION-D1 regression fixture (2026-07-07): two FS chains converge on END — chain A (10+5) binds END's start, chain B (5+5) has 5 days float and must NOT be critical. S1 hangs off A1 via SS+2 with no successors (float vs projEnd) — under the old SS-inverted-as-FS bug this shape dragged slack branches into the critical set. All expectations hand-computed.",
+  "project": {
+    "id": "d1-ssconv",
+    "name": "D1 — convergencia con holgura",
+    "startDate": "2026-01-05",
+    "workWeek": "5",
+    "baseline": null
+  },
+  "tasks": [
+    {
+      "id": "A1",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "A1 (10d)",
+      "duration": 10,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 0
+    },
+    {
+      "id": "A2",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "A2 (5d, FS A1)",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [{ "taskId": "A1", "type": "FS", "lag": 0 }],
+      "order": 1
+    },
+    {
+      "id": "B1",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "B1 (5d)",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [],
+      "order": 2
+    },
+    {
+      "id": "B2",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "B2 (5d, FS B1)",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [{ "taskId": "B1", "type": "FS", "lag": 0 }],
+      "order": 3
+    },
+    {
+      "id": "S1",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "S1 (5d, SS+2 A1, sin sucesores)",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [{ "taskId": "A1", "type": "SS", "lag": 2 }],
+      "order": 4
+    },
+    {
+      "id": "END",
+      "parentId": null,
+      "type": "task",
+      "milestoneType": null,
+      "name": "END (5d, FS A2 + FS B2)",
+      "duration": 5,
+      "manualDate": null,
+      "percentComplete": 0,
+      "color": null,
+      "predecessors": [
+        { "taskId": "A2", "type": "FS", "lag": 0 },
+        { "taskId": "B2", "type": "FS", "lag": 0 }
+      ],
+      "order": 5
+    }
+  ],
+  "expected": {
+    "schedule": {
+      "A1": { "s": "2026-01-05", "f": "2026-01-16" },
+      "A2": { "s": "2026-01-19", "f": "2026-01-23" },
+      "B1": { "s": "2026-01-05", "f": "2026-01-09" },
+      "B2": { "s": "2026-01-12", "f": "2026-01-16" },
+      "S1": { "s": "2026-01-07", "f": "2026-01-13" },
+      "END": { "s": "2026-01-26", "f": "2026-01-30" }
+    },
+    "rollup": {},
+    "violations": [],
+    "critical": ["A1", "A2", "END"],
+    "cycle": false
+  }
+}
