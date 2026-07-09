@@ -508,6 +508,65 @@ router.put(
   }),
 );
 
+// PUT /cronogramas/:id/ajustes-impresion — persist the print/PDF setup.
+// Deliberately does NOT touch updated_at: that column is the optimistic-
+// concurrency stamp for schedule saves; bumping it here would 409 other
+// tabs' autosaves over a presentation-only change.
+const AJUSTES_MAX_BYTES = 600 * 1024;
+router.put(
+  '/:id/ajustes-impresion',
+  asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ success: false, message: 'id inválido' });
+      return;
+    }
+    const body = req.body as unknown;
+    if (body == null || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ success: false, message: 'ajustes_impresion debe ser un objeto' });
+      return;
+    }
+    if (Buffer.byteLength(JSON.stringify(body), 'utf8') > AJUSTES_MAX_BYTES) {
+      res.status(400).json({
+        success: false,
+        message: 'Los ajustes de impresión exceden 600 KB (logos demasiado grandes).',
+      });
+      return;
+    }
+    const r = await query<{ id: number; nombre: string }>(
+      `UPDATE cronogramas SET ajustes_impresion = $1
+        WHERE id = $2 AND activo = TRUE
+        RETURNING id, nombre`,
+      [JSON.stringify(body), id],
+    );
+    if (!r.rows.length) {
+      res.status(404).json({ success: false, message: 'Cronograma no encontrado' });
+      return;
+    }
+    // Same 30-minute 'editar' throttle as schedule saves; an audit_log hiccup
+    // never fails a request that already committed.
+    try {
+      const user = req.user!;
+      const recent = await query(
+        `SELECT 1 FROM audit_log
+         WHERE user_id = $1 AND entidad = 'cronograma' AND entidad_id = $2
+           AND accion = 'editar' AND created_at > NOW() - INTERVAL '30 minutes'
+         LIMIT 1`,
+        [user.id, id],
+      );
+      if (!recent.rows.length) {
+        await registrarAudit(user.id, 'editar', 'cronograma', id, {
+          nombre: r.rows[0].nombre,
+          ajustesImpresion: true,
+        });
+      }
+    } catch (auditErr) {
+      console.error('Error registrando audit de cronograma:', auditErr);
+    }
+    res.json({ success: true, data: { id } });
+  }),
+);
+
 // DELETE /cronogramas/:id  — soft delete
 router.delete(
   '/:id',
