@@ -50,6 +50,7 @@ interface CronogramaRow {
   semana_laboral: number;
   feriados: string[] | null;
   baseline: unknown | null;
+  ajustes_impresion: unknown | null;
   updated_at: string;
 }
 
@@ -95,6 +96,7 @@ function rowToConfig(r: CronogramaRow): CronogramaConfig {
     workWeek: r.semana_laboral,
     holidays: r.feriados || [],
     baseline: r.baseline ?? null,
+    ajustesImpresion: r.ajustes_impresion ?? null,
     updatedAt: r.updated_at,
   };
 }
@@ -147,7 +149,7 @@ async function loadDetail(
 ): Promise<{ config: CronogramaConfig; tasks: EngineTask[] } | null> {
   const c = await query<CronogramaRow>(
     `SELECT id, nombre, proyecto_id, to_char(fecha_inicio,'YYYY-MM-DD') AS fecha_inicio,
-            semana_laboral, feriados, baseline, ${UPDATED_AT_SQL} AS updated_at
+            semana_laboral, feriados, baseline, ajustes_impresion, ${UPDATED_AT_SQL} AS updated_at
        FROM cronogramas WHERE id = $1 AND activo = TRUE`,
     [cronogramaId],
   );

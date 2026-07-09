@@ -15,6 +15,8 @@ export interface CronogramaConfig {
   workWeek: number; // 5 | 6 | 7
   holidays: string[]; // ["YYYY-MM-DD", ...]
   baseline: unknown | null;
+  /** Print/PDF setup (paper, columns, logos…) — opaque JSON owned by the frontend dialog. */
+  ajustesImpresion?: unknown | null;
   updatedAt?: string; // server version stamp (optimistic-concurrency precondition for save)
 }
 

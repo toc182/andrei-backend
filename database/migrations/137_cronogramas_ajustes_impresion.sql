@@ -1,0 +1,14 @@
+-- 137_cronogramas_ajustes_impresion.sql
+--
+-- Print/PDF setup for a cronograma: paper, margin, letter size, pages
+-- wide/tall, visible columns, title/subtitle, and logo choices (uploaded
+-- logos embedded as data URLs, capped client- and server-side).
+--
+-- This is SHARED DOCUMENT CONFIGURATION — any user on any device reprints
+-- the same PDF — NOT the browser-only UI state that migration 136
+-- deliberately keeps out of the DB (collapse/zoom/overlay toggles).
+--
+-- Written by PUT /cronogramas/:id/ajustes-impresion, which must NOT bump
+-- updated_at: that column is the optimistic-concurrency version stamp for
+-- schedule saves; print setup is presentation, not schedule data.
+ALTER TABLE cronogramas ADD COLUMN IF NOT EXISTS ajustes_impresion JSONB;
