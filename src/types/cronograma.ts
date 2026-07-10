@@ -11,6 +11,9 @@ export interface CronogramaConfig {
   id: number;
   name: string;
   proyectoId: number | null;
+  /** Display name of the linked proyecto (null for standalone cronogramas) — the
+   *  print dialog's default título. */
+  proyectoNombre?: string | null;
   startDate: string; // "YYYY-MM-DD"
   workWeek: number; // 5 | 6 | 7
   holidays: string[]; // ["YYYY-MM-DD", ...]

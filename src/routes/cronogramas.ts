@@ -46,6 +46,7 @@ interface CronogramaRow {
   id: number;
   nombre: string;
   proyecto_id: number | null;
+  proyecto_nombre?: string | null; // only queries that JOIN proyectos fill this
   fecha_inicio: string;
   semana_laboral: number;
   feriados: string[] | null;
@@ -59,7 +60,8 @@ class ConflictError extends Error {}
 
 // Single canonical text form of updated_at so the value the client receives on load is
 // byte-identical to the value the save precondition compares against (no TZ/format drift).
-const UPDATED_AT_SQL = `to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS')`;
+// Takes the (possibly table-qualified) column name — joined queries must disambiguate.
+const updatedAtSql = (col = 'updated_at') => `to_char(${col}, 'YYYY-MM-DD"T"HH24:MI:SS.MS')`;
 interface TareaRow {
   id: number;
   parent_id: number | null;
@@ -92,6 +94,7 @@ function rowToConfig(r: CronogramaRow): CronogramaConfig {
     id: r.id,
     name: r.nombre,
     proyectoId: r.proyecto_id,
+    proyectoNombre: r.proyecto_nombre ?? null,
     startDate: r.fecha_inicio,
     workWeek: r.semana_laboral,
     holidays: r.feriados || [],
@@ -148,9 +151,13 @@ async function loadDetail(
   cronogramaId: number,
 ): Promise<{ config: CronogramaConfig; tasks: EngineTask[] } | null> {
   const c = await query<CronogramaRow>(
-    `SELECT id, nombre, proyecto_id, to_char(fecha_inicio,'YYYY-MM-DD') AS fecha_inicio,
-            semana_laboral, feriados, baseline, ajustes_impresion, ${UPDATED_AT_SQL} AS updated_at
-       FROM cronogramas WHERE id = $1 AND activo = TRUE`,
+    `SELECT c.id, c.nombre, c.proyecto_id, p.nombre AS proyecto_nombre,
+            to_char(c.fecha_inicio,'YYYY-MM-DD') AS fecha_inicio,
+            c.semana_laboral, c.feriados, c.baseline, c.ajustes_impresion,
+            ${updatedAtSql('c.updated_at')} AS updated_at
+       FROM cronogramas c
+       LEFT JOIN proyectos p ON p.id = c.proyecto_id
+      WHERE c.id = $1 AND c.activo = TRUE`,
     [cronogramaId],
   );
   if (!c.rows.length) return null;
@@ -408,7 +415,7 @@ router.put(
 
       // Lock the row and read its current version for the optimistic-concurrency precondition.
       const cur = await client.query<{ nombre: string; updated_at: string }>(
-        `SELECT nombre, ${UPDATED_AT_SQL} AS updated_at FROM cronogramas WHERE id = $1 AND activo = TRUE FOR UPDATE`,
+        `SELECT nombre, ${updatedAtSql()} AS updated_at FROM cronogramas WHERE id = $1 AND activo = TRUE FOR UPDATE`,
         [id],
       );
       if (!cur.rows.length) {
@@ -450,7 +457,7 @@ router.put(
       // precondition reliable and don't self-409. RETURNING gives the authoritative stamp THIS
       // transaction wrote, so the value handed back to the client can't be a racing writer's.
       const bump = await client.query<{ updated_at: string }>(
-        `UPDATE cronogramas SET updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING ${UPDATED_AT_SQL} AS updated_at`,
+        `UPDATE cronogramas SET updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING ${updatedAtSql()} AS updated_at`,
         [id],
       );
       await client.query('COMMIT');
