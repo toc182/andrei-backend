@@ -106,7 +106,8 @@ router.put(
       return;
     }
     const body = req.body as SaveDesgloseBody;
-    const vErr = validateItems(body.items ?? []);
+    const items = body.items ?? [];
+    const vErr = validateItems(items);
     if (vErr) {
       res.status(400).json({ success: false, message: vErr });
       return;
@@ -149,7 +150,7 @@ router.put(
       // a single pass resolves parentTempId -> new DB id.
       await client.query(`DELETE FROM desglose_items WHERE desglose_id = $1`, [desgloseId]);
       const idMap = new Map<number, number>();
-      for (const it of body.items) {
+      for (const it of items) {
         const r = await client.query<{ id: number }>(
           `INSERT INTO desglose_items (desglose_id, parent_id, tipo, item, descripcion, unidad, cantidad, precio_unitario, orden)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
@@ -177,7 +178,7 @@ router.put(
       try {
         await registrarAudit(user.id, 'editar', 'desglose', desgloseId, {
           proyecto_id: proyectoId,
-          filas: body.items.length,
+          filas: items.length,
         });
       } catch (auditErr) {
         console.error('Error registrando audit de desglose:', auditErr);
