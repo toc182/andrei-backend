@@ -75,6 +75,8 @@ function validateItems(items: DesgloseItemInput[]): string | null {
     if (typeof it.tempId !== 'number' || seen.has(it.tempId)) return 'tempId duplicado o inválido';
     if (it.parentTempId != null && !seen.has(it.parentTempId)) return 'parentTempId debe referir a una fila anterior';
     if (it.tipo !== 'grupo' && it.tipo !== 'item') return 'tipo inválido';
+    if (it.cantidad != null && (typeof it.cantidad !== 'number' || !Number.isFinite(it.cantidad))) return 'cantidad inválida';
+    if (it.precioUnitario != null && (typeof it.precioUnitario !== 'number' || !Number.isFinite(it.precioUnitario))) return 'precio_unitario inválido';
     seen.add(it.tempId);
   }
   return null;
@@ -123,14 +125,25 @@ router.put(
         [proyectoId],
       );
 
+      const created = !cur.rows.length;
       let desgloseId: number;
-      if (!cur.rows.length) {
+      if (created) {
         // First save creates the document; a stale stamp is impossible here.
-        const ins = await client.query<{ id: number }>(
-          `INSERT INTO desgloses (proyecto_id, nombre, creado_por) VALUES ($1, COALESCE($2, 'Desglose oficial'), $3) RETURNING id`,
-          [proyectoId, body.nombre ?? null, user.id],
-        );
-        desgloseId = ins.rows[0].id;
+        // uq_desgloses_oficial (migration 140) guards the racing-first-save case:
+        // two concurrent creates both pass the zero-row check, so the loser's
+        // INSERT hits the partial unique index → map 23505 to a 409.
+        try {
+          const ins = await client.query<{ id: number }>(
+            `INSERT INTO desgloses (proyecto_id, nombre, tipo, creado_por) VALUES ($1, COALESCE($2, 'Desglose oficial'), 'oficial', $3) RETURNING id`,
+            [proyectoId, body.nombre != null ? String(body.nombre).slice(0, 200) : null, user.id],
+          );
+          desgloseId = ins.rows[0].id;
+        } catch (err) {
+          if ((err as { code?: string }).code === '23505') {
+            throw new ConflictError('Otro usuario creó el desglose; recarga e intenta de nuevo');
+          }
+          throw err;
+        }
       } else {
         if (body.baseUpdatedAt == null) {
           await client.query('ROLLBACK');
@@ -142,15 +155,20 @@ router.put(
         }
         desgloseId = cur.rows[0].id;
         if (body.nombre) {
-          await client.query(`UPDATE desgloses SET nombre = $2 WHERE id = $1`, [desgloseId, body.nombre]);
+          await client.query(`UPDATE desgloses SET nombre = $2 WHERE id = $1`, [
+            desgloseId,
+            String(body.nombre).slice(0, 200),
+          ]);
         }
       }
 
       // Replace all items; parents come earlier in outline order (validated), so
-      // a single pass resolves parentTempId -> new DB id.
+      // a single pass resolves parentTempId -> new DB id. orden is derived from
+      // array position (the validated invariant is positional) — the client's
+      // orden field is ignored.
       await client.query(`DELETE FROM desglose_items WHERE desglose_id = $1`, [desgloseId]);
       const idMap = new Map<number, number>();
-      for (const it of items) {
+      for (const [i, it] of items.entries()) {
         const r = await client.query<{ id: number }>(
           `INSERT INTO desglose_items (desglose_id, parent_id, tipo, item, descripcion, unidad, cantidad, precio_unitario, orden)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
@@ -160,10 +178,10 @@ router.put(
             it.tipo,
             String(it.item ?? '').slice(0, 60),
             String(it.descripcion ?? ''),
-            it.unidad ?? null,
+            it.unidad != null ? String(it.unidad).slice(0, 30) : null,
             it.tipo === 'grupo' ? null : it.cantidad,
             it.tipo === 'grupo' ? null : it.precioUnitario,
-            it.orden,
+            i,
           ],
         );
         idMap.set(it.tempId, r.rows[0].id);
@@ -176,7 +194,7 @@ router.put(
 
       // Audit after commit; a hiccup never fails a committed save.
       try {
-        await registrarAudit(user.id, 'editar', 'desglose', desgloseId, {
+        await registrarAudit(user.id, created ? 'crear' : 'editar', 'desglose', desgloseId, {
           proyecto_id: proyectoId,
           filas: items.length,
         });
