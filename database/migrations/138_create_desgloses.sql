@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS desgloses (
   tipo VARCHAR(30) NOT NULL DEFAULT 'oficial',
   activo BOOLEAN NOT NULL DEFAULT TRUE,
   creado_por INTEGER REFERENCES users(id),
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_desgloses_proyecto ON desgloses(proyecto_id) WHERE activo = TRUE;
 
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS desglose_items (
   id SERIAL PRIMARY KEY,
   desglose_id INTEGER NOT NULL REFERENCES desgloses(id) ON DELETE CASCADE,
   parent_id INTEGER REFERENCES desglose_items(id) ON DELETE CASCADE,
-  tipo VARCHAR(10) NOT NULL DEFAULT 'item',
+  tipo VARCHAR(10) NOT NULL DEFAULT 'item' CHECK (tipo IN ('grupo', 'item')),
   item VARCHAR(60) NOT NULL DEFAULT '',
   descripcion TEXT NOT NULL DEFAULT '',
   unidad VARCHAR(30),
@@ -29,3 +29,4 @@ CREATE TABLE IF NOT EXISTS desglose_items (
   orden INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_desglose_items_desglose ON desglose_items(desglose_id);
+CREATE INDEX IF NOT EXISTS idx_desglose_items_parent ON desglose_items (parent_id);
