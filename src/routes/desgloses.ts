@@ -145,10 +145,12 @@ router.put(
           throw err;
         }
       } else {
+        // A null stamp with an EXISTING doc means the client thought it was
+        // creating (no desglose loaded) but someone else created first — the
+        // same race migration 140 guards, caught earlier. 409, never 400: the
+        // conflict alert with "Recargar" is the only path that can succeed.
         if (body.baseUpdatedAt == null) {
-          await client.query('ROLLBACK');
-          res.status(400).json({ success: false, message: 'baseUpdatedAt es obligatorio' });
-          return;
+          throw new ConflictError('Otro usuario creó el desglose; recarga e intenta de nuevo');
         }
         if (cur.rows[0].updated_at !== body.baseUpdatedAt) {
           throw new ConflictError('Otro usuario guardó cambios; recarga para combinar');
