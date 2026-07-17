@@ -47,8 +47,8 @@ const rowToWire = (r: ItemRow): DesgloseItemWire => ({
 });
 
 async function loadOficial(proyectoId: number) {
-  const d = await query<{ id: number; proyecto_id: number; nombre: string; tipo: string; updated_at: string }>(
-    `SELECT id, proyecto_id, nombre, tipo, ${updatedAtSql()} AS updated_at
+  const d = await query<{ id: number; proyecto_id: number; nombre: string; tipo: string; itbms_tasa: string | null; updated_at: string }>(
+    `SELECT id, proyecto_id, nombre, tipo, itbms_tasa, ${updatedAtSql()} AS updated_at
        FROM desgloses WHERE proyecto_id = $1 AND tipo = 'oficial' AND activo = TRUE
       ORDER BY id LIMIT 1`,
     [proyectoId],
@@ -61,9 +61,21 @@ async function loadOficial(proyectoId: number) {
   );
   const m = d.rows[0];
   return {
-    desglose: { id: m.id, proyectoId: m.proyecto_id, nombre: m.nombre, tipo: m.tipo, updatedAt: m.updated_at },
+    desglose: {
+      id: m.id, proyectoId: m.proyecto_id, nombre: m.nombre, tipo: m.tipo,
+      itbmsTasa: m.itbms_tasa != null ? parseFloat(m.itbms_tasa) : null, // pg NUMERIC arrives as string
+      updatedAt: m.updated_at,
+    },
     items: items.rows.map(rowToWire),
   };
+}
+
+/** ITBMS rate: null (sin ITBMS) or a finite number in [0, 100]. Returns the
+ *  normalized value, or throws the message string via the caller's 400. */
+function validateItbms(raw: unknown): string | null {
+  if (raw == null) return null;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 100) return 'itbmsTasa inválida';
+  return null;
 }
 
 /** Payload sanity: tempIds unique, parents reference EARLIER rows (outline order). */
@@ -114,6 +126,12 @@ router.put(
       res.status(400).json({ success: false, message: vErr });
       return;
     }
+    const itbmsErr = validateItbms(body.itbmsTasa);
+    if (itbmsErr) {
+      res.status(400).json({ success: false, message: itbmsErr });
+      return;
+    }
+    const itbmsTasa = body.itbmsTasa ?? null;
 
     const client = await pool.connect();
     try {
@@ -189,8 +207,8 @@ router.put(
         idMap.set(it.tempId, r.rows[0].id);
       }
       await client.query(
-        `UPDATE desgloses SET updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-        [desgloseId],
+        `UPDATE desgloses SET updated_at = CURRENT_TIMESTAMP, itbms_tasa = $2 WHERE id = $1`,
+        [desgloseId, itbmsTasa],
       );
       await client.query('COMMIT');
 

@@ -8,6 +8,7 @@ export interface DesgloseMeta {
   proyectoId: number;
   nombre: string;
   tipo: string; // 'oficial' (v1)
+  itbmsTasa: number | null; // ITBMS rate % applied to the subtotal; null = sin ITBMS
   updatedAt: string; // optimistic-concurrency stamp (canonical to_char form)
 }
 
@@ -39,5 +40,6 @@ export interface DesgloseItemInput {
 export interface SaveDesgloseBody {
   baseUpdatedAt: string | null; // null ONLY when the project has no desglose yet
   nombre?: string;
+  itbmsTasa?: number | null; // ITBMS rate %; null clears it
   items: DesgloseItemInput[];
 }
