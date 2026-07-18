@@ -187,8 +187,14 @@ router.put(
       // array position (the validated invariant is positional) — the client's
       // orden field is ignored.
       await client.query(`DELETE FROM desglose_items WHERE desglose_id = $1`, [desgloseId]);
+      // A grupo that is some row's parent is a CONTAINER — its unidad/montos are
+      // derived from its children, so we null them. A grupo that parents nobody
+      // is a "sección de una línea" and keeps its own unidad/cantidad/precio.
+      const parentIds = new Set<number>();
+      for (const it of items) if (it.parentTempId != null) parentIds.add(it.parentTempId);
       const idMap = new Map<number, number>();
       for (const [i, it] of items.entries()) {
+        const isContainer = it.tipo === 'grupo' && parentIds.has(it.tempId);
         const r = await client.query<{ id: number }>(
           `INSERT INTO desglose_items (desglose_id, parent_id, tipo, item, descripcion, unidad, cantidad, precio_unitario, orden)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
@@ -198,9 +204,9 @@ router.put(
             it.tipo,
             String(it.item ?? '').slice(0, 60),
             String(it.descripcion ?? ''),
-            it.unidad != null ? String(it.unidad).slice(0, 30) : null,
-            it.tipo === 'grupo' ? null : it.cantidad,
-            it.tipo === 'grupo' ? null : it.precioUnitario,
+            isContainer || it.unidad == null ? null : String(it.unidad).slice(0, 30),
+            isContainer ? null : it.cantidad,
+            isContainer ? null : it.precioUnitario,
             i,
           ],
         );
