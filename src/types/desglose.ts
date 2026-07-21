@@ -43,3 +43,28 @@ export interface SaveDesgloseBody {
   itbmsTasa?: number | null; // ITBMS rate %; null clears it
   items: DesgloseItemInput[];
 }
+
+// ---- desgloses de la sección Cuentas (tipo='cuentas', migración 142) ----
+
+export interface DesgloseComentarioWire {
+  id: number;
+  autor: string;
+  creadoAt: string; // ISO
+  texto: string;
+}
+
+/** Fila de la lista de desgloses de Cuentas. `descripcion` es desgloses.nombre. */
+export interface DesgloseCuentaWire {
+  id: number;
+  descripcion: string;
+  fecha: string | null; // YYYY-MM-DD
+  copiadoDeId: number | null;
+  comentarios: DesgloseComentarioWire[];
+}
+
+export interface CrearDesgloseCuentaBody {
+  descripcion: string;
+  fecha?: string | null; // YYYY-MM-DD
+  /** Desglose a copiar (mismo proyecto); omitido/null = crear en blanco. */
+  copiarDeId?: number | null;
+}
