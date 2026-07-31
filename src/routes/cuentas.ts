@@ -228,6 +228,7 @@ interface CuentaRow {
   fecha_ultima_resubmision: string | null;
   fecha_pagada: string | null;
   observaciones_pago: string | null;
+  desglose_id: number | null;
   activo: boolean;
   creado_por: number;
   created_at: Date;
@@ -557,6 +558,51 @@ router.get(
         ...ajusteOpcionesProyecto.rows.map((r) => ({ ...r, es_global: false })),
       ];
 
+      // Ficha del desglose con el que se armó la cuenta, para poder listarlo
+      // entre los documentos de la cuenta. Filas y total salen de la FOTO
+      // congelada (cuenta_lineas), no del desglose vivo.
+      let desglose: {
+        id: number;
+        descripcion: string;
+        filas: number;
+        total: string;
+      } | null = null;
+      if (cuenta.desglose_id != null) {
+        const d = await query<{ descripcion: string; filas: string; total: string }>(
+          `SELECT d.nombre AS descripcion,
+                  (SELECT COUNT(*) FROM cuenta_lineas cl WHERE cl.cuenta_id = $1) AS filas,
+                  (SELECT COALESCE(SUM(cl.cantidad_presupuesto * cl.precio_unitario), 0)
+                     FROM cuenta_lineas cl WHERE cl.cuenta_id = $1) AS total
+             FROM desgloses d
+            WHERE d.id = $2`,
+          [id, cuenta.desglose_id],
+        );
+        if (d.rows.length) {
+          desglose = {
+            id: cuenta.desglose_id,
+            descripcion: d.rows[0].descripcion,
+            filas: Number(d.rows[0].filas),
+            total: d.rows[0].total,
+          };
+        }
+      }
+
+      // El desglose se activa (y se quita) SOLO desde la primera cuenta del
+      // proyecto: un proyecto no mezcla cuentas a mano con cuentas con
+      // desglose. De la segunda en adelante el modo ya quedó decidido.
+      const primeraRes = await query<{ min: number | null }>(
+        `SELECT MIN(numero) AS min FROM cuentas WHERE proyecto_id = $1 AND activo = TRUE`,
+        [cuenta.proyecto_id],
+      );
+      const es_primera_cuenta = Number(primeraRes.rows[0].min) === cuenta.numero;
+
+      const oficialRes = await query<{ id: number }>(
+        `SELECT id FROM desgloses
+          WHERE proyecto_id = $1 AND tipo = 'oficial' AND activo = TRUE
+          LIMIT 1`,
+        [cuenta.proyecto_id],
+      );
+
       res.json({
         success: true,
         data: {
@@ -566,6 +612,9 @@ router.get(
           ipt: iptRes.rows[0] || null,
           ajustes: ajustes.rows,
           ajuste_opciones: ajusteOpciones,
+          desglose,
+          es_primera_cuenta,
+          desglose_oficial_id: oficialRes.rows[0]?.id ?? null,
         },
       });
     },
@@ -757,6 +806,12 @@ router.put(
           error: 'No se puede editar una cuenta aprobada o pagada',
         });
         return;
+      }
+      // Con desglose activo el monto y el avance son DERIVADOS de las
+      // cantidades del periodo (actualizarEspejoCuenta): no se escriben a mano.
+      if (cuenta.desglose_id != null) {
+        delete req.body.monto_total;
+        delete req.body.avance_porcentaje;
       }
 
       const headerFields = [
@@ -1618,6 +1673,534 @@ router.delete(
       res.json({ success: true });
     },
   ),
+);
+
+// ─── Cuadro de cuenta (desglose + avance por fila) ───────────────────────────
+//
+// Una cuenta "detallada" es el Cuadro de Presentación de Cuenta (tipo ETESA):
+// se arma a partir de un desglose y guarda una FOTO CONGELADA de sus filas en
+// cuenta_lineas. El único dato de entrada por fila es la cantidad ejecutada de
+// ESTE periodo; el % y los valores se calculan (en el frontend, a la precisión
+// que se pida). El "ejecutado hasta el periodo anterior" NO se guarda: se suma
+// la cantidad_ejecutada de las cuentas previas del proyecto que comparten la
+// misma fila (row_uid). ITBMS y pago siguen por el flujo de ajustes de siempre.
+
+interface DesgloseItemSnapshotRow {
+  id: number;
+  row_uid: string;
+  parent_id: number | null;
+  tipo: 'grupo' | 'item';
+  item: string;
+  descripcion: string;
+  unidad: string | null;
+  cantidad: string | null;
+  precio_unitario: string | null;
+  orden: number;
+}
+
+/** Copia las filas del desglose a cuenta_lineas (foto congelada). El árbol se
+ *  guarda por parent_row_uid, resuelto del parent_id vía el mapa id->row_uid. */
+async function snapshotDesgloseLines(
+  client: { query: typeof pool.query },
+  cuentaId: number,
+  desgloseId: number,
+): Promise<number> {
+  const src = await client.query<DesgloseItemSnapshotRow>(
+    `SELECT id, row_uid, parent_id, tipo, item, descripcion, unidad, cantidad, precio_unitario, orden
+       FROM desglose_items WHERE desglose_id = $1 ORDER BY orden`,
+    [desgloseId],
+  );
+  const uidById = new Map<number, string>();
+  for (const r of src.rows) uidById.set(r.id, r.row_uid);
+  for (const [i, r] of src.rows.entries()) {
+    await client.query(
+      `INSERT INTO cuenta_lineas
+         (cuenta_id, row_uid, parent_row_uid, tipo, item, descripcion, unidad,
+          cantidad_presupuesto, precio_unitario, cantidad_ejecutada, orden)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10)`,
+      [
+        cuentaId,
+        r.row_uid,
+        r.parent_id != null ? uidById.get(r.parent_id) ?? null : null,
+        r.tipo,
+        r.item,
+        r.descripcion,
+        r.unidad,
+        r.cantidad,
+        r.precio_unitario,
+        i,
+      ],
+    );
+  }
+  return src.rows.length;
+}
+
+interface CuadroLineaRow {
+  row_uid: string;
+  parent_row_uid: string | null;
+  tipo: 'grupo' | 'item';
+  item: string;
+  descripcion: string;
+  unidad: string | null;
+  cantidad_presupuesto: string | null;
+  precio_unitario: string | null;
+  cantidad_ejecutada: string;
+  cantidad_anterior: string;
+}
+
+/** Cuadro completo de una cuenta: meta + filas con el "hasta anterior" ya
+ *  encadenado por row_uid. Los NUMERIC de pg llegan como string; se parsean. */
+async function loadCuadro(cuentaId: number) {
+  const c = await query<{
+    id: number;
+    numero: number;
+    estado: string;
+    proyecto_id: number;
+    periodo_inicio: string | null;
+    periodo_fin: string | null;
+    desglose_id: number | null;
+    itbms_tasa: string | null;
+  }>(
+    `SELECT c.id, c.numero, c.estado, c.proyecto_id,
+            to_char(c.periodo_inicio, 'YYYY-MM-DD') AS periodo_inicio,
+            to_char(c.periodo_fin, 'YYYY-MM-DD') AS periodo_fin,
+            c.desglose_id, d.itbms_tasa
+       FROM cuentas c
+       LEFT JOIN desgloses d ON d.id = c.desglose_id
+      WHERE c.id = $1 AND c.activo = TRUE`,
+    [cuentaId],
+  );
+  if (!c.rows.length) return null;
+  const cuenta = c.rows[0];
+
+  const lineas = await query<CuadroLineaRow>(
+    `SELECT cl.row_uid, cl.parent_row_uid, cl.tipo, cl.item, cl.descripcion, cl.unidad,
+            cl.cantidad_presupuesto, cl.precio_unitario, cl.cantidad_ejecutada,
+            COALESCE((
+              SELECT SUM(cl2.cantidad_ejecutada)
+                FROM cuenta_lineas cl2
+                JOIN cuentas c2 ON c2.id = cl2.cuenta_id
+               WHERE c2.proyecto_id = $2 AND c2.activo = TRUE AND c2.numero < $3
+                 AND cl2.row_uid = cl.row_uid
+            ), 0) AS cantidad_anterior
+       FROM cuenta_lineas cl
+      WHERE cl.cuenta_id = $1
+      ORDER BY cl.orden`,
+    [cuentaId, cuenta.proyecto_id, cuenta.numero],
+  );
+
+  const num = (s: string | null): number | null => (s != null ? parseFloat(s) : null);
+  return {
+    cuenta: {
+      id: cuenta.id,
+      numero: cuenta.numero,
+      estado: cuenta.estado,
+      periodo_inicio: cuenta.periodo_inicio,
+      periodo_fin: cuenta.periodo_fin,
+      desglose_id: cuenta.desglose_id,
+      itbms_tasa: num(cuenta.itbms_tasa),
+    },
+    lineas: lineas.rows.map((r) => ({
+      row_uid: r.row_uid,
+      parent_row_uid: r.parent_row_uid,
+      tipo: r.tipo,
+      item: r.item,
+      descripcion: r.descripcion,
+      unidad: r.unidad,
+      cantidad_presupuesto: num(r.cantidad_presupuesto),
+      precio_unitario: num(r.precio_unitario),
+      cantidad_ejecutada: parseFloat(r.cantidad_ejecutada),
+      cantidad_anterior: parseFloat(r.cantidad_anterior),
+    })),
+  };
+}
+
+/** Espejo hacia las columnas escalares de la cuenta, para que la lista y el
+ *  resumen (que suman avance_porcentaje) sigan cuadrando sin tocarlos:
+ *    monto_total       = suma del valor de "este periodo" (cantidad_ejec × PU)
+ *    avance_porcentaje = % del periodo = ese valor ÷ subtotal presupuestado
+ *  Los contenedores (PU nulo) aportan 0. El cuadro detallado calcula fresco a
+ *  full precision; este escalar (NUMERIC(5,2)) es solo para las vistas viejas. */
+async function actualizarEspejoCuenta(
+  client: { query: typeof pool.query },
+  cuentaId: number,
+): Promise<void> {
+  const r = await client.query<{ este: string | null; presupuesto: string | null }>(
+    `SELECT COALESCE(SUM(cantidad_ejecutada * precio_unitario), 0) AS este,
+            COALESCE(SUM(cantidad_presupuesto * precio_unitario), 0) AS presupuesto
+       FROM cuenta_lineas WHERE cuenta_id = $1`,
+    [cuentaId],
+  );
+  const este = parseFloat(r.rows[0].este ?? '0');
+  const presupuesto = parseFloat(r.rows[0].presupuesto ?? '0');
+  const avance = presupuesto > 0 ? Math.round((este / presupuesto) * 10000) / 100 : 0;
+  await client.query(
+    `UPDATE cuentas SET monto_total = $2, avance_porcentaje = $3, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1`,
+    [cuentaId, este, avance],
+  );
+}
+
+// POST /detalle — crear una cuenta detallada a partir de un desglose (foto
+// congelada de sus filas). Cuenta 1 elige el desglose; cuenta 2+ usa el mismo
+// desglose del proyecto (editado en su lugar) — el arrastre se calcula al leer.
+router.post(
+  '/detalle',
+  [
+    body('proyecto_id').isInt(),
+    body('desglose_id').isInt(),
+    body('periodo_inicio').optional({ nullable: true }).isISO8601(),
+    body('periodo_fin').optional({ nullable: true }).isISO8601(),
+    body('es_final').optional().isBoolean(),
+  ],
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
+    const user = req.user!;
+    const { proyecto_id, desglose_id, periodo_inicio, periodo_fin, es_final } = req.body as {
+      proyecto_id: number;
+      desglose_id: number;
+      periodo_inicio?: string | null;
+      periodo_fin?: string | null;
+      es_final?: boolean;
+    };
+
+    if (!(await userCanAccessProject(user.id, user.rol, proyecto_id))) {
+      res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // El desglose debe existir, estar activo y ser DEL MISMO PROYECTO.
+      const d = await client.query<{ id: number }>(
+        `SELECT id FROM desgloses WHERE id = $1 AND proyecto_id = $2 AND activo = TRUE`,
+        [desglose_id, proyecto_id],
+      );
+      if (!d.rows.length) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ success: false, error: 'El desglose no existe en este proyecto' });
+        return;
+      }
+
+      const nextRes = await client.query<{ max: number | null }>(
+        `SELECT MAX(numero) AS max FROM cuentas WHERE proyecto_id = $1 AND activo = TRUE`,
+        [proyecto_id],
+      );
+      const numero = (nextRes.rows[0].max ?? 0) + 1;
+
+      const insert = await client.query<{ id: number }>(
+        `INSERT INTO cuentas (
+           proyecto_id, numero, es_final, monto_total,
+           periodo_inicio, periodo_fin, avance_porcentaje,
+           estado, desglose_id, creado_por
+         ) VALUES ($1, $2, $3, 0, $4, $5, 0, 'borrador', $6, $7)
+         RETURNING id`,
+        [proyecto_id, numero, !!es_final, periodo_inicio || null, periodo_fin || null, desglose_id, user.id],
+      );
+      const cuentaId = insert.rows[0].id;
+
+      await client.query(
+        `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
+         VALUES ($1, 'creacion', $2, $3)`,
+        [cuentaId, `Período de Cuenta ${numero} iniciado`, user.id],
+      );
+
+      // IPT automático para proyectos publico_ipt (igual que POST /).
+      const projInfo = await client.query<{ cliente_tipo: string | null; tiene_ipt: boolean | null }>(
+        `SELECT cl.tipo AS cliente_tipo, p.tiene_ipt
+           FROM proyectos p LEFT JOIN clientes cl ON cl.id = p.cliente_id
+          WHERE p.id = $1`,
+        [proyecto_id],
+      );
+      const tipo = projInfo.rows[0]?.cliente_tipo || 'privado';
+      const tieneIpt = !!projInfo.rows[0]?.tiene_ipt;
+      if (getFlow(tipo, tieneIpt) === 'publico_ipt') {
+        await client.query(
+          `INSERT INTO cuentas_ipt (cuenta_id, estado, creado_por) VALUES ($1, 'pendiente', $2)`,
+          [cuentaId, user.id],
+        );
+      }
+
+      const filas = await snapshotDesgloseLines(client, cuentaId, desglose_id);
+
+      await client.query('COMMIT');
+
+      await registrarAudit(user.id, 'crear', 'cuenta', cuentaId, {
+        proyecto_id,
+        numero,
+        desglose_id,
+        filas,
+        detalle: true,
+      });
+
+      res.status(201).json({ success: true, data: { id: cuentaId, numero } });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }),
+);
+
+// GET /:id/cuadro — la foto congelada + el "hasta anterior" encadenado por fila.
+router.get(
+  '/:id/cuadro',
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const user = req.user!;
+    const id = Number(req.params.id);
+
+    const acc = await query<{ proyecto_id: number }>(
+      'SELECT proyecto_id FROM cuentas WHERE id = $1 AND activo = TRUE',
+      [id],
+    );
+    if (!acc.rows.length) {
+      res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+      return;
+    }
+    if (!(await userCanAccessProject(user.id, user.rol, acc.rows[0].proyecto_id))) {
+      res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+      return;
+    }
+
+    const cuadro = await loadCuadro(id);
+    if (!cuadro) {
+      res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+      return;
+    }
+    res.json({ success: true, data: cuadro });
+  }),
+);
+
+// PUT /:id/cuadro — guardar las cantidades ejecutadas de este periodo. Solo
+// actualiza cantidad_ejecutada de las filas existentes (el set de filas quedó
+// fijo en la foto); recalcula el espejo escalar. No permitido si LOCKED.
+router.put(
+  '/:id/cuadro',
+  [
+    param('id').isInt(),
+    body('lineas').isArray(),
+    body('lineas.*.row_uid').isUUID(),
+    body('lineas.*.cantidad_ejecutada').isFloat({ min: 0 }),
+  ],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+      return;
+    }
+
+    const user = req.user!;
+    const id = Number(req.params.id);
+    const lineas = (req.body as { lineas: { row_uid: string; cantidad_ejecutada: number }[] }).lineas;
+
+    const cur = await query<CuentaRow>('SELECT * FROM cuentas WHERE id = $1 AND activo = TRUE', [id]);
+    if (!cur.rows.length) {
+      res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+      return;
+    }
+    const cuenta = cur.rows[0];
+    if (!(await userCanAccessProject(user.id, user.rol, cuenta.proyecto_id))) {
+      res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+      return;
+    }
+    const LOCKED_STATES = ['aprobada', 'pagada', 'aprobada_institucion', 'aprobada_contraloria'];
+    if (LOCKED_STATES.includes(cuenta.estado)) {
+      res.status(400).json({ success: false, error: 'No se puede editar una cuenta aprobada o pagada' });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const l of lineas) {
+        await client.query(
+          `UPDATE cuenta_lineas SET cantidad_ejecutada = $3
+             WHERE cuenta_id = $1 AND row_uid = $2`,
+          [id, l.row_uid, l.cantidad_ejecutada],
+        );
+      }
+      await actualizarEspejoCuenta(client, id);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    await registrarAudit(user.id, 'editar', 'cuenta', id, { accion: 'cuadro', filas: lineas.length });
+
+    res.json({ success: true, data: await loadCuadro(id) });
+  }),
+);
+
+// ─── Activar / quitar el desglose de una cuenta ─────────────────────────────
+//
+// Una cuenta nace SENCILLA (el monto se escribe a mano). Desde su detalle se
+// le puede activar el desglose del proyecto: se congela una foto de sus filas
+// en cuenta_lineas y a partir de ahí el monto y el % salen calculados de las
+// cantidades del periodo.
+//
+// Reglas (acordadas con el negocio):
+//  - Un proyecto NO mezcla: o todas sus cuentas llevan desglose o ninguna. Por
+//    eso activar/quitar solo se permite en la PRIMERA cuenta del proyecto.
+//  - El desglose que se usa es el OFICIAL del proyecto (Información → Desglose).
+//  - Nada de esto en una cuenta aprobada o pagada.
+
+const LOCKED_STATES_CUENTA = ['aprobada', 'pagada', 'aprobada_institucion', 'aprobada_contraloria'];
+
+/** Cuenta + validaciones comunes de activar/quitar desglose. Responde y
+ *  devuelve null cuando algo no cuadra. */
+async function cuentaParaModoDesglose(
+  req: Request<{ id: string }>,
+  res: Response,
+): Promise<CuentaRow | null> {
+  const user = req.user!;
+  const id = Number(req.params.id);
+
+  const cur = await query<CuentaRow>(
+    'SELECT * FROM cuentas WHERE id = $1 AND activo = TRUE',
+    [id],
+  );
+  if (!cur.rows.length) {
+    res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+    return null;
+  }
+  const cuenta = cur.rows[0];
+
+  if (!(await userCanAccessProject(user.id, user.rol, cuenta.proyecto_id))) {
+    res.status(403).json({ success: false, error: 'Sin acceso al proyecto' });
+    return null;
+  }
+  if (LOCKED_STATES_CUENTA.includes(cuenta.estado)) {
+    res.status(400).json({ success: false, error: 'No se puede editar una cuenta aprobada o pagada' });
+    return null;
+  }
+
+  const primera = await query<{ min: number | null }>(
+    'SELECT MIN(numero) AS min FROM cuentas WHERE proyecto_id = $1 AND activo = TRUE',
+    [cuenta.proyecto_id],
+  );
+  if (Number(primera.rows[0].min) !== cuenta.numero) {
+    res.status(400).json({
+      success: false,
+      error: 'El desglose solo se puede activar o quitar en la primera cuenta del proyecto',
+    });
+    return null;
+  }
+
+  return cuenta;
+}
+
+// POST /:id/desglose — activar el desglose oficial en esta cuenta.
+router.post(
+  '/:id/desglose',
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const user = req.user!;
+    const id = Number(req.params.id);
+
+    const cuenta = await cuentaParaModoDesglose(req, res);
+    if (!cuenta) return;
+
+    if (cuenta.desglose_id != null) {
+      res.status(400).json({ success: false, error: 'La cuenta ya tiene un desglose' });
+      return;
+    }
+
+    const oficial = await query<{ id: number }>(
+      `SELECT id FROM desgloses
+        WHERE proyecto_id = $1 AND tipo = 'oficial' AND activo = TRUE
+        LIMIT 1`,
+      [cuenta.proyecto_id],
+    );
+    if (!oficial.rows.length) {
+      res.status(400).json({ success: false, error: 'El proyecto no tiene un desglose oficial' });
+      return;
+    }
+    const desgloseId = oficial.rows[0].id;
+
+    const filasRes = await query<{ count: string }>(
+      'SELECT COUNT(*) AS count FROM desglose_items WHERE desglose_id = $1',
+      [desgloseId],
+    );
+    if (Number(filasRes.rows[0].count) === 0) {
+      res.status(400).json({ success: false, error: 'El desglose oficial no tiene filas' });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM cuenta_lineas WHERE cuenta_id = $1', [id]);
+      const filas = await snapshotDesgloseLines(client, id, desgloseId);
+      await client.query('UPDATE cuentas SET desglose_id = $2 WHERE id = $1', [id, desgloseId]);
+      // Sin cantidades todavía: el monto calculado arranca en 0.
+      await actualizarEspejoCuenta(client, id);
+      await client.query('COMMIT');
+
+      await registrarAudit(user.id, 'editar', 'cuenta', id, {
+        accion: 'activar_desglose',
+        desglose_id: desgloseId,
+        filas,
+      });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    res.json({ success: true, data: { desglose_id: desgloseId } });
+  }),
+);
+
+// DELETE /:id/desglose — quitar el desglose y volver a monto a mano. Borra la
+// foto congelada; el monto queda en el último valor calculado, editable.
+router.delete(
+  '/:id/desglose',
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+    const user = req.user!;
+    const id = Number(req.params.id);
+
+    const cuenta = await cuentaParaModoDesglose(req, res);
+    if (!cuenta) return;
+
+    if (cuenta.desglose_id == null) {
+      res.status(400).json({ success: false, error: 'La cuenta no tiene desglose' });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM cuenta_lineas WHERE cuenta_id = $1', [id]);
+      await client.query('UPDATE cuentas SET desglose_id = NULL WHERE id = $1', [id]);
+      await client.query('COMMIT');
+
+      await registrarAudit(user.id, 'editar', 'cuenta', id, {
+        accion: 'quitar_desglose',
+        desglose_id: cuenta.desglose_id,
+      });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    res.json({ success: true });
+  }),
 );
 
 // ─── IPT endpoints ──────────────────────────────────────────────────────────

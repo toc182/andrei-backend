@@ -14,6 +14,7 @@ export interface DesgloseMeta {
 
 export interface DesgloseItemWire {
   id: number;
+  rowUid: string; // UUID estable de fila; sobrevive el DELETE+reinsert del guardado
   parentId: number | null;
   tipo: 'grupo' | 'item';
   item: string;
@@ -27,6 +28,7 @@ export interface DesgloseItemWire {
 /** PUT body item: parent-indexed by tempId (any client-side number, unique per payload). */
 export interface DesgloseItemInput {
   tempId: number;
+  rowUid?: string; // UUID estable; el cliente lo reenvía para conservar identidad. Ausente = fila nueva (el server genera uno)
   parentTempId: number | null;
   tipo: 'grupo' | 'item';
   item: string;
@@ -60,6 +62,8 @@ export interface DesgloseCuentaWire {
   fecha: string | null; // YYYY-MM-DD
   copiadoDeId: number | null;
   comentarios: DesgloseComentarioWire[];
+  /** Cuántas cuentas se armaron con este desglose (si > 0, no se puede borrar). */
+  cuentasCount: number;
 }
 
 export interface CrearDesgloseCuentaBody {

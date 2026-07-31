@@ -408,48 +408,13 @@ router.post(
 
         const proyecto = result.rows[0];
 
-        // Auto-create cuenta #1.
-        // monto_total mirrors the project's monto when known, otherwise 0
-        // (matches the backfill migration 071_backfill_cuenta1.sql).
-        const cuentaInsert = await client.query<{ id: number }>(
-          `INSERT INTO cuentas (
-            proyecto_id, numero, es_final, monto_total, estado, periodo_inicio, creado_por
-          ) VALUES ($1, 1, false, $2, 'borrador', $3, $4)
-          RETURNING id`,
-          [proyecto.id, monto_total ?? 0, fecha_inicio || null, user.id],
-        );
-
-        // Timeline event
-        await client.query(
-          `INSERT INTO cuentas_eventos (cuenta_id, tipo, comentario, creado_por)
-           VALUES ($1, 'creacion', 'Período de Cuenta 1 iniciado', $2)`,
-          [cuentaInsert.rows[0].id, user.id],
-        );
-
-        // Auto-create IPT row for publico_ipt projects
-        if (cliente_id) {
-          const projInfo = await client.query<{ cliente_tipo: string | null; tiene_ipt: boolean | null }>(
-            `SELECT cl.tipo AS cliente_tipo, p.tiene_ipt
-             FROM proyectos p LEFT JOIN clientes cl ON cl.id = p.cliente_id
-             WHERE p.id = $1`,
-            [proyecto.id],
-          );
-          const tipo = projInfo.rows[0]?.cliente_tipo || 'privado';
-          const tieneIpt = !!projInfo.rows[0]?.tiene_ipt;
-          if (tipo !== 'privado' && tieneIpt) {
-            await client.query(
-              `INSERT INTO cuentas_ipt (cuenta_id, estado, creado_por) VALUES ($1, 'pendiente', $2)`,
-              [cuentaInsert.rows[0].id, user.id],
-            );
-          }
-        }
-
         await client.query('COMMIT');
 
-        await registrarAudit(user.id, 'crear', 'cuenta', cuentaInsert.rows[0].id, {
-          proyecto_id: proyecto.id,
-          numero: 1,
-          auto_created: true,
+        // El proyecto NACE sin cuentas: la primera cuenta la crea el usuario
+        // desde la sección Cuentas (a mano o con desglose). Antes se auto-creaba
+        // una "Cuenta 1" en borrador — confundía y estorbaba la elección de modo.
+        await registrarAudit(user.id, 'crear', 'proyecto', proyecto.id, {
+          nombre,
         });
 
         res.status(201).json({

@@ -24,9 +24,11 @@ const updatedAtSql = (col = 'updated_at') => `to_char(${col}, 'YYYY-MM-DD"T"HH24
 class ConflictError extends Error {}
 
 const MAX_ITEMS = 5000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface ItemRow {
   id: number;
+  row_uid: string;
   parent_id: number | null;
   tipo: 'grupo' | 'item';
   item: string;
@@ -39,6 +41,7 @@ interface ItemRow {
 
 const rowToWire = (r: ItemRow): DesgloseItemWire => ({
   id: r.id,
+  rowUid: r.row_uid,
   parentId: r.parent_id,
   tipo: r.tipo,
   item: r.item,
@@ -63,7 +66,7 @@ const DESGLOSE_COLS = `id, proyecto_id, nombre, tipo, itbms_tasa, ${updatedAtSql
 /** Documento completo (meta + items) a partir de la fila ya leída. */
 async function loadDoc(m: DesgloseRow) {
   const items = await query<ItemRow>(
-    `SELECT id, parent_id, tipo, item, descripcion, unidad, cantidad, precio_unitario, orden
+    `SELECT id, row_uid, parent_id, tipo, item, descripcion, unidad, cantidad, precio_unitario, orden
        FROM desglose_items WHERE desglose_id = $1 ORDER BY orden`,
     [m.id],
   );
@@ -113,6 +116,7 @@ function validateItems(items: DesgloseItemInput[]): string | null {
   const seen = new Set<number>();
   for (const it of items) {
     if (typeof it.tempId !== 'number' || seen.has(it.tempId)) return 'tempId duplicado o inválido';
+    if (it.rowUid != null && (typeof it.rowUid !== 'string' || !UUID_RE.test(it.rowUid))) return 'rowUid inválido';
     if (it.parentTempId != null && !seen.has(it.parentTempId)) return 'parentTempId debe referir a una fila anterior';
     if (it.tipo !== 'grupo' && it.tipo !== 'item') return 'tipo inválido';
     if (it.cantidad != null && (typeof it.cantidad !== 'number' || !Number.isFinite(it.cantidad))) return 'cantidad inválida';
@@ -145,9 +149,12 @@ async function replaceItems(
   const idMap = new Map<number, number>();
   for (const [i, it] of items.entries()) {
     const isContainer = it.tipo === 'grupo' && parentIds.has(it.tempId);
+    // row_uid: se conserva el que manda el cliente (identidad estable que
+    // sobrevive este DELETE+reinsert); si la fila es nueva y no trae uno, la DB
+    // genera uno con gen_random_uuid() vía COALESCE.
     const r = await client.query<{ id: number }>(
-      `INSERT INTO desglose_items (desglose_id, parent_id, tipo, item, descripcion, unidad, cantidad, precio_unitario, orden)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      `INSERT INTO desglose_items (desglose_id, parent_id, tipo, item, descripcion, unidad, cantidad, precio_unitario, orden, row_uid)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::uuid, gen_random_uuid())) RETURNING id`,
       [
         desgloseId,
         it.parentTempId != null ? idMap.get(it.parentTempId)! : null,
@@ -158,6 +165,7 @@ async function replaceItems(
         isContainer ? null : it.cantidad,
         isContainer ? null : it.precioUnitario,
         i,
+        it.rowUid ?? null,
       ],
     );
     idMap.set(it.tempId, r.rows[0].id);
@@ -327,12 +335,20 @@ async function loadDesglosesCuentas(proyectoId: number): Promise<DesgloseCuentaW
     });
     porDesglose.set(row.desglose_id, lista);
   }
+  // Cuántas cuentas usan cada desglose — si alguna lo usa, no se puede borrar.
+  const uso = await query<{ desglose_id: number; n: number }>(
+    `SELECT desglose_id, COUNT(*)::int AS n
+       FROM cuentas WHERE desglose_id = ANY($1::int[]) AND activo = TRUE GROUP BY desglose_id`,
+    [ids],
+  );
+  const usoMap = new Map(uso.rows.map((r) => [r.desglose_id, Number(r.n)]));
   return d.rows.map((r) => ({
     id: r.id,
     descripcion: r.nombre,
     fecha: r.fecha,
     copiadoDeId: r.copiado_de_id,
     comentarios: porDesglose.get(r.id) ?? [],
+    cuentasCount: usoMap.get(r.id) ?? 0,
   }));
 }
 
@@ -582,6 +598,54 @@ router.put(
     } finally {
       client.release();
     }
+  }),
+);
+
+// DELETE /desgloses/proyecto/:proyectoId/cuentas/:desgloseId — borrado suave
+// (activo = FALSE). Bloqueado si alguna cuenta se armó con este desglose, para
+// no dejar cuentas colgando sin su fuente.
+router.delete(
+  '/proyecto/:proyectoId/cuentas/:desgloseId',
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request<{ proyectoId: string; desgloseId: string }>, res: Response) => {
+    const user = req.user!;
+    const proyectoId = parseInt(req.params.proyectoId, 10);
+    const desgloseId = parseInt(req.params.desgloseId, 10);
+    if (!Number.isInteger(proyectoId) || !Number.isInteger(desgloseId)) {
+      res.status(400).json({ success: false, message: 'Parámetros inválidos' });
+      return;
+    }
+    const d = await query<{ id: number }>(
+      `SELECT id FROM desgloses
+        WHERE id = $1 AND proyecto_id = $2 AND tipo = 'cuentas' AND activo = TRUE`,
+      [desgloseId, proyectoId],
+    );
+    if (!d.rows.length) {
+      res.status(404).json({ success: false, message: 'Desglose no encontrado' });
+      return;
+    }
+    const uso = await query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM cuentas WHERE desglose_id = $1 AND activo = TRUE`,
+      [desgloseId],
+    );
+    const n = Number(uso.rows[0].n);
+    if (n > 0) {
+      res.status(409).json({
+        success: false,
+        message: `No se puede borrar: ${n} ${n === 1 ? 'cuenta usa' : 'cuentas usan'} este desglose.`,
+      });
+      return;
+    }
+    await query(`UPDATE desgloses SET activo = FALSE WHERE id = $1`, [desgloseId]);
+    try {
+      await registrarAudit(user.id, 'eliminar', 'desglose', desgloseId, {
+        proyecto_id: proyectoId,
+        tipo: 'cuentas',
+      });
+    } catch (auditErr) {
+      console.error('Error registrando audit de desglose:', auditErr);
+    }
+    res.json({ success: true });
   }),
 );
 
