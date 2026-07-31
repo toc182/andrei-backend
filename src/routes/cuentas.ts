@@ -2018,6 +2018,38 @@ router.put(
       return;
     }
 
+    // Tope por fila: no se puede registrar más de lo que falta por ejecutar
+    // (presupuesto − lo de periodos anteriores). Negativos ya los rechaza el
+    // validator. El frontend valida lo mismo; ésta es la que protege el dato.
+    const cupos = await query<{ row_uid: string; disponible: string }>(
+      `SELECT cl.row_uid,
+              (cl.cantidad_presupuesto - COALESCE((
+                 SELECT SUM(cl2.cantidad_ejecutada)
+                   FROM cuenta_lineas cl2
+                   JOIN cuentas c2 ON c2.id = cl2.cuenta_id
+                  WHERE c2.proyecto_id = $2 AND c2.activo = TRUE AND c2.numero < $3
+                    AND cl2.row_uid = cl.row_uid
+               ), 0)) AS disponible
+         FROM cuenta_lineas cl
+        WHERE cl.cuenta_id = $1`,
+      [id, cuenta.proyecto_id, cuenta.numero],
+    );
+    const disponiblePorFila = new Map(
+      cupos.rows.map((r) => [r.row_uid, Math.max(0, parseFloat(r.disponible ?? '0'))]),
+    );
+    const EPS = 1e-9;
+    const excedidas = lineas.filter((l) => {
+      const cupo = disponiblePorFila.get(l.row_uid);
+      return cupo !== undefined && l.cantidad_ejecutada > cupo + EPS;
+    });
+    if (excedidas.length) {
+      res.status(400).json({
+        success: false,
+        error: `${excedidas.length} ${excedidas.length === 1 ? 'cantidad excede' : 'cantidades exceden'} lo que falta por ejecutar`,
+      });
+      return;
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');

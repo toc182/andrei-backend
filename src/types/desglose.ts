@@ -59,6 +59,8 @@ export interface DesgloseComentarioWire {
 export interface DesgloseCuentaWire {
   id: number;
   descripcion: string;
+  /** 'oficial' = el desglose del proyecto (Información); no se borra desde Cuentas. */
+  tipo: 'oficial' | 'cuentas';
   fecha: string | null; // YYYY-MM-DD
   copiadoDeId: number | null;
   comentarios: DesgloseComentarioWire[];

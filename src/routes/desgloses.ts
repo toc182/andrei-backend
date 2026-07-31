@@ -305,13 +305,18 @@ const MAX_DESCRIPCION = 200;
 const MAX_COMENTARIO = 4000;
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Los desgloses de Cuentas de un proyecto, con su hilo de comentarios. */
+/** Los desgloses que ve la sección Cuentas de un proyecto, con su hilo de
+ *  comentarios. Incluye el OFICIAL: es el que las cuentas usan por defecto, y
+ *  dejarlo fuera hacía que la lista se viera vacía mientras la cuenta sí tenía
+ *  desglose. El oficial va primero y no se puede borrar desde aquí. */
 async function loadDesglosesCuentas(proyectoId: number): Promise<DesgloseCuentaWire[]> {
-  const d = await query<{ id: number; nombre: string; fecha: string | null; copiado_de_id: number | null }>(
-    `SELECT id, nombre, to_char(fecha, 'YYYY-MM-DD') AS fecha, copiado_de_id
+  const d = await query<{
+    id: number; nombre: string; tipo: string; fecha: string | null; copiado_de_id: number | null;
+  }>(
+    `SELECT id, nombre, tipo, to_char(fecha, 'YYYY-MM-DD') AS fecha, copiado_de_id
        FROM desgloses
-      WHERE proyecto_id = $1 AND tipo = 'cuentas' AND activo = TRUE
-      ORDER BY fecha NULLS LAST, id`,
+      WHERE proyecto_id = $1 AND tipo IN ('oficial', 'cuentas') AND activo = TRUE
+      ORDER BY (tipo = 'oficial') DESC, fecha NULLS LAST, id`,
     [proyectoId],
   );
   if (!d.rows.length) return [];
@@ -345,6 +350,7 @@ async function loadDesglosesCuentas(proyectoId: number): Promise<DesgloseCuentaW
   return d.rows.map((r) => ({
     id: r.id,
     descripcion: r.nombre,
+    tipo: r.tipo === 'oficial' ? ('oficial' as const) : ('cuentas' as const),
     fecha: r.fecha,
     copiadoDeId: r.copiado_de_id,
     comentarios: porDesglose.get(r.id) ?? [],
