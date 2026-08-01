@@ -471,6 +471,8 @@ router.get(
           cliente_nombre: string | null;
           cliente_abreviatura: string | null;
           avance_acumulado: string;
+          monto_acumulado: string;
+          proyecto_monto_total: string | null;
         }
       >(
         `SELECT c.*,
@@ -485,7 +487,17 @@ router.get(
                   WHERE c2.proyecto_id = c.proyecto_id
                     AND c2.activo = TRUE
                     AND c2.numero <= c.numero
-                ) AS avance_acumulado
+                ) AS avance_acumulado,
+                -- Para la card de avance del proyecto: cuánto se ha cobrado
+                -- hasta esta cuenta y contra qué monto de contrato.
+                (
+                  SELECT COALESCE(SUM(c2.monto_total), 0)
+                  FROM cuentas c2
+                  WHERE c2.proyecto_id = c.proyecto_id
+                    AND c2.activo = TRUE
+                    AND c2.numero <= c.numero
+                ) AS monto_acumulado,
+                p.monto_total AS proyecto_monto_total
          FROM cuentas c
          JOIN proyectos p ON p.id = c.proyecto_id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
