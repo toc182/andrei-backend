@@ -615,6 +615,37 @@ router.get(
         [cuenta.proyecto_id],
       );
 
+      // Avance leído del cuadro, con los mismos números que muestra el desglose:
+      // "hasta la fecha" ÷ presupuesto, a precisión completa. La columna escalar
+      // avance_porcentaje es NUMERIC(5,2) y sumar varias cuentas ya redondeadas
+      // se desvía un centésimo — por eso la card no la usa cuando hay desglose.
+      let avance_desglose: { acumulado: number; periodo: number } | null = null;
+      if (cuenta.desglose_id != null) {
+        const a = await query<{ acumulado: string; periodo: string; presupuesto: string }>(
+          `SELECT COALESCE(SUM(
+                    (cl.cantidad_ejecutada + COALESCE((
+                       SELECT SUM(cl2.cantidad_ejecutada)
+                         FROM cuenta_lineas cl2
+                         JOIN cuentas c2 ON c2.id = cl2.cuenta_id
+                        WHERE c2.proyecto_id = $2 AND c2.activo = TRUE AND c2.numero < $3
+                          AND cl2.row_uid = cl.row_uid
+                     ), 0)) * COALESCE(cl.precio_unitario, 0)
+                  ), 0) AS acumulado,
+                  COALESCE(SUM(cl.cantidad_ejecutada * COALESCE(cl.precio_unitario, 0)), 0) AS periodo,
+                  COALESCE(SUM(COALESCE(cl.cantidad_presupuesto, 0) * COALESCE(cl.precio_unitario, 0)), 0) AS presupuesto
+             FROM cuenta_lineas cl
+            WHERE cl.cuenta_id = $1`,
+          [id, cuenta.proyecto_id, cuenta.numero],
+        );
+        const presupuesto = parseFloat(a.rows[0].presupuesto);
+        if (presupuesto > 0) {
+          avance_desglose = {
+            acumulado: (parseFloat(a.rows[0].acumulado) / presupuesto) * 100,
+            periodo: (parseFloat(a.rows[0].periodo) / presupuesto) * 100,
+          };
+        }
+      }
+
       res.json({
         success: true,
         data: {
@@ -627,6 +658,7 @@ router.get(
           desglose,
           es_primera_cuenta,
           desglose_oficial_id: oficialRes.rows[0]?.id ?? null,
+          avance_desglose,
         },
       });
     },
