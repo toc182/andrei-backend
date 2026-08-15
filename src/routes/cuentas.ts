@@ -27,9 +27,76 @@ const FIELD_LABELS: Record<string, string> = {
   periodo_fin: 'Período fin',
   avance_porcentaje: 'Avance',
   es_final: 'Cuenta final',
+  fecha_presentacion: 'Fecha de presentación',
 };
 
 const labelOf = (k: string): string => FIELD_LABELS[k] ?? k;
+
+/** Con qué cliente se corre una consulta: el pool o una transacción abierta. */
+type Consultador = { query: typeof pool.query };
+
+/**
+ * El inicio del periodo de una cuenta NO se escribe: se deduce.
+ *
+ *   Cuenta 1  → el día de la Orden de Proceder del proyecto.
+ *   Cuenta N  → el día siguiente al fin de la cuenta anterior.
+ *
+ * Devuelve null cuando el dato del que depende todavía no existe (un proyecto
+ * sin orden de proceder), que es preferible a inventar una fecha: la hoja
+ * imprime el periodo en blanco y se ve que falta.
+ */
+async function inicioDePeriodo(
+  c: Consultador,
+  proyectoId: number,
+  numero: number,
+): Promise<string | null> {
+  if (numero <= 1) {
+    const r = await c.query<{ inicio: string | null }>(
+      `SELECT to_char(orden_proceder, 'YYYY-MM-DD') AS inicio
+         FROM proyectos WHERE id = $1`,
+      [proyectoId],
+    );
+    return r.rows[0]?.inicio ?? null;
+  }
+  const r = await c.query<{ inicio: string | null }>(
+    `SELECT to_char(periodo_fin + INTERVAL '1 day', 'YYYY-MM-DD') AS inicio
+       FROM cuentas
+      WHERE proyecto_id = $1 AND activo = TRUE AND numero < $2
+      ORDER BY numero DESC
+      LIMIT 1`,
+    [proyectoId, numero],
+  );
+  return r.rows[0]?.inicio ?? null;
+}
+
+/**
+ * Reescribe el inicio de la cuenta siguiente cuando el fin de esta se mueve.
+ * Solo la siguiente: si a su vez cambia algo, será su propia edición la que
+ * arrastre a la de más allá.
+ */
+async function recalcularInicioSiguiente(
+  c: Consultador,
+  proyectoId: number,
+  numero: number,
+): Promise<void> {
+  const sig = await c.query<{ id: number; numero: number }>(
+    `SELECT id, numero FROM cuentas
+      WHERE proyecto_id = $1 AND activo = TRUE AND numero > $2
+      ORDER BY numero ASC LIMIT 1`,
+    [proyectoId, numero],
+  );
+  if (!sig.rows.length) return;
+  const inicio = await inicioDePeriodo(c, proyectoId, sig.rows[0].numero);
+  await c.query(`UPDATE cuentas SET periodo_inicio = $1 WHERE id = $2`, [
+    inicio,
+    sig.rows[0].id,
+  ]);
+}
+
+/** Columnas DATE de la cuenta: pg las devuelve como Date a medianoche UTC y
+ *  el formulario manda 'YYYY-MM-DD'; las dos funciones de abajo las tratan
+ *  igual. */
+const DATE_FIELDS = new Set(['periodo_inicio', 'periodo_fin', 'fecha_presentacion']);
 
 const TIPO_LABELS: Record<string, string> = {
   aumento: 'Aumento',
@@ -46,7 +113,7 @@ function formatMontoCurrency(n: number): string {
 // always reports a change. Normalize both sides to a canonical form first.
 function normalizeForCompare(field: string, val: unknown): string {
   if (val === null || val === undefined || val === '') return '';
-  if (field === 'periodo_inicio' || field === 'periodo_fin') {
+  if (DATE_FIELDS.has(field)) {
     if (val instanceof Date) {
       const y = val.getUTCFullYear();
       const m = String(val.getUTCMonth() + 1).padStart(2, '0');
@@ -125,7 +192,7 @@ function formatValue(field: string, val: unknown): string {
   if (field === 'es_final') {
     return val ? 'Sí' : 'No';
   }
-  if (field === 'periodo_inicio' || field === 'periodo_fin') {
+  if (DATE_FIELDS.has(field)) {
     // pg returns DATE columns as JS Date at UTC midnight. Form values
     // arrive as "YYYY-MM-DD" strings. Normalize both to DD/MM/YYYY.
     if (val instanceof Date) {
@@ -671,8 +738,7 @@ router.post(
   [
     body('proyecto_id').isInt(),
     body('monto_total').isFloat({ gt: 0 }),
-    body('periodo_inicio').optional().isISO8601(),
-    body('periodo_fin').optional().isISO8601(),
+    body('periodo_fin').isISO8601().withMessage('La fecha de fin del periodo es obligatoria'),
     body('avance_porcentaje').optional().isFloat({ min: 0, max: 100 }),
     body('es_final').optional().isBoolean(),
     body('ajustes').optional().isArray(),
@@ -691,7 +757,6 @@ router.post(
     const {
       proyecto_id,
       monto_total,
-      periodo_inicio,
       periodo_fin,
       avance_porcentaje,
       es_final,
@@ -712,6 +777,7 @@ router.post(
         [proyecto_id],
       );
       const numero = (nextRes.rows[0].max ?? 0) + 1;
+      const periodoInicio = await inicioDePeriodo(client, proyecto_id, numero);
 
       const insert = await client.query<{ id: number }>(
         `INSERT INTO cuentas (
@@ -725,8 +791,8 @@ router.post(
           numero,
           !!es_final,
           monto_total,
-          periodo_inicio || null,
-          periodo_fin || null,
+          periodoInicio,
+          periodo_fin,
           avance_porcentaje ?? null,
           user.id,
         ],
@@ -806,10 +872,10 @@ router.put(
   [
     param('id').isInt(),
     body('monto_total').optional().isFloat({ gt: 0 }),
-    body('periodo_inicio').optional({ nullable: true }).isISO8601(),
-    body('periodo_fin').optional({ nullable: true }).isISO8601(),
+    body('periodo_fin').optional().isISO8601(),
     body('avance_porcentaje').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
     body('es_final').optional().isBoolean(),
+    body('fecha_presentacion').optional({ nullable: true }).isISO8601(),
     body('ajustes').optional().isArray(),
     body('ajustes.*.tipo').optional().isIn(['aumento', 'disminucion']),
     body('ajustes.*.descripcion').optional().isString().trim().notEmpty(),
@@ -858,13 +924,26 @@ router.put(
         delete req.body.avance_porcentaje;
       }
 
+      // `periodo_inicio` NO está: lo calcula el servidor (inicioDePeriodo) y
+      // se reescribe solo cuando se mueve el fin de la cuenta anterior.
       const headerFields = [
         'monto_total',
-        'periodo_inicio',
         'periodo_fin',
         'avance_porcentaje',
         'es_final',
+        'fecha_presentacion',
       ] as const;
+      delete req.body.periodo_inicio;
+
+      // El fin del periodo se puede mover, pero no borrar: sin él, la cuenta
+      // siguiente se queda sin saber cuándo empieza.
+      if ('periodo_fin' in req.body && !req.body.periodo_fin) {
+        res.status(400).json({
+          success: false,
+          error: 'La fecha de fin del periodo es obligatoria',
+        });
+        return;
+      }
       const hasHeaderUpdate = headerFields.some((f) => f in req.body);
       const ajustesIncoming = (req.body as { ajustes?: AjusteInput[] }).ajustes;
       const hasAjustesUpdate = Array.isArray(ajustesIncoming);
@@ -915,6 +994,11 @@ router.put(
             `UPDATE cuentas SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length} AND activo = TRUE`,
             params,
           );
+
+          // Mover el fin de esta cuenta corre el inicio de la siguiente.
+          if ('periodo_fin' in changes) {
+            await recalcularInicioSiguiente(client, cuenta.proyecto_id, cuenta.numero);
+          }
         }
 
         if (hasAjustesUpdate) {
@@ -1802,14 +1886,31 @@ async function loadCuadro(cuentaId: number) {
     proyecto_id: number;
     periodo_inicio: string | null;
     periodo_fin: string | null;
+    fecha_presentacion: string | null;
     desglose_id: number | null;
     itbms_tasa: string | null;
+    proyecto_nombre: string;
+    proyecto_monto_total: string | null;
+    cliente_nombre: string | null;
+    orden_proceder: string | null;
+    ajustes_impresion: unknown | null;
   }>(
+    // Además del cuadro, todo lo que necesita la hoja imprimible: el nombre
+    // del proyecto y su monto de contrato, el cliente, y el montaje guardado
+    // del encabezado y las firmas. Una sola llamada para la vista previa.
     `SELECT c.id, c.numero, c.estado, c.proyecto_id,
             to_char(c.periodo_inicio, 'YYYY-MM-DD') AS periodo_inicio,
             to_char(c.periodo_fin, 'YYYY-MM-DD') AS periodo_fin,
-            c.desglose_id, d.itbms_tasa
+            to_char(c.fecha_presentacion, 'YYYY-MM-DD') AS fecha_presentacion,
+            c.desglose_id, d.itbms_tasa,
+            p.nombre AS proyecto_nombre,
+            COALESCE(p.monto_total, p.monto_contrato_original) AS proyecto_monto_total,
+            cl.nombre AS cliente_nombre,
+            to_char(p.orden_proceder, 'YYYY-MM-DD') AS orden_proceder,
+            p.ajustes_cuenta_impresion AS ajustes_impresion
        FROM cuentas c
+       JOIN proyectos p ON p.id = c.proyecto_id
+       LEFT JOIN clientes cl ON cl.id = p.cliente_id
        LEFT JOIN desgloses d ON d.id = c.desglose_id
       WHERE c.id = $1 AND c.activo = TRUE`,
     [cuentaId],
@@ -1839,11 +1940,20 @@ async function loadCuadro(cuentaId: number) {
       id: cuenta.id,
       numero: cuenta.numero,
       estado: cuenta.estado,
+      proyecto_id: cuenta.proyecto_id,
       periodo_inicio: cuenta.periodo_inicio,
       periodo_fin: cuenta.periodo_fin,
+      fecha_presentacion: cuenta.fecha_presentacion,
       desglose_id: cuenta.desglose_id,
       itbms_tasa: num(cuenta.itbms_tasa),
+      proyecto_nombre: cuenta.proyecto_nombre,
+      proyecto_monto_total: num(cuenta.proyecto_monto_total),
+      cliente_nombre: cuenta.cliente_nombre,
+      orden_proceder: cuenta.orden_proceder,
     },
+    /** Montaje de la hoja imprimible, guardado en el proyecto. null = todavía
+     *  no se ha llenado y la pantalla arranca de los valores por defecto. */
+    ajustes_impresion: cuenta.ajustes_impresion ?? null,
     lineas: lineas.rows.map((r) => ({
       row_uid: r.row_uid,
       parent_row_uid: r.parent_row_uid,
@@ -1893,8 +2003,9 @@ router.post(
   [
     body('proyecto_id').isInt(),
     body('desglose_id').isInt(),
-    body('periodo_inicio').optional({ nullable: true }).isISO8601(),
-    body('periodo_fin').optional({ nullable: true }).isISO8601(),
+    // El inicio no se manda: lo calcula el servidor. El fin es obligatorio —
+    // sin él, la cuenta siguiente no sabría cuándo empieza.
+    body('periodo_fin').isISO8601().withMessage('La fecha de fin del periodo es obligatoria'),
     body('es_final').optional().isBoolean(),
   ],
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
@@ -1905,11 +2016,10 @@ router.post(
     }
 
     const user = req.user!;
-    const { proyecto_id, desglose_id, periodo_inicio, periodo_fin, es_final } = req.body as {
+    const { proyecto_id, desglose_id, periodo_fin, es_final } = req.body as {
       proyecto_id: number;
       desglose_id: number;
-      periodo_inicio?: string | null;
-      periodo_fin?: string | null;
+      periodo_fin: string;
       es_final?: boolean;
     };
 
@@ -1938,6 +2048,7 @@ router.post(
         [proyecto_id],
       );
       const numero = (nextRes.rows[0].max ?? 0) + 1;
+      const periodoInicio = await inicioDePeriodo(client, proyecto_id, numero);
 
       const insert = await client.query<{ id: number }>(
         `INSERT INTO cuentas (
@@ -1946,7 +2057,7 @@ router.post(
            estado, desglose_id, creado_por
          ) VALUES ($1, $2, $3, 0, $4, $5, 0, 'borrador', $6, $7)
          RETURNING id`,
-        [proyecto_id, numero, !!es_final, periodo_inicio || null, periodo_fin || null, desglose_id, user.id],
+        [proyecto_id, numero, !!es_final, periodoInicio, periodo_fin, desglose_id, user.id],
       );
       const cuentaId = insert.rows[0].id;
 

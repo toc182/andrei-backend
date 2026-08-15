@@ -1,0 +1,14 @@
+-- 147_proyecto_orden_proceder.sql
+--
+-- La fecha de la Orden de Proceder del proyecto.
+--
+-- Hasta ahora vivía como texto libre dentro del encabezado de la hoja de
+-- cuenta ("13-oct-25", escrito a mano). Eso bastaba mientras solo se
+-- imprimiera, pero el periodo de la CUENTA 1 arranca justamente ese día y el
+-- de cada cuenta siguiente arranca al día siguiente del fin de la anterior:
+-- para calcular eso hace falta una fecha de verdad, no una cadena.
+--
+-- Es un dato del proyecto, no de la hoja, y por eso se escribe en la ficha del
+-- proyecto (Información). El renglón "Orden de Proceder:" del encabezado pasa
+-- a leerlo de aquí y deja de escribirse a mano.
+ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS orden_proceder DATE;

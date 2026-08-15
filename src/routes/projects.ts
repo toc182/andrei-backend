@@ -247,6 +247,7 @@ router.get(
     SELECT p.*,
            TO_CHAR(p.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
            TO_CHAR(p.fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada,
+           TO_CHAR(p.orden_proceder, 'YYYY-MM-DD') AS orden_proceder,
            c.nombre as cliente_nombre, c.contacto as cliente_contacto,
            c.telefono as cliente_telefono, c.email as cliente_email
     FROM proyectos p LEFT JOIN clientes c ON p.cliente_id = c.id
@@ -441,6 +442,7 @@ router.put(
   [
     param('id').isInt().withMessage('ID debe ser un número'),
     body('nombre').optional().trim().isLength({ min: 2 }),
+    body('orden_proceder').optional({ nullable: true }).isISO8601(),
     body('estado')
       .optional()
       .isIn([
@@ -489,6 +491,9 @@ router.put(
         'cliente_id',
         'fecha_inicio',
         'fecha_fin_estimada',
+        // Fecha de la Orden de Proceder: de ella arranca el periodo de la
+        // cuenta 1 (ver 147_proyecto_orden_proceder.sql).
+        'orden_proceder',
         'estado',
         'contratista',
         'ingeniero_residente',
@@ -703,6 +708,68 @@ router.patch(
         message: 'Datos adicionales actualizados',
         datos_adicionales: result.rows[0].datos_adicionales,
       });
+    },
+  ),
+);
+
+// PUT /projects/:id/ajustes-cuenta-impresion — el montaje de la hoja que se
+// imprime y se entrega en la institución (Cuadro de Presentación de Cuenta):
+// título, las tres columnas del encabezado, las firmas, los logos y el papel.
+// Se llena una vez y vale para todas las cuentas del proyecto.
+//
+// Deliberadamente NO toca updated_at: esto es presentación, no dato del
+// proyecto, y bumpearlo ensuciaría el historial de cambios del proyecto con
+// cada retoque del papel. Mismo criterio que
+// PUT /cronogramas/:id/ajustes-impresion.
+const AJUSTES_MAX_BYTES = 600 * 1024;
+router.put(
+  '/:id/ajustes-cuenta-impresion',
+  [
+    param('id').isInt().withMessage('ID debe ser un número'),
+    authenticateToken,
+    requireManager,
+    checkProjectAccess('id'),
+  ],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({ success: false, message: 'ID inválido' });
+        return;
+      }
+
+      const body = req.body as unknown;
+      if (body == null || typeof body !== 'object' || Array.isArray(body)) {
+        res.status(400).json({
+          success: false,
+          message: 'Los ajustes de impresión deben ser un objeto',
+        });
+        return;
+      }
+
+      // Los logos viajan como data URL adentro; sin tope, una subida pesada
+      // se guardaría en la fila del proyecto y la arrastraría en cada lectura.
+      const json = JSON.stringify(body);
+      if (Buffer.byteLength(json, 'utf8') > AJUSTES_MAX_BYTES) {
+        res.status(400).json({
+          success: false,
+          message: 'Los ajustes de impresión exceden 600 KB (logos demasiado grandes).',
+        });
+        return;
+      }
+
+      const r = await query<{ id: number }>(
+        `UPDATE proyectos SET ajustes_cuenta_impresion = $1
+          WHERE id = $2
+          RETURNING id`,
+        [json, req.params.id],
+      );
+      if (r.rows.length === 0) {
+        res.status(404).json({ success: false, message: 'Proyecto no encontrado' });
+        return;
+      }
+
+      res.json({ success: true, data: body });
     },
   ),
 );

@@ -1,0 +1,28 @@
+-- 146_cuenta_impresion.sql
+--
+-- Lo que hace falta para producir el "Cuadro de Presentación de Cuenta": la
+-- hoja que se imprime y se entrega en la institución. Son dos piezas, en dos
+-- sitios distintos porque cambian a ritmos distintos.
+--
+--   proyectos.ajustes_cuenta_impresion — título, las tres columnas del
+--   encabezado (etiqueta/valor), las firmas, los logos y el papel. Se llena
+--   UNA vez y vale para todas las cuentas del proyecto.
+--
+--   cuentas.fecha_presentacion — lo único de la hoja que cambia de una cuenta
+--   a otra y no sale del cuadro.
+--
+-- Lo que el sistema YA sabe no se guarda aquí: periodo, los cuatro
+-- porcentajes, monto de contrato, ITBMS, valor y número de cuenta se marcan
+-- `auto` y se recalculan al abrir la hoja. Guardarlos como texto es
+-- exactamente lo que descuadró el Excel de la Cuenta 2 que se entregó, donde
+-- el encabezado decía 36.54% de avance del periodo y el pie de la tabla
+-- 12.81%.
+--
+-- Los logos viajan como data URL dentro del JSONB, igual que en el
+-- cronograma; por eso el endpoint que lo escribe tiene tope de tamaño.
+--
+-- Escrito por PUT /projects/:id/ajustes-cuenta-impresion, que a propósito NO
+-- toca updated_at: esto es presentación, no dato del proyecto. Mismo patrón
+-- que 137_cronogramas_ajustes_impresion.sql.
+ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS ajustes_cuenta_impresion JSONB;
+ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS fecha_presentacion DATE;
