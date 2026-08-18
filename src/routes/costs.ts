@@ -1,7 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult, param } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken, requireManager } from '../middleware/auth.js';
+import {
+  authenticateToken,
+  requireAdmin,
+  requireManager,
+} from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const router = Router();
@@ -104,16 +108,53 @@ router.get(
   ),
 );
 
-// Create expense category
+/**
+ * Derives a short código ("Alquiler Eq." -> "ALQ") for a new category.
+ *
+ * The catalog predates issue #71 and requires a unique código, but the
+ * category dropdown on a solicitud de pago only asks for a name — so the
+ * código is generated here instead of being demanded from the user.
+ */
+async function generarCodigoCategoria(nombre: string): Promise<string> {
+  const base =
+    nombre
+      // NFD splits "Ó" into "O" + a combining accent, and the next line
+      // then drops the accent — so "Ó" survives as "O" instead of vanishing.
+      .normalize('NFD')
+      .replace(/[^a-zA-Z]/g, '')
+      .toUpperCase()
+      .slice(0, 3) || 'CAT';
+
+  const existentes = await query<{ codigo: string }>(
+    'SELECT codigo FROM categorias_gastos WHERE codigo = $1 OR codigo LIKE $2',
+    [base, `${base}%`],
+  );
+  const usados = new Set(existentes.rows.map((r) => r.codigo));
+
+  if (!usados.has(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidato = `${base}${i}`;
+    if (!usados.has(candidato)) return candidato;
+  }
+  throw new Error('No se pudo generar un código de categoría único');
+}
+
+// Create expense category.
+//
+// Admin only (issue #71): if anyone raising a solicitud could create
+// categories, the catalog fills up with "Materiales" / "materiales" /
+// "Mat." and every company-wide total splits across the near-duplicates.
 router.post(
   '/categories',
-  requireManager,
+  authenticateToken,
+  requireAdmin,
   [
     body('nombre')
       .trim()
       .isLength({ min: 2 })
       .withMessage('Nombre debe tener al menos 2 caracteres'),
     body('codigo')
+      .optional()
       .trim()
       .isLength({ min: 2, max: 10 })
       .withMessage('Código debe tener entre 2 y 10 caracteres'),
@@ -134,7 +175,7 @@ router.post(
         {
           nombre: string;
           descripcion?: string;
-          codigo: string;
+          codigo?: string;
           color?: string;
           orden?: number;
         }
@@ -151,13 +192,51 @@ router.post(
         return;
       }
 
-      const {
-        nombre,
-        descripcion,
-        codigo,
-        color = '#007bff',
-        orden = 0,
-      } = req.body;
+      const { descripcion, color = '#64748B', orden } = req.body;
+      const nombre = req.body.nombre.trim();
+
+      // Same name already in the catalog? Never create a second row for it.
+      const existente = await query<CategoryRow>(
+        'SELECT * FROM categorias_gastos WHERE LOWER(nombre) = LOWER($1) LIMIT 1',
+        [nombre],
+      );
+
+      if (existente.rows.length > 0) {
+        const previa = existente.rows[0];
+        if (previa.activo) {
+          res.status(409).json({
+            success: false,
+            message: `Ya existe una categoría llamada "${previa.nombre}"`,
+          });
+          return;
+        }
+        // It existed and was retired — bring it back rather than duplicating it,
+        // so any record still pointing at it keeps its classification.
+        const reactivada = await query<CategoryRow>(
+          `UPDATE categorias_gastos
+              SET activo = true, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+        RETURNING *`,
+          [previa.id],
+        );
+        res.status(200).json({
+          success: true,
+          message: 'Categoría reactivada',
+          category: reactivada.rows[0],
+        });
+        return;
+      }
+
+      const codigo =
+        req.body.codigo?.trim() || (await generarCodigoCategoria(nombre));
+
+      const ordenFinal =
+        orden ??
+        (
+          await query<{ siguiente: number }>(
+            'SELECT COALESCE(MAX(orden), 0) + 1 AS siguiente FROM categorias_gastos',
+          )
+        ).rows[0].siguiente;
 
       const result = await query<CategoryRow>(
         `
@@ -165,7 +244,7 @@ router.post(
     VALUES ($1, $2, $3, $4, $5)
     RETURNING *
   `,
-        [nombre, descripcion, codigo, color, orden],
+        [nombre, descripcion, codigo, color, ordenFinal],
       );
 
       res.status(201).json({

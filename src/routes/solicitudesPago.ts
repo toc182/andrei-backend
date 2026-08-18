@@ -604,6 +604,7 @@ interface SolicitudRow {
   numero_cuenta: string | null;
   urgente: boolean;
   pinellas_paga: boolean;
+  categoria_id: number | null;
   codigo_verificacion: string;
   mensaje: string | null;
   mensaje_autor_id: number | null;
@@ -614,6 +615,7 @@ interface SolicitudRow {
   preparado_nombre?: string;
   solicitado_nombre?: string;
   requisicion_numero?: string;
+  categoria_nombre?: string | null;
   mensaje_autor_nombre?: string | null;
   mensaje_leido?: boolean | null;
 }
@@ -654,6 +656,8 @@ interface CreateBody {
   numero_cuenta?: string;
   urgente?: boolean;
   pinellas_paga?: boolean;
+  /** Categoría de gasto (categorias_gastos.id). Optional by design — see #71. */
+  categoria_id?: number | null;
   items: Array<{
     cantidad: number;
     unidad?: string;
@@ -978,6 +982,7 @@ router.get(
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
       u3.nombre as mensaje_autor_nombre,
+      cg.nombre as categoria_nombre,
       CASE
         WHEN sp.mensaje IS NULL THEN NULL
         WHEN lec.leido_at IS NOT NULL AND lec.leido_at >= sp.mensaje_updated_at THEN true
@@ -999,6 +1004,7 @@ router.get(
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
     LEFT JOIN users u3 ON sp.mensaje_autor_id = u3.id
+    LEFT JOIN categorias_gastos cg ON sp.categoria_id = cg.id
     LEFT JOIN solicitud_mensaje_lecturas lec
       ON lec.solicitud_pago_id = sp.id AND lec.user_id = $1
     ${revisadaJoin}
@@ -1076,6 +1082,7 @@ router.get(
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
       u3.nombre as mensaje_autor_nombre,
+      cg.nombre as categoria_nombre,
       r.numero as requisicion_numero,
       CASE
         WHEN sp.mensaje IS NULL THEN NULL
@@ -1097,6 +1104,7 @@ router.get(
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
     LEFT JOIN users u3 ON sp.mensaje_autor_id = u3.id
+    LEFT JOIN categorias_gastos cg ON sp.categoria_id = cg.id
     LEFT JOIN solicitud_mensaje_lecturas lec
       ON lec.solicitud_pago_id = sp.id AND lec.user_id = $2
     LEFT JOIN requisiciones r ON sp.requisicion_id = r.id
@@ -1230,6 +1238,7 @@ router.get(
       u1.nombre as preparado_nombre,
       u2.nombre as solicitado_nombre,
       u3.nombre as mensaje_autor_nombre,
+      cg.nombre as categoria_nombre,
       r.numero as requisicion_numero,
       (SELECT COUNT(*) FROM correcciones_solicitud WHERE solicitud_pago_id = sp.id) as correcciones_count
     FROM solicitudes_pago sp
@@ -1237,6 +1246,7 @@ router.get(
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
     LEFT JOIN users u3 ON sp.mensaje_autor_id = u3.id
+    LEFT JOIN categorias_gastos cg ON sp.categoria_id = cg.id
     LEFT JOIN requisiciones r ON sp.requisicion_id = r.id
     WHERE sp.id = $1 AND sp.activo = true
   `,
@@ -1509,6 +1519,7 @@ router.post(
         numero_cuenta,
         urgente,
         pinellas_paga,
+        categoria_id,
         items,
         ajustes = [],
       } = req.body;
@@ -1590,8 +1601,8 @@ router.post(
       proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
       requisicion_id, subtotal, descuentos, impuestos, monto_total,
       estado, observaciones, beneficiario, banco, tipo_cuenta, numero_cuenta, urgente,
-      pinellas_paga, codigo_verificacion
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pendiente', $12, $13, $14, $15, $16, $17, $18, $19)
+      pinellas_paga, codigo_verificacion, categoria_id
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pendiente', $12, $13, $14, $15, $16, $17, $18, $19, $20)
     RETURNING *
   `,
           [
@@ -1614,6 +1625,7 @@ router.post(
             urgente || false,
             pinellas_paga || false,
             codigoVerificacion,
+            categoria_id || null,
           ],
         );
 
@@ -1826,6 +1838,7 @@ router.put(
         numero_cuenta,
         urgente,
         pinellas_paga,
+        categoria_id,
         items,
         ajustes = [],
       } = req.body;
@@ -1865,8 +1878,9 @@ router.put(
       fecha = $1, proveedor = $2, solicitado_por = $3, requisicion_id = $4,
       subtotal = $5, descuentos = $6, impuestos = $7, monto_total = $8,
       observaciones = $9, beneficiario = $10, banco = $11, tipo_cuenta = $12,
-      numero_cuenta = $13, urgente = $14, pinellas_paga = $15, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $16 AND activo = true RETURNING *
+      numero_cuenta = $13, urgente = $14, pinellas_paga = $15,
+      categoria_id = $16, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $17 AND activo = true RETURNING *
   `,
         [
           fecha || new Date().toISOString().split('T')[0],
@@ -1884,6 +1898,7 @@ router.put(
           numero_cuenta || null,
           urgente || false,
           pinellas_paga || false,
+          categoria_id || null,
           id,
         ],
       );
@@ -2126,6 +2141,122 @@ router.patch(
       );
 
       res.json({ success: true, message: 'Campo pinellas_paga actualizado' });
+    },
+  ),
+);
+
+// --- PATCH /:id/categoria — Set the categoría de gasto (issue #71) ---
+//
+// Deliberately NOT part of the normal edit endpoint. Editing a solicitud that
+// already carries approvals wipes the approval chain, and pagada/facturada
+// solicitudes cannot be edited at all except through the corrección flow,
+// which demands a written motivo. Neither is acceptable for classifying
+// expenses after the fact, which is the whole point of the field.
+//
+// The categoría is not part of what is being paid — it is a label for cost
+// reporting — so it can move in any estado without disturbing approvals, the
+// estado, or the amounts. The change is still written to audit_log.
+router.patch(
+  '/:id/categoria',
+  [
+    param('id').isInt(),
+    body('categoria_id')
+      .optional({ nullable: true })
+      .isInt()
+      .withMessage('categoria_id debe ser un número o null'),
+  ],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({
+          success: false,
+          message: 'Datos inválidos',
+          errors: errors.array(),
+        });
+        return;
+      }
+
+      const { id } = req.params;
+      const categoriaId: number | null = req.body.categoria_id ?? null;
+
+      const existing = await query<
+        SolicitudRow & { categoria_id: number | null }
+      >(
+        'SELECT id, estado, preparado_por, categoria_id FROM solicitudes_pago WHERE id = $1 AND activo = true',
+        [id],
+      );
+      if (existing.rows.length === 0) {
+        res
+          .status(404)
+          .json({ success: false, message: 'Solicitud no encontrada' });
+        return;
+      }
+
+      const sol = existing.rows[0];
+      const userId = req.user!.id;
+      const isAdminOrCoAdmin =
+        req.user!.rol === 'admin' || req.user!.rol === 'co-admin';
+
+      // Same rule as editing a solicitud: admin/co-admin, whoever prepared it,
+      // or a usuario granted solicitudes_editar_todas.
+      if (
+        !isAdminOrCoAdmin &&
+        sol.preparado_por !== userId &&
+        !req.user?.permissions?.solicitudes_editar_todas
+      ) {
+        res.status(403).json({
+          success: false,
+          message: 'No tienes permiso para cambiar la categoría',
+        });
+        return;
+      }
+
+      let categoriaNombre: string | null = null;
+      if (categoriaId !== null) {
+        const categoria = await query<{ id: number; nombre: string }>(
+          'SELECT id, nombre FROM categorias_gastos WHERE id = $1 AND activo = true',
+          [categoriaId],
+        );
+        if (categoria.rows.length === 0) {
+          res.status(400).json({
+            success: false,
+            message: 'Categoría no encontrada o inactiva',
+          });
+          return;
+        }
+        categoriaNombre = categoria.rows[0].nombre;
+      }
+
+      if (sol.categoria_id === categoriaId) {
+        res.json({ success: true, message: 'Categoría sin cambios' });
+        return;
+      }
+
+      await query(
+        'UPDATE solicitudes_pago SET categoria_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
+        [categoriaId, id],
+      );
+
+      await registrarAudit(
+        userId,
+        'cambiar_categoria',
+        'solicitud_pago',
+        parseInt(id),
+        {
+          categoria_id_previa: sol.categoria_id,
+          categoria_id_nueva: categoriaId,
+          categoria_nueva: categoriaNombre,
+          estado: sol.estado,
+        },
+      );
+
+      res.json({
+        success: true,
+        message: 'Categoría actualizada',
+        categoria_id: categoriaId,
+        categoria_nombre: categoriaNombre,
+      });
     },
   ),
 );
