@@ -84,14 +84,32 @@ export async function downloadFile(key: string): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/**
+ * Enlace temporal al archivo.
+ *
+ * `nombreDescarga` fuerza con qué nombre lo guarda el navegador. Sin él, el
+ * nombre sale de la clave en R2 -- que lleva un UUID delante y el nombre que
+ * traía el archivo cuando se subió. Para los módulos donde el nombre se puede
+ * cambiar después, eso significaría bajar un archivo con el nombre viejo.
+ */
 export async function getFileSignedUrl(
   key: string,
   expiresIn = 900,
+  nombreDescarga?: string,
 ): Promise<string> {
   const client = getClient();
   const command = new GetObjectCommand({
     Bucket: getBucket(),
     Key: key,
+    ...(nombreDescarga
+      ? {
+        // El nombre viaja en una cabecera, así que las comillas y los saltos
+        // de línea se quedan fuera; el resto (acentos incluidos) va en UTF-8
+        // por la forma `filename*`, que es la que entienden los navegadores.
+        ResponseContentDisposition:
+            `attachment; filename*=UTF-8''${encodeURIComponent(nombreDescarga.replace(/[\r\n"]/g, ''))}`,
+      }
+      : {}),
   });
   return getSignedUrl(client, command, { expiresIn });
 }

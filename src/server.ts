@@ -56,6 +56,7 @@ import projectBitacoraRoutes from './routes/projectBitacora.js';
 import usersRoutes from './routes/users.js';
 import solicitudesPagoRoutes from './routes/solicitudesPago.js';
 import solicitudesPagoAdjuntosRoutes from './routes/solicitudesPagoAdjuntos.js';
+import proyectoDocumentosRoutes from './routes/proyectoDocumentos.js';
 import approvalSettingsRoutes from './routes/approvalSettings.js';
 import permissionsRoutes from './routes/permissions.js';
 import verificacionRoutes from './routes/verificacion.js';
@@ -97,6 +98,9 @@ app.use('/api/verificar', verificacionRoutes);
 
 // Routes
 app.use('/api/auth', authRoutes);
+// Los documentos del proyecto van antes que projectRoutes, igual que los
+// adjuntos de solicitudes: rutas mas especificas primero.
+app.use('/api/projects', proyectoDocumentosRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/clientes', clientesRoutes);
 app.use('/api/costs', costsRoutes);

@@ -1,0 +1,16 @@
+-- 151_proyecto_documentos_etiqueta.sql
+--
+-- Una etiqueta que pone la persona, aparte del nombre del archivo.
+--
+-- El nombre con el que sale un archivo del escáner ("scan_0012.pdf") no dice
+-- qué es. La etiqueta ("Contrato firmado") sí, y se lee de un vistazo en la
+-- lista.
+--
+-- La etiqueta es lo ÚNICO editable. `nombre_original` se queda con el nombre
+-- que traía el archivo al subirse y es con el que se descarga: si tambien se
+-- pudiera cambiar, los dos campos acabarian diciendo lo mismo y no se sabria
+-- cual es el archivo de verdad.
+--
+-- Nullable a propósito: un documento sin etiqueta se sigue viendo por su
+-- nombre, como antes de esta columna.
+ALTER TABLE proyecto_documentos ADD COLUMN IF NOT EXISTS etiqueta VARCHAR(200);
