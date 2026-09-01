@@ -53,8 +53,8 @@ El diseño fuerte del ERP está en **solicitudes de pago**, y es lo que voy a to
 ## Qué me llevo de tu diseño
 
 La cadena de aprobadores, la re-autenticación, la corrección con motivo y el código de verificación
-van a la etapa donde sale el dinero (factura y pago), no a la requisición. La requisición se queda
-como petición interna, pre-impuesto, con cargo a partida, y el compromiso (orden de compra o
-subcontrato) es la pieza que falta entre ella y el pago.
+van a la etapa donde sale el dinero (factura y pago), no a la requisición. La petición interna se
+queda como eso: solicitud de compra, pre-impuesto, con cargo a partida; y la orden de compra o el
+subcontrato es la pieza que falta entre ella y el pago.
 
 Si quieres, lo revisamos juntos.
