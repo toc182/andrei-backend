@@ -1467,12 +1467,28 @@ interface PartidaWire {
   rowUid: string;
   item: string;
   descripcion: string;
+  /** Lo que el presupuesto oficial le puso a esta partida. Es el peso con el
+   *  que se reparte un gasto general: una partida que es el 20% del
+   *  presupuesto carga el 20% del extintor. null = sin costo escrito, y
+   *  entonces no entra en el reparto porque no hay con que calcular su parte. */
+  presupuestado: number | null;
+  /** El grupo del que cuelga, para poder repartir solo dentro de una seccion.
+   *  null en las partidas que van sueltas en la raiz. */
+  seccionUid: string | null;
 }
 
-/** El desglose oficial del proyecto y sus filas costeables. null si no tiene. */
+interface SeccionWire {
+  rowUid: string;
+  item: string;
+  descripcion: string;
+  partidas: number;
+}
+
+/** El desglose oficial del proyecto, sus filas costeables y las secciones que
+ *  las agrupan. null si el proyecto no tiene desglose. */
 async function partidasDelProyecto(
   proyectoId: number,
-): Promise<{ desgloseId: number; partidas: PartidaWire[] } | null> {
+): Promise<{ desgloseId: number; partidas: PartidaWire[]; secciones: SeccionWire[] } | null> {
   const d = await query<{ id: number }>(
     `SELECT id FROM desgloses
       WHERE proyecto_id = $1 AND tipo = 'oficial' AND activo = TRUE
@@ -1482,14 +1498,47 @@ async function partidasDelProyecto(
   if (!d.rows.length) return null;
   const desgloseId = d.rows[0].id;
 
-  const filas = await query<{ row_uid: string; item: string; descripcion: string }>(
-    `SELECT i.row_uid, i.item, i.descripcion
+  const filas = await query<{
+    row_uid: string; item: string; descripcion: string; presupuestado: string | null;
+    seccion_uid: string | null; seccion_item: string | null; seccion_desc: string | null;
+  }>(
+    `WITH presu AS (
+       SELECT r.desglose_row_uid AS row_uid,
+              SUM(r.cantidad * r.costo_unitario) AS presupuestado
+         FROM presupuestos p
+         JOIN presupuesto_renglones r ON r.presupuesto_id = p.id
+        WHERE p.proyecto_id = $2 AND p.activo = TRUE AND p.es_principal = TRUE
+          AND NOT EXISTS (SELECT 1 FROM presupuesto_renglones h WHERE h.parent_id = r.id)
+        GROUP BY r.desglose_row_uid
+     )
+     SELECT i.row_uid, i.item, i.descripcion,
+            pr.presupuestado::text AS presupuestado,
+            g.row_uid    AS seccion_uid,
+            g.item       AS seccion_item,
+            g.descripcion AS seccion_desc
        FROM desglose_items i
+       LEFT JOIN desglose_items g ON g.id = i.parent_id
+       LEFT JOIN presu pr ON pr.row_uid = i.row_uid
       WHERE i.desglose_id = $1
         AND NOT EXISTS (SELECT 1 FROM desglose_items h WHERE h.parent_id = i.id)
       ORDER BY i.orden`,
-    [desgloseId],
+    [desgloseId, proyectoId],
   );
+
+  const secciones: SeccionWire[] = [];
+  for (const f of filas.rows) {
+    if (f.seccion_uid == null) continue;
+    const ya = secciones.find((s) => s.rowUid === f.seccion_uid);
+    if (ya) ya.partidas++;
+    else {
+      secciones.push({
+        rowUid: f.seccion_uid,
+        item: f.seccion_item ?? '',
+        descripcion: f.seccion_desc ?? '',
+        partidas: 1,
+      });
+    }
+  }
 
   return {
     desgloseId,
@@ -1497,7 +1546,10 @@ async function partidasDelProyecto(
       rowUid: f.row_uid,
       item: f.item,
       descripcion: f.descripcion,
+      presupuestado: f.presupuestado != null ? numero(f.presupuestado) : null,
+      seccionUid: f.seccion_uid,
     })),
+    secciones,
   };
 }
 
@@ -1513,7 +1565,7 @@ router.get(
       return;
     }
     const data = await partidasDelProyecto(proyectoId);
-    res.json({ success: true, data: data ?? { desgloseId: null, partidas: [] } });
+    res.json({ success: true, data: data ?? { desgloseId: null, partidas: [], secciones: [] } });
   }),
 );
 
