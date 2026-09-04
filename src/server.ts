@@ -66,6 +66,7 @@ import cuentasRoutes from './routes/cuentas.js';
 import cotizacionesRoutes from './routes/cotizaciones.js';
 import cronogramasRoutes from './routes/cronogramas.js';
 import desglosesRoutes from './routes/desgloses.js';
+import presupuestosRoutes from './routes/presupuestos.js';
 import { startScheduler } from './cron/scheduler.js';
 
 const app = express();
@@ -135,6 +136,7 @@ app.use('/api/cuentas', cuentasRoutes);
 app.use('/api/cotizaciones', cotizacionesRoutes);
 app.use('/api/cronogramas', cronogramasRoutes);
 app.use('/api/desgloses', desglosesRoutes);
+app.use('/api/presupuestos', presupuestosRoutes);
 
 // Ruta de prueba
 app.get('/api/health', (_req: Request, res: Response) => {

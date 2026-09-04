@@ -1,12 +1,14 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult, param } from 'express-validator';
-import { query } from '../database/config.js';
+import { query, pool } from '../database/config.js';
 import {
   authenticateToken,
+  checkProjectAccess,
   requireAdmin,
   requireManager,
 } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
 
@@ -1133,6 +1135,529 @@ router.get(
       },
     },
   ),
+);
+
+// ---------------------------------------------------------------------------
+// Resumen de Control de Costos (pantalla nueva)
+//
+// Tres numeros arriba y dos cuadros abajo. De donde sale cada cosa:
+//
+//   contrato    -> proyectos.monto_total, lo que se va a cobrar.
+//   presupuesto -> el presupuesto marcado con la estrella; lo que se calculo
+//                  que iba a costar. null si el proyecto no tiene ninguno.
+//   gastado     -> las solicitudes de pago ya pagadas. Las cajas menudas no se
+//                  cuentan aparte: terminan pasando por solicitudes.
+//
+// Una solicitud cuenta como gastada en los estados 'pagada' y 'facturada'
+// (facturada viene DESPUES de pagada). 'devolucion' es una plata que el
+// proveedor devolvio entera, asi que no cuenta.
+//
+// La fecha del gasto es la del comprobante de pago; si no hay comprobante, la
+// de la solicitud, que es lo mas cercano que existe.
+// ---------------------------------------------------------------------------
+
+interface ResumenCategoriaRow {
+  id: number | null;
+  codigo: string | null;
+  nombre: string | null;
+  color: string | null;
+  monto: string;
+  solicitudes: string;
+}
+
+interface ResumenSerieRow {
+  fecha: string;
+  monto: string;
+}
+
+/** Una linea de reparto de un pago. item/descripcion van en null cuando la fila
+ *  ya no esta en el desglose: la partida se borro despues de asignarla. */
+interface PartidaAsignadaWire {
+  rowUid: string;
+  item: string | null;
+  descripcion: string | null;
+  monto: number;
+}
+
+/** Una fila del cuadro de presupuestado contra gastado. presupuestado va en
+ *  null cuando el presupuesto oficial no tiene esa partida (o no hay
+ *  presupuesto); gastado es 0 mientras nadie le haya echado un pago. */
+interface ComparativoFilaWire {
+  rowUid: string;
+  item: string;
+  descripcion: string;
+  presupuestado: number | null;
+  gastado: number;
+}
+
+const numero = (v: string | null | undefined): number => (v != null ? parseFloat(v) : 0);
+
+/** Solicitudes ya pagadas del proyecto, con su fecha de pago resuelta. */
+const PAGADAS_CTE = `
+  WITH pagadas AS (
+    SELECT s.id,
+           s.monto_total,
+           s.categoria_id,
+           COALESCE(MAX(c.fecha_pago), s.fecha) AS fecha_pago
+      FROM solicitudes_pago s
+      LEFT JOIN comprobantes_pago c ON c.solicitud_pago_id = s.id
+     WHERE s.proyecto_id = $1
+       AND s.activo = TRUE
+       AND s.estado IN ('pagada', 'facturada')
+     GROUP BY s.id
+  )`;
+
+router.get(
+  '/projects/:projectId/resumen',
+  authenticateToken,
+  checkProjectAccess('projectId'),
+  asyncHandler(async (req: Request<{ projectId: string }>, res: Response): Promise<void> => {
+    const proyectoId = parseInt(req.params.projectId, 10);
+    if (!Number.isInteger(proyectoId)) {
+      res.status(400).json({ success: false, message: 'ID de proyecto inválido' });
+      return;
+    }
+
+    const proyecto = await query<{
+      id: number;
+      monto_total: string | null;
+      fecha_inicio: string | null;
+      orden_proceder: string | null;
+      fecha_fin_estimada: string | null;
+    }>(
+      `SELECT id, monto_total,
+              to_char(fecha_inicio, 'YYYY-MM-DD')       AS fecha_inicio,
+              to_char(orden_proceder, 'YYYY-MM-DD')     AS orden_proceder,
+              to_char(fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada
+         FROM proyectos WHERE id = $1`,
+      [proyectoId],
+    );
+    if (!proyecto.rows.length) {
+      res.status(404).json({ success: false, message: 'Proyecto no encontrado' });
+      return;
+    }
+    const p = proyecto.rows[0];
+
+    // El presupuesto oficial. Un renglon que tiene hijos es contenedor: su
+    // total sube desde abajo y sumarlo tambien seria contarlo dos veces.
+    const presupuesto = await query<{ id: number; nombre: string; costo: string | null }>(
+      `SELECT pr.id, pr.nombre, SUM(r.cantidad * r.costo_unitario) AS costo
+         FROM presupuestos pr
+         LEFT JOIN presupuesto_renglones r
+                ON r.presupuesto_id = pr.id
+               AND NOT EXISTS (SELECT 1 FROM presupuesto_renglones h WHERE h.parent_id = r.id)
+        WHERE pr.proyecto_id = $1 AND pr.activo = TRUE AND pr.es_principal = TRUE
+        GROUP BY pr.id, pr.nombre`,
+      [proyectoId],
+    );
+
+    const [porCategoria, serie, solicitudes, partidas, comparativo, sinPartida] = await Promise.all([
+      query<ResumenCategoriaRow>(
+        `${PAGADAS_CTE}
+         SELECT c.id, c.codigo, c.nombre, c.color,
+                SUM(pg.monto_total)::text AS monto,
+                COUNT(*)::text            AS solicitudes
+           FROM pagadas pg
+           LEFT JOIN categorias_gastos c ON c.id = pg.categoria_id
+          GROUP BY c.id, c.codigo, c.nombre, c.color, c.orden
+          ORDER BY c.orden NULLS LAST, c.nombre NULLS LAST`,
+        [proyectoId],
+      ),
+      query<ResumenSerieRow>(
+        `${PAGADAS_CTE}
+         SELECT to_char(fecha_pago, 'YYYY-MM-DD') AS fecha,
+                SUM(monto_total)::text            AS monto
+           FROM pagadas
+          GROUP BY fecha_pago
+          ORDER BY fecha_pago`,
+        [proyectoId],
+      ),
+      // Las solicitudes que hay detras de cada categoria: la fila del reparto
+      // se pincha y se abre, asi que viajan de una vez. Son pocas —solo las ya
+      // pagadas de un proyecto— y ahorran una segunda espera al abrir.
+      query<{
+        id: number; numero: string | null; fecha: string; proveedor: string | null;
+        monto: string; categoria_id: number | null;
+      }>(
+        `${PAGADAS_CTE}
+         SELECT pg.id, s.numero, to_char(pg.fecha_pago, 'YYYY-MM-DD') AS fecha,
+                s.proveedor, pg.monto_total::text AS monto, pg.categoria_id
+           FROM pagadas pg
+           JOIN solicitudes_pago s ON s.id = pg.id
+          ORDER BY pg.fecha_pago DESC, pg.id DESC`,
+        [proyectoId],
+      ),
+      // A que partida del desglose va cada pago. LEFT JOIN a proposito: si la
+      // fila desaparecio del desglose, la linea sigue aqui con el nombre vacio
+      // y la pantalla la trata como pendiente de volver a asignar.
+      query<{
+        solicitud_pago_id: number; row_uid: string; monto: string;
+        item: string | null; descripcion: string | null;
+      }>(
+        `${PAGADAS_CTE}
+         SELECT sp.solicitud_pago_id, sp.row_uid, sp.monto::text AS monto,
+                i.item, i.descripcion
+           FROM pagadas pg
+           JOIN solicitud_pago_partidas sp ON sp.solicitud_pago_id = pg.id
+           LEFT JOIN desglose_items i
+                  ON i.desglose_id = sp.desglose_id AND i.row_uid = sp.row_uid
+          ORDER BY sp.id`,
+        [proyectoId],
+      ),
+      // Presupuestado contra gastado, partida por partida. El puente entre los
+      // dos lados es row_uid: el presupuesto guarda de que fila del desglose
+      // nacio cada renglon, y el gasto se asigna a esa misma fila.
+      //
+      // Van TODAS las partidas del desglose, tengan gasto o no: el cuadro es el
+      // presupuesto entero, y una partida sin tocar tambien es informacion.
+      query<{
+        row_uid: string; item: string; descripcion: string;
+        presupuestado: string | null; gastado: string | null;
+      }>(
+        `WITH oficial AS (
+           SELECT id FROM desgloses
+            WHERE proyecto_id = $1 AND tipo = 'oficial' AND activo = TRUE
+            ORDER BY id LIMIT 1
+         ),
+         presu AS (
+           SELECT r.desglose_row_uid AS row_uid,
+                  SUM(r.cantidad * r.costo_unitario) AS presupuestado
+             FROM presupuestos p
+             JOIN presupuesto_renglones r ON r.presupuesto_id = p.id
+            WHERE p.proyecto_id = $1 AND p.activo = TRUE AND p.es_principal = TRUE
+              AND NOT EXISTS (SELECT 1 FROM presupuesto_renglones h WHERE h.parent_id = r.id)
+            GROUP BY r.desglose_row_uid
+         ),
+         gasto AS (
+           SELECT sp.row_uid, SUM(sp.monto) AS gastado
+             FROM solicitud_pago_partidas sp
+             JOIN solicitudes_pago s ON s.id = sp.solicitud_pago_id
+            WHERE s.proyecto_id = $1 AND s.activo = TRUE
+              AND s.estado IN ('pagada', 'facturada')
+            GROUP BY sp.row_uid
+         )
+         SELECT i.row_uid, i.item, i.descripcion,
+                pr.presupuestado::text AS presupuestado,
+                g.gastado::text        AS gastado
+           FROM desglose_items i
+           JOIN oficial o ON o.id = i.desglose_id
+           LEFT JOIN presu pr ON pr.row_uid = i.row_uid
+           LEFT JOIN gasto g  ON g.row_uid  = i.row_uid
+          WHERE NOT EXISTS (SELECT 1 FROM desglose_items h WHERE h.parent_id = i.id)
+          ORDER BY i.orden`,
+        [proyectoId],
+      ),
+      // Cuantos pagos no caen en ninguna fila viva del cuadro: los que no tienen
+      // reparto, y los que lo tienen contra una partida ya borrada.
+      query<{ pagos: string }>(
+        `${PAGADAS_CTE}
+         SELECT COUNT(*)::text AS pagos
+           FROM pagadas pg
+          WHERE NOT EXISTS (
+            SELECT 1 FROM solicitud_pago_partidas sp
+              JOIN desglose_items i
+                ON i.desglose_id = sp.desglose_id AND i.row_uid = sp.row_uid
+             WHERE sp.solicitud_pago_id = pg.id
+          )`,
+        [proyectoId],
+      ),
+    ]);
+
+    const partidasPorPago = new Map<number, PartidaAsignadaWire[]>();
+    for (const p of partidas.rows) {
+      const lista = partidasPorPago.get(p.solicitud_pago_id) ?? [];
+      lista.push({
+        rowUid: p.row_uid,
+        item: p.item,
+        descripcion: p.descripcion,
+        monto: numero(p.monto),
+      });
+      partidasPorPago.set(p.solicitud_pago_id, lista);
+    }
+
+    // Lo sin clasificar sale aparte: en la pantalla es un aviso, no una fila
+    // mas del reparto, porque no es una categoria sino un pendiente.
+    const sinCat = porCategoria.rows.find((c) => c.id == null);
+    const categorias = porCategoria.rows
+      .filter((c) => c.id != null)
+      .map((c) => ({
+        id: c.id as number,
+        codigo: c.codigo as string,
+        nombre: c.nombre as string,
+        color: c.color as string,
+        monto: numero(c.monto),
+        solicitudes: parseInt(c.solicitudes, 10),
+      }));
+
+    const gastado = categorias.reduce((s, c) => s + c.monto, 0) + numero(sinCat?.monto);
+
+    const filasComparativo: ComparativoFilaWire[] = comparativo.rows.map((f) => ({
+      rowUid: f.row_uid,
+      item: f.item,
+      descripcion: f.descripcion,
+      presupuestado: f.presupuestado != null ? numero(f.presupuestado) : null,
+      gastado: numero(f.gastado),
+    }));
+
+    // Lo que el cuadro no puede colocar sale por diferencia, no por una suma
+    // aparte: asi el cuadro siempre cierra con el gastado total, incluso si un
+    // pago quedo asignado a una partida que despues se borro del desglose.
+    const enPartidas = filasComparativo.reduce((s, f) => s + f.gastado, 0);
+    const montoSinPartida = Math.round((gastado - enPartidas) * 100) / 100;
+
+    res.json({
+      success: true,
+      data: {
+        contrato: p.monto_total != null ? numero(p.monto_total) : null,
+        presupuesto: presupuesto.rows.length
+          ? {
+              id: presupuesto.rows[0].id,
+              nombre: presupuesto.rows[0].nombre,
+              costo: numero(presupuesto.rows[0].costo),
+            }
+          : null,
+        gastado,
+        categorias,
+        sinClasificar: {
+          monto: numero(sinCat?.monto),
+          solicitudes: sinCat ? parseInt(sinCat.solicitudes, 10) : 0,
+        },
+        serie: serie.rows.map((s) => ({ fecha: s.fecha, monto: numero(s.monto) })),
+        solicitudes: solicitudes.rows.map((s) => ({
+          id: s.id,
+          numero: s.numero,
+          fecha: s.fecha,
+          proveedor: s.proveedor,
+          monto: numero(s.monto),
+          categoriaId: s.categoria_id,
+          partidas: partidasPorPago.get(s.id) ?? [],
+        })),
+        comparativo: {
+          filas: filasComparativo,
+          sinPartida: {
+            monto: montoSinPartida,
+            pagos: parseInt(sinPartida.rows[0]?.pagos ?? '0', 10),
+          },
+        },
+        fechas: {
+          // La obra arranca con la orden de proceder; si no la hay, con la
+          // fecha de inicio del proyecto.
+          inicio: p.orden_proceder ?? p.fecha_inicio,
+          fin: p.fecha_fin_estimada,
+        },
+      },
+    });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// A que partida del desglose va cada pago
+//
+// El ancla es (desglose_id, row_uid) del desglose OFICIAL del proyecto, no el
+// presupuesto: los presupuestos van y vienen —y la estrella se puede mover a
+// mitad de obra— mientras que el desglose es la lista de partidas del contrato.
+// Asi, cambiar de presupuesto no descoloca el gasto ya clasificado.
+//
+// Solo se ofrecen las filas SIN HIJOS. Una fila con hijos es un contenedor: su
+// total sube desde abajo, y meterle gasto propio seria contarlo dos veces
+// (misma regla que el presupuesto y el desglose).
+// ---------------------------------------------------------------------------
+
+interface PartidaWire {
+  rowUid: string;
+  item: string;
+  descripcion: string;
+}
+
+/** El desglose oficial del proyecto y sus filas costeables. null si no tiene. */
+async function partidasDelProyecto(
+  proyectoId: number,
+): Promise<{ desgloseId: number; partidas: PartidaWire[] } | null> {
+  const d = await query<{ id: number }>(
+    `SELECT id FROM desgloses
+      WHERE proyecto_id = $1 AND tipo = 'oficial' AND activo = TRUE
+      ORDER BY id LIMIT 1`,
+    [proyectoId],
+  );
+  if (!d.rows.length) return null;
+  const desgloseId = d.rows[0].id;
+
+  const filas = await query<{ row_uid: string; item: string; descripcion: string }>(
+    `SELECT i.row_uid, i.item, i.descripcion
+       FROM desglose_items i
+      WHERE i.desglose_id = $1
+        AND NOT EXISTS (SELECT 1 FROM desglose_items h WHERE h.parent_id = i.id)
+      ORDER BY i.orden`,
+    [desgloseId],
+  );
+
+  return {
+    desgloseId,
+    partidas: filas.rows.map((f) => ({
+      rowUid: f.row_uid,
+      item: f.item,
+      descripcion: f.descripcion,
+    })),
+  };
+}
+
+// GET /costs/projects/:projectId/partidas — las partidas que se pueden escoger
+router.get(
+  '/projects/:projectId/partidas',
+  authenticateToken,
+  checkProjectAccess('projectId'),
+  asyncHandler(async (req: Request<{ projectId: string }>, res: Response): Promise<void> => {
+    const proyectoId = parseInt(req.params.projectId, 10);
+    if (!Number.isInteger(proyectoId)) {
+      res.status(400).json({ success: false, message: 'ID de proyecto inválido' });
+      return;
+    }
+    const data = await partidasDelProyecto(proyectoId);
+    res.json({ success: true, data: data ?? { desgloseId: null, partidas: [] } });
+  }),
+);
+
+/** Los centavos, en entero: comparar sumas de decimales en coma flotante deja
+ *  repartos que "no cuadran" por 0.0000001. */
+const centavos = (n: number): number => Math.round(n * 100);
+
+// PUT /costs/projects/:projectId/pagos/:solicitudId/partidas — guardar el reparto
+router.put(
+  '/projects/:projectId/pagos/:solicitudId/partidas',
+  authenticateToken,
+  requireManager,
+  checkProjectAccess('projectId'),
+  asyncHandler(async (
+    req: Request<{ projectId: string; solicitudId: string }>,
+    res: Response,
+  ): Promise<void> => {
+    const proyectoId = parseInt(req.params.projectId, 10);
+    const solicitudId = parseInt(req.params.solicitudId, 10);
+    if (!Number.isInteger(proyectoId) || !Number.isInteger(solicitudId)) {
+      res.status(400).json({ success: false, message: 'ID inválido' });
+      return;
+    }
+    const user = req.user;
+    if (!user) {
+      res.status(401).json({ success: false, message: 'Token inválido' });
+      return;
+    }
+
+    const body = req.body as { partidas?: { rowUid?: unknown; monto?: unknown }[] };
+    if (!Array.isArray(body.partidas)) {
+      res.status(400).json({ success: false, message: 'Falta el reparto' });
+      return;
+    }
+
+    // El pago tiene que ser de este proyecto y estar ya pagado: el control de
+    // costos solo cuenta esos, y clasificar uno que aun no se paga daria un
+    // gasto que todavia no existe.
+    const sol = await query<{ monto_total: string; numero: string | null }>(
+      `SELECT monto_total, numero FROM solicitudes_pago
+        WHERE id = $1 AND proyecto_id = $2 AND activo = TRUE
+          AND estado IN ('pagada', 'facturada')`,
+      [solicitudId, proyectoId],
+    );
+    if (!sol.rows.length) {
+      res.status(404).json({ success: false, message: 'Pago no encontrado en este proyecto' });
+      return;
+    }
+
+    const disponible = await partidasDelProyecto(proyectoId);
+    if (!disponible) {
+      res.status(400).json({
+        success: false,
+        message: 'Este proyecto todavía no tiene desglose, así que no hay partidas que asignar',
+      });
+      return;
+    }
+
+    const validas = new Set(disponible.partidas.map((p) => p.rowUid));
+    const lineas: { rowUid: string; monto: number }[] = [];
+    for (const l of body.partidas) {
+      const rowUid = typeof l.rowUid === 'string' ? l.rowUid : '';
+      const monto = typeof l.monto === 'number' ? l.monto : NaN;
+      if (!validas.has(rowUid)) {
+        res.status(400).json({ success: false, message: 'Esa partida no está en el desglose del proyecto' });
+        return;
+      }
+      if (!Number.isFinite(monto) || centavos(monto) <= 0) {
+        res.status(400).json({ success: false, message: 'Cada partida necesita un monto mayor que cero' });
+        return;
+      }
+      if (lineas.some((x) => x.rowUid === rowUid)) {
+        res.status(400).json({ success: false, message: 'Esa partida está repetida en el reparto' });
+        return;
+      }
+      lineas.push({ rowUid, monto });
+    }
+
+    // Lista vacia = dejarlo sin clasificar, y eso si vale. Con lineas, la suma
+    // tiene que dar el monto del pago: un reparto a medias haria que el gasto
+    // por partida no cuadrase con el total gastado.
+    const totalPago = centavos(parseFloat(sol.rows[0].monto_total));
+    const sumaLineas = lineas.reduce((s, l) => s + centavos(l.monto), 0);
+    if (lineas.length > 0 && sumaLineas !== totalPago) {
+      res.status(400).json({
+        success: false,
+        message: 'El reparto tiene que sumar exactamente el monto del pago',
+      });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM solicitud_pago_partidas WHERE solicitud_pago_id = $1', [solicitudId]);
+      for (const l of lineas) {
+        await client.query(
+          `INSERT INTO solicitud_pago_partidas
+             (solicitud_pago_id, desglose_id, row_uid, monto, creado_por)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [solicitudId, disponible.desgloseId, l.rowUid, l.monto, user.id],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    try {
+      await registrarAudit(user.id, 'editar', 'solicitud_pago', solicitudId, {
+        accion: 'asignar_partidas',
+        proyecto_id: proyectoId,
+        desglose_id: disponible.desgloseId,
+        partidas: lineas.length,
+      });
+    } catch (auditErr) {
+      console.error('Error registrando audit de partidas del pago:', auditErr);
+    }
+
+    const guardadas = await query<{
+      row_uid: string; monto: string; item: string | null; descripcion: string | null;
+    }>(
+      `SELECT sp.row_uid, sp.monto::text AS monto, i.item, i.descripcion
+         FROM solicitud_pago_partidas sp
+         LEFT JOIN desglose_items i
+                ON i.desglose_id = sp.desglose_id AND i.row_uid = sp.row_uid
+        WHERE sp.solicitud_pago_id = $1
+        ORDER BY sp.id`,
+      [solicitudId],
+    );
+
+    res.json({
+      success: true,
+      data: guardadas.rows.map((g) => ({
+        rowUid: g.row_uid,
+        item: g.item,
+        descripcion: g.descripcion,
+        monto: numero(g.monto),
+      })),
+    });
+  }),
 );
 
 export default router;
