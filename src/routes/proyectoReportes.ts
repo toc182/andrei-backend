@@ -24,9 +24,14 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { construirNumeroReporte } from '../services/reporteNumero.js';
 import {
   diffCampos,
+  describirCambios,
   parseHoras,
   type Cambio,
 } from '../services/reporteCambios.js';
+import {
+  generateReportePDF,
+  type ReportePdfInput,
+} from '../services/reportePdf.js';
 import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
@@ -604,9 +609,218 @@ router.put(
         Number(req.params.id),
         { cambios },
       );
+
+      // Cada correccion congela su propia version en R2, para que quede
+      // constancia de que decia el documento antes y despues. Va aparte de la
+      // respuesta: armar un PDF tarda, y una falla al archivar no debe
+      // tumbar una correccion que ya quedo guardada.
+      void archivarReportePdf(Number(req.params.id)).catch((err: unknown) => {
+        console.error('Error archivando el PDF de la corrección:', err);
+      });
     }
 
     res.json({ success: true, data: updated.rows[0] });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// PDF
+// ---------------------------------------------------------------------------
+
+/**
+ * Junta todo lo que el PDF necesita. Lo usan tanto la descarga como el
+ * archivado, para que los dos documentos digan siempre lo mismo.
+ */
+export async function buildReportePdfInput(
+  reporteId: number,
+): Promise<(ReportePdfInput & { proyectoCorto: string; autorEmail: string | null }) | null> {
+  const r = await query<{
+    numero: string;
+    fecha: Date;
+    clima: string;
+    horas_perdidas: string | null;
+    motivo: string | null;
+    personal_calificado: number;
+    ayudantes: number;
+    equipo: string[];
+    que_se_hizo: string;
+    atrasos: string | null;
+    novedades: string | null;
+    autor: string;
+    autor_email: string | null;
+    proyecto_nombre: string;
+    proyecto_corto: string;
+  }>(
+    `SELECT r.numero, r.fecha, r.clima, r.horas_perdidas, r.motivo,
+            r.personal_calificado, r.ayudantes, r.equipo, r.que_se_hizo,
+            r.atrasos, r.novedades,
+            u.nombre AS autor, u.email AS autor_email,
+            p.nombre AS proyecto_nombre,
+            COALESCE(p.nombre_corto, p.nombre) AS proyecto_corto
+       FROM proyecto_reportes r
+       JOIN users u ON u.id = r.creado_por
+       JOIN proyectos p ON p.id = r.proyecto_id
+      WHERE r.id = $1 AND r.activo = true`,
+    [reporteId],
+  );
+  if (r.rows.length === 0) return null;
+  const row = r.rows[0];
+
+  const areas = await query<{ nombre: string }>(
+    `SELECT a.nombre FROM proyecto_reporte_areas ra
+       JOIN proyecto_areas a ON a.id = ra.area_id
+      WHERE ra.reporte_id = $1 ORDER BY a.orden, a.id`,
+    [reporteId],
+  );
+
+  const fotos = await query<{
+    r2_key: string;
+    nombre_archivo: string;
+    tipo_mime: string | null;
+  }>(
+    `SELECT r2_key, nombre_archivo, tipo_mime FROM proyecto_reporte_fotos
+      WHERE reporte_id = $1 ORDER BY orden, id`,
+    [reporteId],
+  );
+
+  const corr = await query<{
+    created_at: Date;
+    usuario_nombre: string;
+    detalles: { cambios?: Record<string, Cambio> } | null;
+  }>(
+    `SELECT al.created_at, u.nombre AS usuario_nombre, al.detalles
+       FROM audit_log al JOIN users u ON u.id = al.user_id
+      WHERE al.entidad = 'reporte_diario' AND al.entidad_id = $1
+        AND al.accion = 'editar'
+      ORDER BY al.created_at`,
+    [reporteId],
+  );
+
+  // pg devuelve una columna DATE como objeto Date, no como texto: cortarlo
+  // con slice daba "Tue Sep 08" y de ahi "Invalid Date". Se toman los
+  // componentes y se rearma a mediodia, para que ningun cambio de huso corra
+  // la fecha un dia.
+  const cruda = row.fecha as unknown;
+  const fecha =
+    cruda instanceof Date
+      ? new Date(cruda.getFullYear(), cruda.getMonth(), cruda.getDate(), 12)
+      : new Date(`${String(cruda).slice(0, 10)}T12:00:00`);
+  const capitalizar = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  return {
+    numero: row.numero,
+    fechaLarga: capitalizar(
+      fecha.toLocaleDateString('es-PA', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      }),
+    ),
+    fechaCorta: fecha.toLocaleDateString('es-PA', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    }),
+    proyectoNombre: row.proyecto_nombre,
+    proyectoCorto: row.proyecto_corto,
+    autorNombre: row.autor,
+    autorEmail: row.autor_email,
+    clima: row.clima,
+    horasPerdidas: row.horas_perdidas === null ? null : Number(row.horas_perdidas),
+    motivo: row.motivo,
+    personalCalificado: Number(row.personal_calificado),
+    ayudantes: Number(row.ayudantes),
+    equipo: row.equipo ?? [],
+    areas: areas.rows.map((a) => a.nombre),
+    queSeHizo: row.que_se_hizo,
+    atrasos: row.atrasos,
+    novedades: row.novedades,
+    fotos: fotos.rows,
+    correcciones: corr.rows.map((c) => ({
+      cuando: new Date(c.created_at).toLocaleString('es-PA', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+      quien: c.usuario_nombre,
+      que: c.detalles?.cambios
+        ? describirCambios(c.detalles.cambios)
+        : 'Cambio registrado',
+    })),
+  };
+}
+
+/**
+ * Congela en R2 el PDF tal como esta ahora y devuelve el mismo buffer, para
+ * que quien lo mande por correo no tenga que generarlo dos veces.
+ *
+ * La version 1 se archiva al crear el reporte, que es cuando sale por correo;
+ * cada correccion posterior archiva la siguiente. Ver el reporte en pantalla
+ * no archiva nada: eso se genera al vuelo.
+ */
+export async function archivarReportePdf(
+  reporteId: number,
+): Promise<{ buffer: Buffer; version: number; key: string } | null> {
+  const datos = await buildReportePdfInput(reporteId);
+  if (!datos) return null;
+
+  const previas = await query<{ total: string }>(
+    'SELECT COUNT(*)::text AS total FROM proyecto_reporte_pdfs WHERE reporte_id = $1',
+    [reporteId],
+  );
+  const version = parseInt(previas.rows[0].total, 10) + 1;
+
+  const sufijo = version === 1 ? '' : `-v${version}`;
+  const key = `${limpiarNombre(datos.proyectoCorto)}/reportes/${datos.numero}${sufijo}.pdf`;
+
+  const buffer = await generateReportePDF(datos);
+  await uploadFile(key, buffer, 'application/pdf');
+
+  await query(
+    `INSERT INTO proyecto_reporte_pdfs (reporte_id, version, r2_key)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (reporte_id, version) DO NOTHING`,
+    [reporteId, version, key],
+  );
+
+  return { buffer, version, key };
+}
+
+// GET /api/proyecto-reportes/:proyectoId/:id/pdf
+//
+// Se genera al vuelo, como hace la pantalla de las solicitudes. Lo archivado
+// es para poder demostrar que decia lo que salio por correo, no para mostrar.
+router.get(
+  '/:proyectoId/:id/pdf',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const existe = await query(
+      `SELECT 1 FROM proyecto_reportes
+        WHERE id = $1 AND proyecto_id = $2 AND activo = true`,
+      [req.params.id, req.params.proyectoId],
+    );
+    if (existe.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
+    const datos = await buildReportePdfInput(Number(req.params.id));
+    if (!datos) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
+    const pdf = await generateReportePDF(datos);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${datos.numero}.pdf"`,
+    });
+    res.send(pdf);
   }),
 );
 
