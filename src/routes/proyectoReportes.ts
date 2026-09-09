@@ -10,7 +10,11 @@
  */
 
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
+import crypto from 'crypto';
+import path from 'path';
 import { query } from '../database/config.js';
+import { uploadFile, deleteFile, getFileSignedUrl } from '../services/storage.js';
 import {
   authenticateToken,
   checkPermission,
@@ -60,6 +64,74 @@ interface ReporteRow {
   creado_por: number;
   created_at: Date;
   updated_at: Date;
+}
+
+// Se aceptan solo los formatos que Chrome sabe dibujar, porque el PDF se
+// arma con Puppeteer: un HEIC de iPhone se subiria sin queja y despues
+// desapareceria del PDF sin que nadie se entere. Mejor rechazarlo aqui, donde
+// el ingeniero todavia esta mirando la pantalla. En la practica Safari
+// convierte a JPEG al subir desde el celular, asi que casi nunca llega.
+const FORMATOS = /^(jpe?g|png|webp|gif)$/;
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
+    const mime = file.mimetype.replace('image/', '').toLowerCase();
+    if (FORMATOS.test(ext) && FORMATOS.test(mime)) {
+      cb(null, true);
+    } else {
+      cb(
+        new Error(
+          'Solo se permiten imágenes JPG, PNG, WEBP o GIF. Si la foto viene de un iPhone en formato HEIC, vuelve a guardarla como JPG.',
+        ),
+      );
+    }
+  },
+});
+
+/**
+ * Multer avisa de sus rechazos lanzando, y el manejador general los convierte
+ * en "Error interno del servidor", que al ingeniero no le dice nada. Aqui se
+ * traducen a un 400 con el motivo real. El limite de tamano importa mas que
+ * el de formato: una foto de celular pasada de 10 MB va a ser comun.
+ */
+function subirFotos(req: Request, res: Response, next: (err?: unknown) => void): void {
+  upload.array('fotos', 20)(req, res, (err: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const esMulter = err instanceof multer.MulterError;
+    let mensaje = (err as Error).message;
+    if (esMulter && (err as multer.MulterError).code === 'LIMIT_FILE_SIZE') {
+      mensaje = 'Cada foto debe pesar menos de 10 MB';
+    } else if (esMulter && (err as multer.MulterError).code === 'LIMIT_FILE_COUNT') {
+      mensaje = 'Máximo 20 fotos por reporte';
+    }
+    res.status(400).json({ success: false, message: mensaje });
+  });
+}
+
+function limpiarNombre(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/_+/g, '_');
+}
+
+/**
+ * La direccion del archivo en R2, con la misma forma que usan las solicitudes
+ * de pago: primero el proyecto, para que el bucket se pueda recorrer por obra.
+ */
+function claveFoto(
+  proyectoCorto: string,
+  numero: string,
+  nombreOriginal: string,
+): string {
+  return `${limpiarNombre(proyectoCorto)}/reportes/${numero}/${crypto.randomUUID()}_${limpiarNombre(nombreOriginal)}`;
 }
 
 /**
@@ -265,6 +337,29 @@ router.get(
       [req.params.id],
     );
 
+    const fotos = await query<{
+      id: number;
+      nombre_archivo: string;
+      r2_key: string;
+      tipo_mime: string | null;
+      tamano: number | null;
+      orden: number;
+    }>(
+      `SELECT id, nombre_archivo, r2_key, tipo_mime, tamano, orden
+         FROM proyecto_reporte_fotos
+        WHERE reporte_id = $1
+        ORDER BY orden, id`,
+      [req.params.id],
+    );
+
+    // Las direcciones de R2 se firman al vuelo y vencen; nunca se guardan.
+    const fotosConUrl = await Promise.all(
+      fotos.rows.map(async (f) => ({
+        ...f,
+        url: await getFileSignedUrl(f.r2_key, 900),
+      })),
+    );
+
     // El rastro de correcciones. entidad/entidad_id es el par polimorfico
     // documentado en CLAUDE.md: se filtra por entidad primero.
     const correcciones = await query(
@@ -285,6 +380,7 @@ router.get(
       data: {
         ...reporte.rows[0],
         areas: areas.rows,
+        fotos: fotosConUrl,
         correcciones: correcciones.rows,
         // Para que la pantalla no ofrezca "Editar" donde la API va a negarlo.
         puede_editar: puedeCorregir(req, autorId),
@@ -511,6 +607,161 @@ router.put(
     }
 
     res.json({ success: true, data: updated.rows[0] });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Fotos
+// ---------------------------------------------------------------------------
+
+/** El reporte con lo necesario para armar la clave de R2, o null. */
+async function reporteParaFotos(
+  reporteId: string,
+  proyectoId: string,
+): Promise<{ creado_por: number; numero: string; proyecto_corto: string } | null> {
+  const r = await query<{
+    creado_por: number;
+    numero: string;
+    proyecto_corto: string;
+  }>(
+    `SELECT r.creado_por, r.numero,
+            COALESCE(p.nombre_corto, p.nombre) AS proyecto_corto
+       FROM proyecto_reportes r
+       JOIN proyectos p ON p.id = r.proyecto_id
+      WHERE r.id = $1 AND r.proyecto_id = $2 AND r.activo = true`,
+    [reporteId, proyectoId],
+  );
+  return r.rows[0] ?? null;
+}
+
+// POST /api/proyecto-reportes/:proyectoId/:id/fotos
+router.post(
+  '/:proyectoId/:id/fotos',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  subirFotos,
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    if (files.length === 0) {
+      res.status(400).json({ success: false, message: 'No se recibió ninguna foto' });
+      return;
+    }
+
+    const reporte = await reporteParaFotos(req.params.id, req.params.proyectoId);
+    if (!reporte) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+    if (!puedeCorregir(req, reporte.creado_por)) {
+      res.status(403).json({
+        success: false,
+        message: 'Solo quien escribió el reporte puede agregarle fotos',
+      });
+      return;
+    }
+
+    const desde = await query<{ next: number }>(
+      `SELECT COALESCE(MAX(orden), 0) + 1 AS next
+         FROM proyecto_reporte_fotos WHERE reporte_id = $1`,
+      [req.params.id],
+    );
+
+    const guardadas = [];
+    let orden = desde.rows[0].next;
+    for (const file of files) {
+      const key = claveFoto(reporte.proyecto_corto, reporte.numero, file.originalname);
+      // Primero R2 y despues la base: si la subida falla, no queda una fila
+      // apuntando a un archivo que no existe.
+      await uploadFile(key, file.buffer, file.mimetype);
+      const row = await query<{
+        id: number;
+        nombre_archivo: string;
+        r2_key: string;
+        tipo_mime: string | null;
+        tamano: number | null;
+        orden: number;
+      }>(
+        `INSERT INTO proyecto_reporte_fotos
+           (reporte_id, nombre_archivo, r2_key, tipo_mime, tamano, orden, creado_por)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         RETURNING id, nombre_archivo, r2_key, tipo_mime, tamano, orden`,
+        [
+          req.params.id,
+          file.originalname,
+          key,
+          file.mimetype,
+          file.size,
+          orden++,
+          req.user!.id,
+        ],
+      );
+      guardadas.push({
+        ...row.rows[0],
+        url: await getFileSignedUrl(key, 900),
+      });
+    }
+
+    await registrarAudit(
+      req.user!.id,
+      'editar',
+      'reporte_diario',
+      Number(req.params.id),
+      { fotos_agregadas: guardadas.map((f) => f.nombre_archivo) },
+    );
+
+    res.status(201).json({ success: true, data: guardadas });
+  }),
+);
+
+// DELETE /api/proyecto-reportes/:proyectoId/:id/fotos/:fotoId
+router.delete(
+  '/:proyectoId/:id/fotos/:fotoId',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const foto = await query<{
+      r2_key: string;
+      nombre_archivo: string;
+      creado_por: number;
+    }>(
+      `SELECT f.r2_key, f.nombre_archivo, r.creado_por
+         FROM proyecto_reporte_fotos f
+         JOIN proyecto_reportes r ON r.id = f.reporte_id
+        WHERE f.id = $1 AND f.reporte_id = $2 AND r.proyecto_id = $3
+          AND r.activo = true`,
+      [req.params.fotoId, req.params.id, req.params.proyectoId],
+    );
+    if (foto.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Foto no encontrada' });
+      return;
+    }
+    if (!puedeCorregir(req, foto.rows[0].creado_por)) {
+      res.status(403).json({
+        success: false,
+        message: 'Solo quien escribió el reporte puede quitarle fotos',
+      });
+      return;
+    }
+
+    // Primero la fila y despues R2: si el borrado en R2 falla, queda un
+    // archivo huerfano, que es mucho menos grave que una foto que la pantalla
+    // lista pero no puede mostrar.
+    await query('DELETE FROM proyecto_reporte_fotos WHERE id = $1', [
+      req.params.fotoId,
+    ]);
+    await deleteFile(foto.rows[0].r2_key);
+
+    await registrarAudit(
+      req.user!.id,
+      'editar',
+      'reporte_diario',
+      Number(req.params.id),
+      { foto_eliminada: foto.rows[0].nombre_archivo },
+    );
+
+    res.json({ success: true });
   }),
 );
 
