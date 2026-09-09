@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { query } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -88,7 +88,12 @@ export async function runAllMigrations(): Promise<void> {
 }
 
 // Run if called directly
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+// pathToFileURL normaliza la ruta del proceso al mismo formato que
+// import.meta.url. Interpolar `file://` a mano funcionaba en Linux y macOS,
+// pero en Windows dejaba `file://C:\ruta\migrate.ts` frente a
+// `file:///C:/ruta/migrate.ts`: nunca coincidían, así que `npm run migrate`
+// se creía importado, no hacía nada y salía sin error ni mensaje.
+const isMainModule = import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   runAllMigrations().then(() => {
     console.log('✨ Proceso de migración terminado');
