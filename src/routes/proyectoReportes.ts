@@ -722,7 +722,9 @@ export async function buildReportePdfInput(
       month: 'short',
       year: 'numeric',
     }),
-    proyectoNombre: row.proyecto_nombre,
+    // El nombre corto, no el largo: el largo de una licitacion ocupa cinco
+    // lineas en la tirilla del PDF y no le dice nada a nadie.
+    proyectoNombre: row.proyecto_corto,
     proyectoCorto: row.proyecto_corto,
     autorNombre: row.autor,
     autorEmail: row.autor_email,
