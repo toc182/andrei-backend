@@ -1,0 +1,517 @@
+/**
+ * Reportes diarios de obra
+ *
+ * El registro diario de cada proyecto: que clima hubo, cuanta gente y equipo
+ * habia, que se hizo, que atraso y las fotos del dia. Sustituyen a la
+ * bitacora, que nadie usaba.
+ *
+ * Gobernados por el permiso `reportes` y ademas por checkProjectAccess,
+ * porque viven dentro de un proyecto.
+ */
+
+import { Router, Request, Response } from 'express';
+import { query } from '../database/config.js';
+import {
+  authenticateToken,
+  checkPermission,
+  checkProjectAccess,
+} from '../middleware/auth.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
+import { construirNumeroReporte } from '../services/reporteNumero.js';
+import {
+  diffCampos,
+  parseHoras,
+  type Cambio,
+} from '../services/reporteCambios.js';
+import { registrarAudit } from '../services/auditLog.js';
+
+const router = Router();
+
+const CLIMAS = ['Soleado', 'Nublado', 'Lluvia parcial', 'Lluvia todo el día'];
+
+interface ReporteBody {
+  fecha?: string;
+  clima?: string;
+  horas_perdidas?: number | string | null;
+  motivo?: string | null;
+  personal_calificado?: number | string;
+  ayudantes?: number | string;
+  equipo?: string[];
+  areas?: number[];
+  que_se_hizo?: string;
+  atrasos?: string | null;
+  novedades?: string | null;
+}
+
+interface ReporteRow {
+  id: number;
+  proyecto_id: number;
+  numero: string;
+  fecha: string;
+  clima: string;
+  horas_perdidas: string | null;
+  motivo: string | null;
+  personal_calificado: number;
+  ayudantes: number;
+  equipo: string[];
+  que_se_hizo: string;
+  atrasos: string | null;
+  novedades: string | null;
+  creado_por: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * Solo quien escribio el reporte lo corrige. Admin y co-admin tambien, para
+ * que un dato malo siga siendo arreglable cuando el ingeniero se fue de la
+ * empresa o esta de vacaciones. Nadie mas, por amplios que sean sus permisos.
+ */
+function puedeCorregir(req: Request, autorId: number): boolean {
+  return (
+    autorId === req.user!.id ||
+    req.user!.rol === 'admin' ||
+    req.user!.rol === 'co-admin'
+  );
+}
+
+/**
+ * El siguiente numero para un proyecto y una fecha. Lee el prefijo del
+ * proyecto y cuenta cuantos reportes hay ya en esa fecha; armar el texto es
+ * cosa de construirNumeroReporte, que se verifica aparte.
+ *
+ * La cuenta incluye los dados de baja a proposito: numero es unico, y volver
+ * a entregar el de una fila borrada reventaria al insertar.
+ */
+export async function generateReporteNumero(
+  proyectoId: number,
+  fecha: string,
+): Promise<string> {
+  const proyecto = await query<{ sp_prefijo: string | null }>(
+    'SELECT sp_prefijo FROM proyectos WHERE id = $1',
+    [proyectoId],
+  );
+  if (proyecto.rows.length === 0) throw new Error('Proyecto no encontrado');
+
+  const existentes = await query<{ total: string }>(
+    `SELECT COUNT(*)::text AS total
+       FROM proyecto_reportes
+      WHERE proyecto_id = $1 AND fecha = $2`,
+    [proyectoId, fecha],
+  );
+
+  return construirNumeroReporte(
+    proyecto.rows[0].sp_prefijo ?? '',
+    fecha,
+    parseInt(existentes.rows[0].total, 10),
+  );
+}
+
+/** Valida el cuerpo de un alta. Devuelve el mensaje del primer problema. */
+function validarAlta(body: ReporteBody): string | null {
+  if (!body.fecha) return 'La fecha es obligatoria';
+  if (!body.clima || !CLIMAS.includes(body.clima)) return 'Clima inválido';
+  if (!body.que_se_hizo?.trim()) return 'Debes describir qué se hizo hoy';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Lectura
+// ---------------------------------------------------------------------------
+
+// GET /api/proyecto-reportes/:proyectoId
+router.get(
+  '/:proyectoId',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const { mes, creado_por: creadoPor, q } = req.query as Record<string, string>;
+    const limit = Math.min(parseInt(String(req.query.limit ?? '25'), 10) || 25, 200);
+    const offset = parseInt(String(req.query.offset ?? '0'), 10) || 0;
+
+    const params: unknown[] = [req.params.proyectoId];
+    const where: string[] = ['r.proyecto_id = $1', 'r.activo = true'];
+
+    if (mes) {
+      params.push(`${mes}-01`);
+      where.push(
+        `date_trunc('month', r.fecha) = date_trunc('month', $${params.length}::date)`,
+      );
+    }
+    if (creadoPor) {
+      params.push(creadoPor);
+      where.push(`r.creado_por = $${params.length}`);
+    }
+    if (q) {
+      params.push(`%${q}%`);
+      const i = params.length;
+      where.push(
+        `(r.que_se_hizo ILIKE $${i} OR r.atrasos ILIKE $${i}
+          OR r.novedades ILIKE $${i} OR r.numero ILIKE $${i})`,
+      );
+    }
+
+    const total = await query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM proyecto_reportes r WHERE ${where.join(' AND ')}`,
+      params,
+    );
+
+    params.push(limit, offset);
+    const rows = await query(
+      `SELECT r.id, r.numero, r.fecha, r.clima, r.horas_perdidas, r.motivo,
+              r.personal_calificado, r.ayudantes, r.equipo, r.creado_por,
+              r.created_at, r.updated_at,
+              u.nombre AS creador_nombre,
+              (SELECT COUNT(*)::int FROM proyecto_reporte_fotos f
+                WHERE f.reporte_id = r.id) AS fotos,
+              COALESCE(
+                (SELECT json_agg(a.nombre ORDER BY a.orden)
+                   FROM proyecto_reporte_areas ra
+                   JOIN proyecto_areas a ON a.id = ra.area_id
+                  WHERE ra.reporte_id = r.id),
+                '[]'::json
+              ) AS areas
+         FROM proyecto_reportes r
+         JOIN users u ON u.id = r.creado_por
+        WHERE ${where.join(' AND ')}
+        ORDER BY r.fecha DESC, r.id DESC
+        LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+
+    res.json({
+      success: true,
+      data: rows.rows,
+      total: parseInt(total.rows[0].total, 10),
+    });
+  }),
+);
+
+// GET /api/proyecto-reportes/:proyectoId/meses
+//
+// Los meses que este proyecto de verdad tiene, para que el filtro no ofrezca
+// meses vacios. IMPORTA EL ORDEN: va antes de '/:proyectoId/:id', o Express
+// toma el literal "meses" como si fuera un id.
+router.get(
+  '/:proyectoId/meses',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const result = await query<{ mes: string }>(
+      `SELECT DISTINCT to_char(fecha, 'YYYY-MM') AS mes
+         FROM proyecto_reportes
+        WHERE proyecto_id = $1 AND activo = true
+        ORDER BY mes DESC`,
+      [req.params.proyectoId],
+    );
+    res.json({ success: true, data: result.rows.map((r) => r.mes) });
+  }),
+);
+
+// GET /api/proyecto-reportes/:proyectoId/existe?fecha=YYYY-MM-DD
+//
+// Alimenta el aviso suave del formulario: ¿este mismo usuario ya reporto esta
+// fecha? Es un aviso, nunca un bloqueo — a proposito no hay limite de uno por
+// dia. Mismo asunto de orden que /meses.
+router.get(
+  '/:proyectoId/existe',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const fecha = String(req.query.fecha ?? '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      res.status(400).json({ success: false, message: 'Fecha inválida' });
+      return;
+    }
+    const result = await query<{ id: number; numero: string }>(
+      `SELECT id, numero FROM proyecto_reportes
+        WHERE proyecto_id = $1 AND fecha = $2 AND creado_por = $3 AND activo = true
+        LIMIT 1`,
+      [req.params.proyectoId, fecha, req.user!.id],
+    );
+    res.json({ success: true, data: result.rows[0] ?? null });
+  }),
+);
+
+// GET /api/proyecto-reportes/:proyectoId/:id
+router.get(
+  '/:proyectoId/:id',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const reporte = await query(
+      `SELECT r.*, u.nombre AS creador_nombre, p.nombre AS proyecto_nombre
+         FROM proyecto_reportes r
+         JOIN users u ON u.id = r.creado_por
+         JOIN proyectos p ON p.id = r.proyecto_id
+        WHERE r.id = $1 AND r.proyecto_id = $2 AND r.activo = true`,
+      [req.params.id, req.params.proyectoId],
+    );
+    if (reporte.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
+    const areas = await query(
+      `SELECT a.id, a.nombre
+         FROM proyecto_reporte_areas ra
+         JOIN proyecto_areas a ON a.id = ra.area_id
+        WHERE ra.reporte_id = $1
+        ORDER BY a.orden, a.id`,
+      [req.params.id],
+    );
+
+    // El rastro de correcciones. entidad/entidad_id es el par polimorfico
+    // documentado en CLAUDE.md: se filtra por entidad primero.
+    const correcciones = await query(
+      `SELECT al.id, al.created_at, al.detalles, u.nombre AS usuario_nombre
+         FROM audit_log al
+         JOIN users u ON u.id = al.user_id
+        WHERE al.entidad = 'reporte_diario'
+          AND al.entidad_id = $1
+          AND al.accion = 'editar'
+        ORDER BY al.created_at`,
+      [req.params.id],
+    );
+
+    const autorId = (reporte.rows[0] as { creado_por: number }).creado_por;
+
+    res.json({
+      success: true,
+      data: {
+        ...reporte.rows[0],
+        areas: areas.rows,
+        correcciones: correcciones.rows,
+        // Para que la pantalla no ofrezca "Editar" donde la API va a negarlo.
+        puede_editar: puedeCorregir(req, autorId),
+      },
+    });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Escritura
+// ---------------------------------------------------------------------------
+
+// POST /api/proyecto-reportes/:proyectoId
+router.post(
+  '/:proyectoId',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const body = req.body as ReporteBody;
+    const proyectoId = Number(req.params.proyectoId);
+
+    const problema = validarAlta(body);
+    if (problema) {
+      res.status(400).json({ success: false, message: problema });
+      return;
+    }
+
+    let numero: string;
+    try {
+      numero = await generateReporteNumero(proyectoId, body.fecha!);
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg === 'PREFIJO_NO_CONFIGURADO') {
+        res.status(400).json({
+          success: false,
+          message: 'El proyecto no tiene código configurado, y sin él no se puede numerar el reporte',
+        });
+        return;
+      }
+      if (msg.startsWith('Fecha')) {
+        res.status(400).json({ success: false, message: msg });
+        return;
+      }
+      throw err;
+    }
+
+    const inserted = await query<ReporteRow>(
+      `INSERT INTO proyecto_reportes
+         (proyecto_id, numero, fecha, clima, horas_perdidas, motivo,
+          personal_calificado, ayudantes, equipo, que_se_hizo, atrasos, novedades,
+          creado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       RETURNING *`,
+      [
+        proyectoId,
+        numero,
+        body.fecha,
+        body.clima,
+        parseHoras(body.horas_perdidas),
+        body.motivo?.trim() || null,
+        Number(body.personal_calificado ?? 0),
+        Number(body.ayudantes ?? 0),
+        body.equipo ?? [],
+        body.que_se_hizo!.trim(),
+        body.atrasos?.trim() || null,
+        body.novedades?.trim() || null,
+        req.user!.id,
+      ],
+    );
+
+    const reporte = inserted.rows[0];
+
+    if (body.areas?.length) {
+      // Solo areas activas de ESTE proyecto: sin el filtro, un id de otra obra
+      // colaria una area ajena en el reporte.
+      await query(
+        `INSERT INTO proyecto_reporte_areas (reporte_id, area_id)
+         SELECT $1, a.id
+           FROM proyecto_areas a
+          WHERE a.id = ANY($2::int[]) AND a.proyecto_id = $3 AND a.activo = true`,
+        [reporte.id, body.areas, proyectoId],
+      );
+    }
+
+    await registrarAudit(req.user!.id, 'crear', 'reporte_diario', reporte.id, {
+      proyecto_id: proyectoId,
+      numero,
+      fecha: body.fecha,
+    });
+
+    res.status(201).json({ success: true, data: reporte });
+  }),
+);
+
+// PUT /api/proyecto-reportes/:proyectoId/:id
+router.put(
+  '/:proyectoId/:id',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const body = req.body as ReporteBody;
+    const proyectoId = Number(req.params.proyectoId);
+
+    const actual = await query<ReporteRow>(
+      `SELECT * FROM proyecto_reportes
+        WHERE id = $1 AND proyecto_id = $2 AND activo = true`,
+      [req.params.id, proyectoId],
+    );
+    if (actual.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
+    if (!puedeCorregir(req, actual.rows[0].creado_por)) {
+      res.status(403).json({
+        success: false,
+        message: 'Solo quien escribió el reporte puede corregirlo',
+      });
+      return;
+    }
+
+    if (body.clima !== undefined && !CLIMAS.includes(body.clima)) {
+      res.status(400).json({ success: false, message: 'Clima inválido' });
+      return;
+    }
+    if (body.que_se_hizo !== undefined && !body.que_se_hizo.trim()) {
+      res
+        .status(400)
+        .json({ success: false, message: 'Debes describir qué se hizo hoy' });
+      return;
+    }
+
+    const areasAntes = await query<{ id: number }>(
+      'SELECT area_id AS id FROM proyecto_reporte_areas WHERE reporte_id = $1',
+      [req.params.id],
+    );
+
+    // COALESCE deja pasar los campos que el guardado no menciona. Los que si
+    // pueden quedar vacios a proposito (motivo, atrasos, novedades, horas) se
+    // escriben directo, porque con COALESCE nunca se podrian borrar.
+    const updated = await query<ReporteRow>(
+      `UPDATE proyecto_reportes SET
+         fecha = COALESCE($1, fecha),
+         clima = COALESCE($2, clima),
+         horas_perdidas = $3,
+         motivo = $4,
+         personal_calificado = COALESCE($5, personal_calificado),
+         ayudantes = COALESCE($6, ayudantes),
+         equipo = COALESCE($7, equipo),
+         que_se_hizo = COALESCE($8, que_se_hizo),
+         atrasos = $9,
+         novedades = $10,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = $11 AND proyecto_id = $12
+       RETURNING *`,
+      [
+        body.fecha ?? null,
+        body.clima ?? null,
+        parseHoras(body.horas_perdidas),
+        body.motivo?.trim() || null,
+        body.personal_calificado !== undefined
+          ? Number(body.personal_calificado)
+          : null,
+        body.ayudantes !== undefined ? Number(body.ayudantes) : null,
+        body.equipo ?? null,
+        body.que_se_hizo?.trim() ?? null,
+        body.atrasos?.trim() || null,
+        body.novedades?.trim() || null,
+        req.params.id,
+        proyectoId,
+      ],
+    );
+
+    if (body.areas) {
+      await query('DELETE FROM proyecto_reporte_areas WHERE reporte_id = $1', [
+        req.params.id,
+      ]);
+      if (body.areas.length) {
+        await query(
+          `INSERT INTO proyecto_reporte_areas (reporte_id, area_id)
+           SELECT $1, a.id
+             FROM proyecto_areas a
+            WHERE a.id = ANY($2::int[]) AND a.proyecto_id = $3 AND a.activo = true`,
+          [req.params.id, body.areas, proyectoId],
+        );
+      }
+    }
+
+    const areasAhora = await query<{ id: number }>(
+      'SELECT area_id AS id FROM proyecto_reporte_areas WHERE reporte_id = $1',
+      [req.params.id],
+    );
+
+    const cambios: Record<string, Cambio> = diffCampos(
+      {
+        ...actual.rows[0],
+        horas_perdidas:
+          actual.rows[0].horas_perdidas === null
+            ? null
+            : Number(actual.rows[0].horas_perdidas),
+        areas: areasAntes.rows.map((a) => a.id),
+      },
+      {
+        ...body,
+        // Las areas se comparan contra lo que de verdad quedo guardado, no
+        // contra lo que se pidio: un id de otra obra no entra, y decir que
+        // entro seria mentira.
+        areas: body.areas ? areasAhora.rows.map((a) => a.id) : undefined,
+      },
+    );
+
+    // Un guardado que no movio nada no deja linea: si cada guardado dejara
+    // rastro, el rastro se llenaria de ruido y dejaria de leerse.
+    if (Object.keys(cambios).length > 0) {
+      await registrarAudit(
+        req.user!.id,
+        'editar',
+        'reporte_diario',
+        Number(req.params.id),
+        { cambios },
+      );
+    }
+
+    res.json({ success: true, data: updated.rows[0] });
+  }),
+);
+
+export default router;
