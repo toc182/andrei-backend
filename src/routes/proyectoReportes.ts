@@ -526,40 +526,43 @@ router.put(
       [req.params.id],
     );
 
-    // COALESCE deja pasar los campos que el guardado no menciona. Los que si
-    // pueden quedar vacios a proposito (motivo, atrasos, novedades, horas) se
-    // escriben directo, porque con COALESCE nunca se podrian borrar.
+    // El SET se arma solo con los campos que vienen en la peticion.
+    //
+    // Con una lista fija de columnas no habia forma de distinguir "no estoy
+    // tocando este campo" de "quiero dejarlo vacio": una correccion que solo
+    // mandaba las horas borraba en silencio los atrasos y las novedades que
+    // el ingeniero habia escrito. Ausente significa no tocar; presente y
+    // vacio significa borrar.
+    const sets: string[] = [];
+    const valores: unknown[] = [];
+    const set = (columna: string, valor: unknown) => {
+      valores.push(valor);
+      sets.push(`${columna} = $${valores.length}`);
+    };
+
+    if (body.fecha !== undefined) set('fecha', body.fecha);
+    if (body.clima !== undefined) set('clima', body.clima);
+    if (body.horas_perdidas !== undefined)
+      set('horas_perdidas', parseHoras(body.horas_perdidas));
+    if (body.motivo !== undefined) set('motivo', body.motivo?.trim() || null);
+    if (body.personal_calificado !== undefined)
+      set('personal_calificado', Number(body.personal_calificado));
+    if (body.ayudantes !== undefined) set('ayudantes', Number(body.ayudantes));
+    if (body.equipo !== undefined) set('equipo', body.equipo);
+    if (body.que_se_hizo !== undefined)
+      set('que_se_hizo', body.que_se_hizo.trim());
+    if (body.atrasos !== undefined) set('atrasos', body.atrasos?.trim() || null);
+    if (body.novedades !== undefined)
+      set('novedades', body.novedades?.trim() || null);
+
+    sets.push('updated_at = CURRENT_TIMESTAMP');
+    valores.push(req.params.id, proyectoId);
+
     const updated = await query<ReporteRow>(
-      `UPDATE proyecto_reportes SET
-         fecha = COALESCE($1, fecha),
-         clima = COALESCE($2, clima),
-         horas_perdidas = $3,
-         motivo = $4,
-         personal_calificado = COALESCE($5, personal_calificado),
-         ayudantes = COALESCE($6, ayudantes),
-         equipo = COALESCE($7, equipo),
-         que_se_hizo = COALESCE($8, que_se_hizo),
-         atrasos = $9,
-         novedades = $10,
-         updated_at = CURRENT_TIMESTAMP
-       WHERE id = $11 AND proyecto_id = $12
-       RETURNING *`,
-      [
-        body.fecha ?? null,
-        body.clima ?? null,
-        parseHoras(body.horas_perdidas),
-        body.motivo?.trim() || null,
-        body.personal_calificado !== undefined
-          ? Number(body.personal_calificado)
-          : null,
-        body.ayudantes !== undefined ? Number(body.ayudantes) : null,
-        body.equipo ?? null,
-        body.que_se_hizo?.trim() ?? null,
-        body.atrasos?.trim() || null,
-        body.novedades?.trim() || null,
-        req.params.id,
-        proyectoId,
-      ],
+      `UPDATE proyecto_reportes SET ${sets.join(', ')}
+        WHERE id = $${valores.length - 1} AND proyecto_id = $${valores.length}
+        RETURNING *`,
+      valores,
     );
 
     if (body.areas) {
