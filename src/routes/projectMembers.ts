@@ -1,6 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { query } from '../database/config.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, requireAdmin } from '../middleware/auth.js';
+
+// Administrar los miembros de un proyecto es de admin/co-admin. Las LECTURAS
+// de aqui no llevan requireAdmin a proposito: el formulario de requisicion, el
+// de solicitud de pago y Tareas las usan para escoger personas, y cerrarlas
+// romperia esas tres pantallas para todo el mundo.
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import type { UserRole } from '../types/auth.js';
 import type { MemberRole } from '../types/models.js';
@@ -142,6 +147,7 @@ router.get(
 router.post(
   '/',
   authenticateToken,
+  requireAdmin,
   asyncHandler(
     async (
       req: Request<object, object, AddMemberBody>,
@@ -213,6 +219,7 @@ router.post(
 router.post(
   '/external',
   authenticateToken,
+  requireAdmin,
   asyncHandler(
     async (
       req: Request<object, object, AddExternalMemberBody>,
@@ -304,6 +311,7 @@ router.post(
 router.put(
   '/:id',
   authenticateToken,
+  requireAdmin,
   asyncHandler(
     async (
       req: Request<{ id: string }, object, { rol_proyecto: MemberRole }>,
@@ -343,6 +351,7 @@ router.put(
 router.delete(
   '/:id',
   authenticateToken,
+  requireAdmin,
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;

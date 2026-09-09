@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { param, body, validationResult } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const router = Router();
@@ -53,8 +53,12 @@ router.get(
 );
 
 // --- PUT /project/:projectId — Reemplazar lista completa de aprobadores ---
+// Cambiar quien aprueba los pagos de un proyecto es de admin/co-admin. El GET
+// de abajo NO lleva requireAdmin: las dos pantallas de solicitudes lo usan para
+// pintar la cadena de aprobacion.
 router.put(
   '/project/:projectId',
+  requireAdmin,
   [
     param('projectId').isInt(),
     body('approvers')
