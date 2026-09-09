@@ -45,6 +45,7 @@ const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'cotizaciones',
   'cronogramas_ver',
   'desglose_ver',
+  'reportes',
 ];
 
 const PERMISSIONS_SELECT = VALID_PERMISSIONS.join(', ');
