@@ -32,6 +32,7 @@ import {
   generateReportePDF,
   type ReportePdfInput,
 } from '../services/reportePdf.js';
+import { sendEmail } from '../services/emailService.js';
 import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
@@ -238,7 +239,7 @@ router.get(
     const rows = await query(
       `SELECT r.id, r.numero, r.fecha, r.clima, r.horas_perdidas, r.motivo,
               r.personal_calificado, r.ayudantes, r.equipo, r.creado_por,
-              r.created_at, r.updated_at,
+              r.created_at, r.updated_at, r.enviado_at,
               u.nombre AS creador_nombre,
               (SELECT COUNT(*)::int FROM proyecto_reporte_fotos f
                 WHERE f.reporte_id = r.id) AS fotos,
@@ -823,6 +824,105 @@ router.get(
       'Content-Disposition': `inline; filename="${datos.numero}.pdf"`,
     });
     res.send(pdf);
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Envío por correo
+// ---------------------------------------------------------------------------
+
+/** A dónde va el reporte. Configurable sin tocar código ni desplegar. */
+const CORREO_ADMINISTRACION =
+  process.env.REPORTES_EMAIL_TO || 'info@pinellaspanama.com';
+
+// POST /api/proyecto-reportes/:proyectoId/:id/emitir
+//
+// El correo NO sale al guardar: el reporte se guarda primero y las fotos
+// suben despues, asi que mandarlo de una lo enviaria sin fotos, que es
+// justamente lo que no podia hacer el Google Form. La pantalla llama aqui
+// cuando termino de subir la ultima foto.
+//
+// Si el ingeniero cierra el navegador a media subida, el reporte queda
+// guardado con enviado_at en null y la pantalla le ofrece mandarlo.
+router.post(
+  '/:proyectoId/:id/emitir',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const reporte = await query<{ creado_por: number; enviado_at: Date | null }>(
+      `SELECT creado_por, enviado_at FROM proyecto_reportes
+        WHERE id = $1 AND proyecto_id = $2 AND activo = true`,
+      [req.params.id, req.params.proyectoId],
+    );
+    if (reporte.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+    if (!puedeCorregir(req, reporte.rows[0].creado_por)) {
+      res.status(403).json({
+        success: false,
+        message: 'Solo quien escribió el reporte puede enviarlo',
+      });
+      return;
+    }
+
+    // Sin reenviar=true no se manda dos veces: la pantalla llama a este
+    // endpoint al terminar de subir fotos, y un reintento del navegador no
+    // debe llenar de copias la bandeja de nadie.
+    const yaEnviado = reporte.rows[0].enviado_at !== null;
+    if (yaEnviado && req.query.reenviar !== 'true') {
+      res.json({
+        success: true,
+        data: { enviado_at: reporte.rows[0].enviado_at, reenviado: false },
+      });
+      return;
+    }
+
+    const archivado = await archivarReportePdf(Number(req.params.id));
+    if (!archivado) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
+    const datos = await buildReportePdfInput(Number(req.params.id));
+    const destinatarios = [CORREO_ADMINISTRACION];
+    if (datos?.autorEmail && !destinatarios.includes(datos.autorEmail)) {
+      destinatarios.push(datos.autorEmail);
+    }
+
+    await sendEmail(
+      destinatarios,
+      `Reporte diario ${datos!.numero} — ${datos!.proyectoNombre}`,
+      `<p>Se registró el reporte diario del <b>${datos!.fechaCorta}</b> en
+         <b>${datos!.proyectoNombre}</b>, elaborado por ${datos!.autorNombre}.</p>
+       <p>El PDF va adjunto.</p>`,
+      [{ filename: `${datos!.numero}.pdf`, content: archivado.buffer }],
+    );
+
+    const marcado = await query<{ enviado_at: Date }>(
+      `UPDATE proyecto_reportes SET enviado_at = CURRENT_TIMESTAMP
+        WHERE id = $1 RETURNING enviado_at`,
+      [req.params.id],
+    );
+
+    await registrarAudit(
+      req.user!.id,
+      'enviar',
+      'reporte_diario',
+      Number(req.params.id),
+      { destinatarios, version: archivado.version, reenvio: yaEnviado },
+    );
+
+    res.json({
+      success: true,
+      data: {
+        enviado_at: marcado.rows[0].enviado_at,
+        reenviado: yaEnviado,
+        destinatarios,
+        version: archivado.version,
+      },
+    });
   }),
 );
 

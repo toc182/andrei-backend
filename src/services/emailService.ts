@@ -11,14 +11,28 @@ if (RESEND_API_KEY) {
   console.log('⚠️  Email service not configured (missing RESEND_API_KEY)');
 }
 
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+}
+
+/**
+ * `to` acepta una direccion o varias. `attachments` es opcional, asi que
+ * ninguna de las llamadas que ya existian cambia.
+ */
 export async function sendEmail(
-  to: string,
+  to: string | string[],
   subject: string,
   html: string,
+  attachments?: EmailAttachment[],
 ): Promise<void> {
   if (!resend) {
+    const destino = Array.isArray(to) ? to.join(', ') : to;
+    const adjuntos = attachments?.length
+      ? `, ${attachments.length} adjunto(s)`
+      : '';
     console.log(
-      `📧 Email skipped (no Resend config): to=${to}, subject="${subject}"`,
+      `📧 Email skipped (no Resend config): to=${destino}, subject="${subject}"${adjuntos}`,
     );
     return;
   }
@@ -28,5 +42,13 @@ export async function sendEmail(
     to,
     subject,
     html,
+    ...(attachments?.length
+      ? {
+        attachments: attachments.map((a) => ({
+          filename: a.filename,
+          content: a.content,
+        })),
+      }
+      : {}),
   });
 }
