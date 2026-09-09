@@ -1,18 +1,21 @@
 # Andrei Backend
 
 Express + TypeScript API. Port 5000 (dev), 8080 (Railway).
-23 route files, PostgreSQL via pg pool, auto-migrations on server start.
+33 route files, PostgreSQL via pg pool, auto-migrations on server start.
 
 ## Structure
 
 src/
-├── routes/ # 23 route files — one per domain
+├── routes/ # 33 route files — one per domain
 ├── middleware/ # auth.ts (JWT + permissions), asyncHandler.ts
-├── services/ # storage.ts, emailService.ts, pdfGenerator.ts, auditLog.ts, dailyNotification.ts
-├── database/ # config.ts (pool), migrate.ts, migrations/ (056 files, .sql)
+├── services/ # storage.ts, emailService.ts, pdfGenerator.ts, auditLog.ts, dailyNotification.ts, reportePdf.ts, reporteNumero.ts, reporteCambios.ts, cronogramaEngine.ts, partidasProyecto.ts, constanciaPdf.ts, asistentePagos/
+├── database/ # config.ts (pool), migrate.ts (migrations/ here is EMPTY)
 ├── types/ # api.ts, auth.ts, database.ts, index.ts, models.ts
 ├── cron/ # scheduler.ts (daily email notifications)
-└── utils/ # (currently empty)
+└── utils/ # fileEncoding.ts
+
+database/migrations/ # the REAL migrations — 158 .sql files, at the repo root, NOT under src/
+scripts/ # hand-rolled *.spec.ts verification scripts, run with npx tsx
 
 ## Commands
 
@@ -56,11 +59,16 @@ res.json({ success: true, data: result.rows });
 ## Database
 
 - query() from src/database/config.ts — parameterized only, never string concat
-- Migrations: src/database/migrations/NNN_name.sql format. Look in the folder for the next number — never assume.
+- Migrations: `andrei-backend/database/migrations/NNN_name.sql` — at the repo root, NOT
+  under `src/`. `src/database/migrations/` exists but is empty; don't put anything there.
+  Look in the folder for the next number — never assume.
 - runAllMigrations() runs automatically on server start
 - Local: andrei_db / Production: DATABASE_URL (Railway)
 - MCP postgres tool available for local queries
-- Root-level routes/ and migrations/ folders are empty legacy dirs — ignore them
+- `pg` returns a DATE column as a JS `Date` object, never a string. Don't `slice()` a
+  `fecha` — you get `"Tue Sep 08"` and then `Invalid Date`. Format it explicitly.
+- Never seed accented text through `curl` from the Windows console — it mangles the
+  encoding before the request reaches the API. Seed from Node instead.
 
 Migration file format:
 -- NNN_description.sql
@@ -97,4 +105,8 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
 - NEVER assume table structure — verify with MCP postgres before writing queries
 - ALWAYS call registrarAudit() on create, edit, delete, approve, pay operations
 - NEVER delete migrations — add new ones only
+- On PUT/PATCH, build the SET clause only from the fields present in the request. A fixed
+  column list can't tell "not touching this" from "blank it", and silently wipes data.
+- Upload routes must translate multer rejections (10 MB limit, mime type) into real
+  messages — otherwise a phone photo fails as "Error interno del servidor"
 - .env is never committed — Railway uses DATABASE_URL, JWT_SECRET, R2 keys, RESEND_API_KEY
