@@ -290,9 +290,18 @@ router.get(
 
 // GET /api/proyecto-reportes/:proyectoId/existe?fecha=YYYY-MM-DD
 //
-// Alimenta el aviso suave del formulario: ¿este mismo usuario ya reporto esta
-// fecha? Es un aviso, nunca un bloqueo — a proposito no hay limite de uno por
-// dia. Mismo asunto de orden que /meses.
+// Dos cosas que el formulario necesita antes de guardar:
+//
+// - `ya_reportado`: si este mismo usuario ya reporto esa fecha. Es un aviso
+//   suave, nunca un bloqueo — a proposito no hay limite de uno por dia,
+//   porque alguien tiene que poder cubrir a quien esta de vacaciones.
+// - `numero_siguiente`: el codigo que le tocaria al reporte. Se calcula aqui
+//   y no en la pantalla porque depende de cuantos hay ya en esa fecha, que
+//   solo sabe el servidor. Es una vista previa: si entre que se muestra y se
+//   guarda alguien mas registra un reporte del mismo dia, el definitivo sera
+//   el siguiente.
+//
+// Mismo asunto de orden que /meses: va antes de '/:proyectoId/:id'.
 router.get(
   '/:proyectoId/existe',
   authenticateToken,
@@ -304,13 +313,33 @@ router.get(
       res.status(400).json({ success: false, message: 'Fecha inválida' });
       return;
     }
-    const result = await query<{ id: number; numero: string }>(
+
+    const mio = await query<{ id: number; numero: string }>(
       `SELECT id, numero FROM proyecto_reportes
         WHERE proyecto_id = $1 AND fecha = $2 AND creado_por = $3 AND activo = true
         LIMIT 1`,
       [req.params.proyectoId, fecha, req.user!.id],
     );
-    res.json({ success: true, data: result.rows[0] ?? null });
+
+    let numeroSiguiente: string | null = null;
+    try {
+      numeroSiguiente = await generateReporteNumero(
+        Number(req.params.proyectoId),
+        fecha,
+      );
+    } catch {
+      // Un proyecto sin codigo configurado no puede numerar. La pantalla
+      // simplemente no muestra la vista previa; el error de verdad aparece
+      // al intentar guardar, con su mensaje.
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ya_reportado: mio.rows[0] ?? null,
+        numero_siguiente: numeroSiguiente,
+      },
+    });
   }),
 );
 
