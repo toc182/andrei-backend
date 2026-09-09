@@ -1,0 +1,12 @@
+-- 158_reporte_enviado_at.sql
+-- Cuándo salió por correo el reporte.
+--
+-- Hace falta porque el envío no ocurre al guardar: el reporte se guarda
+-- primero y las fotos suben después, así que el correo espera a que terminen.
+-- Si el ingeniero cierra el navegador a media subida, el reporte queda
+-- guardado pero sin enviar, y la pantalla necesita saberlo para ofrecerle el
+-- botón de mandarlo.
+--
+-- No se deduce de proyecto_reporte_pdfs: ahí también se archivan las
+-- versiones de las correcciones, que no mandan correo.
+ALTER TABLE proyecto_reportes ADD COLUMN IF NOT EXISTS enviado_at TIMESTAMP;

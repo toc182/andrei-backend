@@ -34,6 +34,7 @@ export interface UserPermissions {
   cotizaciones: boolean;
   cronogramas_ver: boolean;
   desglose_ver: boolean;
+  reportes: boolean;
 }
 
 /**
@@ -83,6 +84,10 @@ export type RoleMiddleware = (allowedRoles: UserRole[]) => ExpressMiddleware;
 
 // Extender Express Request para incluir user
 declare global {
+  // Ampliar los tipos de Express solo es posible con `namespace`: es la forma
+  // que TypeScript exige para el "module augmentation" de @types/express. No
+  // hay equivalente con módulos ES, así que la regla no aplica aquí.
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       user?: AuthUser;

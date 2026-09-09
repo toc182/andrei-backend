@@ -7,7 +7,9 @@ import type { Client } from '../types/models.js';
 
 const router = Router();
 
-interface ClientRow extends Client {}
+// Alias, no interfaz vacía: la fila que devuelve la consulta es exactamente
+// un Client. Se conserva el nombre porque es el que usan los query<...>.
+type ClientRow = Client;
 
 interface CreateClientBody {
   nombre: string;
