@@ -912,6 +912,7 @@ async function enrichWithAprobadoresEstado(
 // --- GET / — Listar todas (global) ---
 router.get(
   '/',
+  checkPermission('solicitudes_ver'),
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const { estado, proyecto_id } = req.query;
     const currentUserId = req.user!.id;
@@ -1022,6 +1023,7 @@ router.get(
 // --- GET /project/:projectId — Listar del proyecto ---
 router.get(
   '/project/:projectId',
+  checkPermission('solicitudes_ver'),
   asyncHandler(
     async (
       req: Request<{ projectId: string }>,

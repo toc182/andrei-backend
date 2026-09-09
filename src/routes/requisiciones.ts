@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken, requireManager } from '../middleware/auth.js';
+import {
+  authenticateToken, checkPermission, checkAnyPermission, requireManager,
+} from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const router = Router();
@@ -111,6 +113,7 @@ interface QueryParams {
 router.get(
   '/',
   authenticateToken,
+  checkPermission('requisiciones_ver'),
   asyncHandler(
     async (
       req: Request<object, object, object, QueryParams>,
@@ -195,6 +198,7 @@ router.get(
 router.get(
   '/project/:projectId',
   authenticateToken,
+  checkAnyPermission(['requisiciones_ver', 'solicitudes_ver']),
   [param('projectId').isInt().withMessage('ID de proyecto inválido')],
   asyncHandler(
     async (

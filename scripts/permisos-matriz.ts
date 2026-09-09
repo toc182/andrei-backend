@@ -2,7 +2,12 @@
 // restringido. Se corre ANTES de tocar los permisos para tener la linea base, y
 // despues de cada cambio para ver que se movio solo lo que se queria mover.
 //
-//   cd andrei-backend && npx tsx --env-file=.env scripts/permisos-matriz.ts [adminId] [usuarioId] [proyectoId]
+//   cd andrei-backend && npx tsx --env-file=.env scripts/permisos-matriz.ts [adminId] [usuarioId] [proyectoId] [apagar]
+//
+// Con "apagar" como cuarto argumento, apaga las llaves de seccion del usuario
+// de prueba mientras corre y las DEJA COMO ESTABAN al terminar, pase lo que
+// pase (try/finally). Es la unica manera de ver si los candados muerden: la
+// migracion 159 deja esas llaves encendidas para todo el que ya existia.
 //
 // Sin argumentos busca solo: el primer admin activo y el usuario con menos
 // permisos encendidos, sobre un proyecto al que ese usuario tenga acceso.
@@ -134,6 +139,10 @@ function sondas(p: number): Sonda[] {
     { metodo: 'GET', ruta: '/solicitudes-pago', nota: 'listado de solicitudes' },
     { metodo: 'GET', ruta: '/requisiciones', nota: 'listado de requisiciones' },
     { metodo: 'GET', ruta: '/clientes', nota: 'listado de clientes' },
+    { metodo: 'GET', ruta: `/solicitudes-pago/project/${p}`, nota: 'solicitudes del proyecto' },
+    { metodo: 'GET', ruta: `/requisiciones/project/${p}`, nota: 'requisiciones del proyecto (lo usa tambien el form de solicitud)' },
+    { metodo: 'GET', ruta: `/costs/projects/${p}/partidas`, nota: 'partidas de Control de Costos' },
+    { metodo: 'GET', ruta: `/clientes/${ID_INEXISTENTE}`, nota: 'detalle de cliente' },
     { metodo: 'GET', ruta: '/clientes/stats/dashboard', nota: 'stats del dashboard (lo llama todo el mundo)' },
     { metodo: 'GET', ruta: `/costs/projects/${p}/resumen`, nota: 'resumen de Control de Costos' },
     { metodo: 'GET', ruta: `/presupuestos/proyecto/${p}`, nota: 'presupuestos del proyecto' },
@@ -149,6 +158,25 @@ function sondas(p: number): Sonda[] {
   ];
 }
 
+const LLAVES = ['solicitudes_ver', 'requisiciones_ver', 'clientes_ver', 'costos_ver'] as const;
+
+/** Devuelve como estaban, para poder dejarlas igual al terminar. */
+async function apagarLlaves(userId: number): Promise<Record<string, boolean>> {
+  const antes = await query<Record<string, boolean>>(
+    `SELECT ${LLAVES.join(', ')} FROM user_permissions WHERE user_id = $1`, [userId]);
+  await query(
+    `UPDATE user_permissions SET ${LLAVES.map((k) => `${k} = false`).join(', ')} WHERE user_id = $1`,
+    [userId]);
+  return antes.rows[0] ?? {};
+}
+
+async function restaurarLlaves(userId: number, antes: Record<string, boolean>): Promise<void> {
+  if (Object.keys(antes).length === 0) return;
+  await query(
+    `UPDATE user_permissions SET ${LLAVES.map((k, i) => `${k} = $${i + 2}`).join(', ')} WHERE user_id = $1`,
+    [userId, ...LLAVES.map((k) => antes[k] ?? false)]);
+}
+
 const main = async () => {
   const { admin, usuario, proyectoId } = await buscarUsuarios();
 
@@ -158,6 +186,28 @@ const main = async () => {
   console.log(`  proyecto: ${proyectoId}`);
   console.log(`  servidor: ${BASE}\n`);
 
+  const apagar = process.argv[5] === 'apagar';
+  const idUsuario = parseInt(usuario.descripcion.slice(1), 10);
+  let antes: Record<string, boolean> = {};
+  if (apagar) {
+    antes = await apagarLlaves(idUsuario);
+    console.log('  LLAVES DE SECCION APAGADAS para el usuario (se restauran al final)');
+  }
+
+  try {
+    await correrMatriz(admin, usuario, proyectoId);
+  } finally {
+    // El finally no es adorno: si la matriz truena a la mitad, el usuario se
+    // quedaria con las llaves apagadas y nadie se enteraria.
+    if (apagar) {
+      await restaurarLlaves(idUsuario, antes);
+      console.log('Llaves restauradas a como estaban.');
+    }
+    await pool.end();
+  }
+};
+
+async function correrMatriz(admin: Quien, usuario: Quien, proyectoId: number): Promise<void> {
   const lista = sondas(proyectoId);
   const ancho = Math.max(...lista.map((s) => `${s.metodo} ${s.ruta}`.length));
 
@@ -172,10 +222,11 @@ const main = async () => {
   }
 
   console.log('\n401/403 = frenado. 2xx/404/400 = le dejaron pasar.');
-  await pool.end();
-};
+}
 
-main().catch((e) => {
+main().catch(async (e) => {
   console.error(e instanceof Error ? e.message : e);
+  console.error('*** Si corriste con "apagar", revisa las llaves del usuario a mano. ***');
+  await pool.end().catch(() => {});
   process.exit(1);
 });

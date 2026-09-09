@@ -35,6 +35,10 @@ export interface UserPermissions {
   cronogramas_ver: boolean;
   desglose_ver: boolean;
   reportes: boolean;
+  solicitudes_ver: boolean;
+  requisiciones_ver: boolean;
+  clientes_ver: boolean;
+  costos_ver: boolean;
 }
 
 /**

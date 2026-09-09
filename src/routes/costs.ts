@@ -3,6 +3,7 @@ import { body, validationResult, param } from 'express-validator';
 import { query, pool } from '../database/config.js';
 import {
   authenticateToken,
+  checkPermission,
   checkProjectAccess,
   requireAdmin,
   requireManager,
@@ -1210,6 +1211,7 @@ const PAGADAS_CTE = `
 router.get(
   '/projects/:projectId/resumen',
   authenticateToken,
+  checkPermission('costos_ver'),
   checkProjectAccess('projectId'),
   asyncHandler(async (req: Request<{ projectId: string }>, res: Response): Promise<void> => {
     const proyectoId = parseInt(req.params.projectId, 10);
@@ -1462,6 +1464,7 @@ router.get(
 router.get(
   '/projects/:projectId/partidas',
   authenticateToken,
+  checkPermission('costos_ver'),
   checkProjectAccess('projectId'),
   asyncHandler(async (req: Request<{ projectId: string }>, res: Response): Promise<void> => {
     const proyectoId = parseInt(req.params.projectId, 10);

@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { param, validationResult } from 'express-validator';
 import { query } from '../database/config.js';
-import { authenticateToken, checkPermission } from '../middleware/auth.js';
+import {
+  authenticateToken, checkPermission, checkAnyPermission,
+} from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import type { Client } from '../types/models.js';
 
@@ -33,6 +35,7 @@ interface ClientStats {
 router.get(
   '/',
   authenticateToken,
+  checkAnyPermission(['clientes_ver', 'proyectos_crear', 'proyectos_editar']),
   asyncHandler(
     async (_req: Request, res: Response): Promise<void> => {
       const result = await query<ClientRow>(`
@@ -56,6 +59,7 @@ router.get(
 router.get(
   '/:id',
   [param('id').isInt().withMessage('ID debe ser un número'), authenticateToken],
+  checkAnyPermission(['clientes_ver', 'proyectos_crear', 'proyectos_editar']),
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const errors = validationResult(req);
@@ -375,6 +379,8 @@ router.delete(
 );
 
 // Obtener estadísticas de clientes
+// Se queda sin llave a proposito: el dashboard de todo el mundo lo llama y
+// solo devuelve conteos, no datos de ningun cliente.
 router.get(
   '/stats/dashboard',
   authenticateToken,

@@ -46,6 +46,10 @@ const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'cronogramas_ver',
   'desglose_ver',
   'reportes',
+  'solicitudes_ver',
+  'requisiciones_ver',
+  'clientes_ver',
+  'costos_ver',
 ];
 
 const PERMISSIONS_SELECT = VALID_PERMISSIONS.join(', ');
@@ -180,6 +184,40 @@ export function checkPermission(permiso: keyof UserPermissions) {
     }
     // usuario verifica permiso
     if (req.user.permissions?.[permiso]) {
+      next();
+      return;
+    }
+    res.status(403).json({
+      success: false,
+      message: 'No tienes permisos para esta acción',
+    });
+  };
+}
+
+/**
+ * Igual que checkPermission, pero deja pasar si el usuario tiene CUALQUIERA de
+ * las llaves. Existe porque hay endpoints que sirven a dos perfiles distintos:
+ * GET /clientes lo necesita quien ve la seccion de Clientes y tambien quien
+ * crea un proyecto, y GET /requisiciones/project/:id lo necesita la seccion de
+ * Requisiciones y tambien el formulario de solicitud de pago. Con una sola
+ * llave, cerrar el endpoint rompia al otro perfil.
+ */
+export function checkAnyPermission(permisos: (keyof UserPermissions)[]) {
+  for (const permiso of permisos) {
+    if (!VALID_PERMISSIONS.includes(permiso)) {
+      throw new Error(`Permiso inválido: ${permiso}`);
+    }
+  }
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'No autenticado' });
+      return;
+    }
+    if (req.user.rol === 'admin' || req.user.rol === 'co-admin') {
+      next();
+      return;
+    }
+    if (permisos.some((p) => req.user!.permissions?.[p])) {
       next();
       return;
     }

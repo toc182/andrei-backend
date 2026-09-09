@@ -41,6 +41,10 @@ interface UserWithPermissions {
   cronogramas_ver: boolean | null;
   desglose_ver: boolean | null;
   reportes: boolean | null;
+  solicitudes_ver: boolean | null;
+  requisiciones_ver: boolean | null;
+  clientes_ver: boolean | null;
+  costos_ver: boolean | null;
 }
 
 // GET /users — lista usuarios (excluye admin) con sus permisos
@@ -55,7 +59,8 @@ router.get(
             up.equipos_ver, up.equipos_agregar, up.equipos_editar, up.equipos_eliminar,
             up.equipos_asignacion, up.equipos_uso, up.equipos_editar_asignacion,
             up.documentos_acceso, up.oportunidades_ver, up.registrar_pago, up.caja_menuda, up.cuentas,
-            up.cotizaciones, up.cronogramas_ver, up.desglose_ver, up.reportes
+            up.cotizaciones, up.cronogramas_ver, up.desglose_ver, up.reportes,
+            up.solicitudes_ver, up.requisiciones_ver, up.clientes_ver, up.costos_ver
      FROM users u
      LEFT JOIN user_permissions up ON up.user_id = u.id
      WHERE u.rol != 'admin'
@@ -82,7 +87,8 @@ router.get(
             equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
             equipos_asignacion, equipos_uso, equipos_editar_asignacion,
             documentos_acceso, oportunidades_ver, registrar_pago, caja_menuda, cuentas,
-            cotizaciones, cronogramas_ver, desglose_ver, reportes
+            cotizaciones, cronogramas_ver, desglose_ver, reportes,
+            solicitudes_ver, requisiciones_ver, clientes_ver, costos_ver
      FROM user_permissions WHERE user_id = $1`,
         [userId],
       );
@@ -116,8 +122,8 @@ router.put(
        solicitudes_editar_todas, requisiciones_editar_todas,
        equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
        equipos_asignacion, equipos_uso, equipos_editar_asignacion,
-       documentos_acceso, oportunidades_ver, registrar_pago, caja_menuda, cuentas, cotizaciones, cronogramas_ver, desglose_ver, reportes, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, CURRENT_TIMESTAMP)
+       documentos_acceso, oportunidades_ver, registrar_pago, caja_menuda, cuentas, cotizaciones, cronogramas_ver, desglose_ver, reportes, solicitudes_ver, requisiciones_ver, clientes_ver, costos_ver, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, CURRENT_TIMESTAMP)
      ON CONFLICT (user_id) DO UPDATE SET
        acceso_global = EXCLUDED.acceso_global,
        proyectos_crear = EXCLUDED.proyectos_crear,
@@ -144,6 +150,10 @@ router.put(
        cronogramas_ver = EXCLUDED.cronogramas_ver,
        desglose_ver = EXCLUDED.desglose_ver,
        reportes = EXCLUDED.reportes,
+       solicitudes_ver = EXCLUDED.solicitudes_ver,
+       requisiciones_ver = EXCLUDED.requisiciones_ver,
+       clientes_ver = EXCLUDED.clientes_ver,
+       costos_ver = EXCLUDED.costos_ver,
        updated_at = CURRENT_TIMESTAMP`,
         [
           userId,
@@ -172,6 +182,10 @@ router.put(
           permissions.cronogramas_ver ?? false,
           permissions.desglose_ver ?? false,
           permissions.reportes ?? false,
+          permissions.solicitudes_ver ?? false,
+          permissions.requisiciones_ver ?? false,
+          permissions.clientes_ver ?? false,
+          permissions.costos_ver ?? false,
         ],
       );
 

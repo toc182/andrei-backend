@@ -13,7 +13,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { query, pool } from '../database/config.js';
-import { authenticateToken, checkProjectAccess } from '../middleware/auth.js';
+import { authenticateToken, checkPermission, checkProjectAccess } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
 import type {
@@ -214,6 +214,7 @@ async function loadDoc(m: MetaRow) {
 // GET /presupuestos/proyecto/:proyectoId — la lista + si hay desglose del que partir
 router.get(
   '/proyecto/:proyectoId',
+  checkPermission('costos_ver'),
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request<{ proyectoId: string }>, res: Response) => {
     const proyectoId = parseId(req.params.proyectoId);
@@ -335,6 +336,7 @@ router.post(
 // GET /presupuestos/proyecto/:proyectoId/:presupuestoId — la hoja
 router.get(
   '/proyecto/:proyectoId/:presupuestoId',
+  checkPermission('costos_ver'),
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request<{ proyectoId: string; presupuestoId: string }>, res: Response) => {
     const proyectoId = parseId(req.params.proyectoId);
