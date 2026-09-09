@@ -205,7 +205,10 @@ router.get(
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const { mes, creado_por: creadoPor, q } = req.query as Record<string, string>;
-    const limit = Math.min(parseInt(String(req.query.limit ?? '25'), 10) || 25, 200);
+    // El tope sube a 2000 porque la lista del frontend filtra y pagina en el
+    // navegador (igual que Solicitudes): si el servidor recortara el conjunto,
+    // los filtros del encabezado mentirian sobre lo que hay.
+    const limit = Math.min(parseInt(String(req.query.limit ?? '25'), 10) || 25, 2000);
     const offset = parseInt(String(req.query.offset ?? '0'), 10) || 0;
 
     const params: unknown[] = [req.params.proyectoId];
