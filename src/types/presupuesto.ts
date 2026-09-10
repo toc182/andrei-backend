@@ -5,9 +5,14 @@
 // despues de adjudicado, con los disenos listos). Uno lleva la estrella y es
 // contra el que compara el control de costos.
 //
-// Primera manera de armarlos: a partir del desglose oficial del proyecto. Las
-// filas se copian el dia que se arma —descripcion, unidad, cantidad y PRECIO— y
-// lo unico que se escribe despues es el COSTO unitario de cada renglon.
+// Dos maneras de armarlos:
+//   'desglose' — a partir del desglose oficial del proyecto. Las filas se copian
+//                el dia que se arma —descripcion, unidad, cantidad y PRECIO— y
+//                lo unico que se escribe despues es el COSTO unitario.
+//   'cero'     — nace vacio y los renglones se escriben en la hoja. No hay
+//                precio, porque no hay desglose de donde sacarlo: la hoja dice
+//                lo que la obra CUESTA y nada mas. Es la unica manera para un
+//                proyecto que todavia no tiene desglose cargado.
 
 /** Columna multiplicadora del calculo por partes. Solo la usa la pantalla por
  *  bloques, que quedo apartada; se conserva para las otras maneras de armar. */
@@ -92,14 +97,45 @@ export interface PresupuestoDocWire {
 
 export interface CrearPresupuestoBody {
   nombre: string;
-  /** v1 solo acepta 'desglose'. */
-  origen?: 'desglose';
+  /** 'desglose' copia los renglones del desglose oficial del proyecto;
+   *  'cero' nace vacio y los renglones se escriben en la hoja. */
+  origen?: 'desglose' | 'cero';
 }
 
-/** El guardado de la hoja: solo viajan los costos. La estructura y los precios
- *  son del desglose y no se tocan desde aqui. */
+/** El guardado de la hoja armada DESDE EL DESGLOSE: solo viajan los costos. La
+ *  estructura y los precios son del desglose y no se tocan desde aqui. */
 export interface GuardarCostosBody {
   baseUpdatedAt: string;
   nombre?: string;
   costos: { id: number; costoUnitario: number | null }[];
+}
+
+/** Una fila de la hoja armada DESDE CERO. Misma forma que el desglose, de donde
+ *  sale el patron: las filas viajan planas y en orden de outline, y el padre se
+ *  nombra por tempId —no por id— porque una fila recien agregada todavia no
+ *  tiene id en la base.
+ *
+ *  `orden` no viaja: sale de la posicion en el arreglo, que es la invariante
+ *  que se valida. */
+export interface PresupuestoRenglonInput {
+  tempId: number;
+  /** UUID estable; el cliente lo reenvia para conservar identidad a traves del
+   *  borra-y-reinserta. Ausente = fila nueva y la genera la base. */
+  rowUid?: string;
+  parentTempId: number | null;
+  tipo: 'grupo' | 'item';
+  codigo: string;
+  descripcion: string;
+  unidad: string | null;
+  cantidad: number | null;
+  costoUnitario: number | null;
+}
+
+/** El guardado de la hoja armada desde cero: viaja la hoja ENTERA y reemplaza
+ *  lo que habia. Solo lo admiten los presupuestos con origen 'cero'; los que
+ *  salieron de un desglose tienen la estructura bloqueada. */
+export interface GuardarHojaBody {
+  baseUpdatedAt: string;
+  nombre?: string;
+  renglones: PresupuestoRenglonInput[];
 }

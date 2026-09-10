@@ -3,10 +3,19 @@
 // lleva la estrella (es_principal): ese es contra el que compara el control de
 // costos.
 //
-// Primera manera de armarlo: a partir del desglose OFICIAL del proyecto. Al
-// crearlo se COPIAN sus filas con su precio; despues el presupuesto no vuelve a
-// mirar el desglose, asi que si el desglose cambia, el presupuesto no se mueve.
-// Lo unico que se edita aqui es el costo unitario de cada renglon.
+// Dos maneras de armarlo, y cada una tiene su guardado:
+//
+//   'desglose' — a partir del desglose OFICIAL del proyecto. Al crearlo se
+//     COPIAN sus filas con su precio; despues el presupuesto no vuelve a mirar
+//     el desglose, asi que si el desglose cambia, este no se mueve. La
+//     estructura queda BLOQUEADA y lo unico que se edita es el costo unitario
+//     (PUT .../:presupuestoId).
+//
+//   'cero' — nace vacio y los renglones se escriben en la hoja. Es la unica
+//     manera que sirve en un proyecto que todavia no tiene desglose. Aqui la
+//     estructura SI se edita, y se guarda entera de una vez
+//     (PUT .../:presupuestoId/hoja): borra y reinserta en una transaccion,
+//     igual que un desglose.
 //
 // Todo cuelga de /proyecto/:proyectoId para que checkProjectAccess proteja
 // tambien las rutas de un presupuesto concreto (mismo patron que desgloses).
@@ -17,8 +26,8 @@ import { authenticateToken, checkPermission, checkProjectAccess } from '../middl
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
 import type {
-  CrearPresupuestoBody, DesgloseDisponibleWire, GuardarCostosBody,
-  PresupuestoListaWire, PresupuestoRenglonWire,
+  CrearPresupuestoBody, DesgloseDisponibleWire, GuardarCostosBody, GuardarHojaBody,
+  PresupuestoListaWire, PresupuestoRenglonInput, PresupuestoRenglonWire,
 } from '../types/presupuesto.js';
 
 const router = Router();
@@ -30,8 +39,12 @@ const updatedAtSql = (col = 'updated_at') => `to_char(${col}, 'YYYY-MM-DD"T"HH24
 
 class ConflictError extends Error {}
 class NotFoundError extends Error {}
+/** Un 400 que nace dentro de la transaccion, cuando la fila ya se leyo. */
+class BadRequestError extends Error {}
 
 const MAX_NOMBRE = 200;
+const MAX_RENGLONES = 5000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const num = (v: string | null): number | null => (v != null ? parseFloat(v) : null);
 
@@ -157,6 +170,20 @@ async function loadMeta(proyectoId: number, presupuestoId: number): Promise<Meta
   return m.rows[0];
 }
 
+/** Una fila del desglose oficial, tal como se lee para copiarla. */
+interface FilaDesglose {
+  id: number;
+  row_uid: string;
+  parent_id: number | null;
+  tipo: 'grupo' | 'item';
+  item: string;
+  descripcion: string;
+  unidad: string | null;
+  cantidad: string | null;
+  precio_unitario: string | null;
+  orden: number;
+}
+
 interface RenglonRow {
   id: number;
   row_uid: string;
@@ -247,13 +274,17 @@ router.post(
       res.status(400).json({ success: false, message: 'El presupuesto necesita un nombre' });
       return;
     }
-    if (body.origen != null && body.origen !== 'desglose') {
-      res.status(400).json({ success: false, message: 'Por ahora solo se puede armar desde el desglose' });
+    const origen = body.origen ?? 'desglose';
+    if (origen !== 'desglose' && origen !== 'cero') {
+      res.status(400).json({ success: false, message: 'origen invalido' });
       return;
     }
 
-    const desglose = await desgloseOficial(proyectoId);
-    if (!desglose) {
+    // Solo la manera 'desglose' necesita que el proyecto tenga uno. 'cero' nace
+    // vacio, y por eso es la unica que sirve en un proyecto donde todavia no
+    // hay nada cargado.
+    const desglose = origen === 'desglose' ? await desgloseOficial(proyectoId) : null;
+    if (origen === 'desglose' && !desglose) {
       res.status(400).json({
         success: false,
         message: 'Este proyecto todavia no tiene desglose, asi que no se puede armar de esta manera',
@@ -266,8 +297,8 @@ router.post(
       await client.query('BEGIN');
       const ins = await client.query<{ id: number }>(
         `INSERT INTO presupuestos (proyecto_id, nombre, origen, desglose_id, creado_por)
-         VALUES ($1, $2, 'desglose', $3, $4) RETURNING id`,
-        [proyectoId, nombre, desglose.id, user.id],
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [proyectoId, nombre, origen, desglose?.id ?? null, user.id],
       );
       const presupuestoId = ins.rows[0].id;
 
@@ -275,19 +306,18 @@ router.post(
       // presupuesto vive solo: el desglose puede cambiar y este no se entera.
       // Los padres vienen antes que sus hijos (ORDER BY orden respeta el
       // outline), asi que un solo recorrido resuelve parent_id -> id nuevo.
-      const filas = await client.query<{
-        id: number; row_uid: string; parent_id: number | null; tipo: 'grupo' | 'item';
-        item: string; descripcion: string; unidad: string | null;
-        cantidad: string | null; precio_unitario: string | null; orden: number;
-      }>(
-        `SELECT id, row_uid, parent_id, tipo, item, descripcion, unidad,
-                cantidad, precio_unitario, orden
-           FROM desglose_items WHERE desglose_id = $1 ORDER BY orden`,
-        [desglose.id],
-      );
+      // Sin desglose (origen 'cero') no hay nada que copiar: la hoja nace vacia.
+      const filas: FilaDesglose[] = desglose == null ? [] : (
+        await client.query<FilaDesglose>(
+          `SELECT id, row_uid, parent_id, tipo, item, descripcion, unidad,
+                  cantidad, precio_unitario, orden
+             FROM desglose_items WHERE desglose_id = $1 ORDER BY orden`,
+          [desglose.id],
+        )
+      ).rows;
 
       const idMap = new Map<number, number>();
-      for (const [i, f] of filas.rows.entries()) {
+      for (const [i, f] of filas.entries()) {
         const nuevo = await client.query<{ id: number }>(
           `INSERT INTO presupuesto_renglones
              (presupuesto_id, parent_id, seccion, tipo, codigo, descripcion, unidad,
@@ -316,7 +346,8 @@ router.post(
 
       try {
         await registrarAudit(user.id, 'crear', 'presupuesto', presupuestoId, {
-          proyecto_id: proyectoId, desglose_id: desglose.id, renglones: filas.rows.length,
+          proyecto_id: proyectoId, origen, desglose_id: desglose?.id ?? null,
+          renglones: filas.length,
         });
       } catch (auditErr) {
         console.error('Error registrando audit de presupuesto:', auditErr);
@@ -433,6 +464,176 @@ router.put(
       await client.query('ROLLBACK').catch(() => {});
       if (err instanceof NotFoundError) {
         res.status(404).json({ success: false, message: err.message });
+        return;
+      }
+      if (err instanceof ConflictError) {
+        res.status(409).json({ success: false, message: err.message });
+        return;
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Guardado de la hoja armada desde cero
+// ---------------------------------------------------------------------------
+
+/** Cordura del payload: tempIds unicos, y padres que refieren a una fila
+ *  ANTERIOR. Esa invariante posicional es lo que permite que un solo recorrido
+ *  resuelva parentTempId -> id nuevo. Mismo contrato que el desglose. */
+function validateRenglones(renglones: PresupuestoRenglonInput[]): string | null {
+  if (!Array.isArray(renglones)) return 'renglones debe ser un arreglo';
+  if (renglones.length > MAX_RENGLONES) return `Maximo ${MAX_RENGLONES} filas`;
+  const vistos = new Set<number>();
+  for (const r of renglones) {
+    if (typeof r.tempId !== 'number' || vistos.has(r.tempId)) return 'tempId duplicado o invalido';
+    if (r.rowUid != null && (typeof r.rowUid !== 'string' || !UUID_RE.test(r.rowUid))) {
+      return 'rowUid invalido';
+    }
+    if (r.parentTempId != null && !vistos.has(r.parentTempId)) {
+      return 'parentTempId debe referir a una fila anterior';
+    }
+    if (r.tipo !== 'grupo' && r.tipo !== 'item') return 'tipo invalido';
+    if (r.cantidad != null && (typeof r.cantidad !== 'number' || !Number.isFinite(r.cantidad))) {
+      return 'cantidad invalida';
+    }
+    if (r.costoUnitario != null
+        && (typeof r.costoUnitario !== 'number' || !Number.isFinite(r.costoUnitario))) {
+      return 'costo unitario invalido';
+    }
+    vistos.add(r.tempId);
+  }
+  return null;
+}
+
+/** Reemplaza TODOS los renglones del presupuesto.
+ *
+ *  `orden` sale de la posicion en el arreglo —la invariante que se valida es
+ *  posicional—, no del campo que mande el cliente.
+ *
+ *  precio_unitario se queda en NULL a proposito: una hoja armada desde cero no
+ *  tiene de donde sacar un precio, solo dice lo que la obra CUESTA. */
+async function replaceRenglones(
+  client: { query: typeof pool.query },
+  presupuestoId: number,
+  renglones: PresupuestoRenglonInput[],
+): Promise<void> {
+  await client.query(
+    `DELETE FROM presupuesto_renglones WHERE presupuesto_id = $1`,
+    [presupuestoId],
+  );
+  // Un grupo que es padre de alguien es CONTENEDOR: su total sube desde abajo,
+  // asi que sus propios montos se anulan o se contarian dos veces. Un grupo sin
+  // hijos es una "seccion de una linea" y conserva los suyos — la misma regla
+  // del desglose, y la que ya aplican listaPresupuestos() y la hoja.
+  const conHijos = new Set<number>();
+  for (const r of renglones) if (r.parentTempId != null) conHijos.add(r.parentTempId);
+
+  const idMap = new Map<number, number>();
+  for (const [i, r] of renglones.entries()) {
+    const contenedor = r.tipo === 'grupo' && conHijos.has(r.tempId);
+    // row_uid: se conserva el que manda el cliente, para que la identidad de la
+    // fila sobreviva a este borra-y-reinserta; si es nueva, la genera la base.
+    const ins = await client.query<{ id: number }>(
+      `INSERT INTO presupuesto_renglones
+         (presupuesto_id, parent_id, seccion, tipo, codigo, descripcion, unidad,
+          cantidad, precio_unitario, costo_unitario, orden, row_uid)
+       VALUES ($1, $2, 'items', $3, $4, $5, $6, $7, NULL, $8, $9,
+               COALESCE($10::uuid, gen_random_uuid()))
+       RETURNING id`,
+      [
+        presupuestoId,
+        r.parentTempId != null ? idMap.get(r.parentTempId)! : null,
+        r.tipo,
+        String(r.codigo ?? '').slice(0, 60),
+        String(r.descripcion ?? ''),
+        contenedor || r.unidad == null ? null : String(r.unidad).slice(0, 30),
+        contenedor ? null : r.cantidad,
+        contenedor ? null : r.costoUnitario,
+        i,
+        r.rowUid ?? null,
+      ],
+    );
+    idMap.set(r.tempId, ins.rows[0].id);
+  }
+}
+
+// PUT /presupuestos/proyecto/:proyectoId/:presupuestoId/hoja — guardar la hoja entera
+router.put(
+  '/proyecto/:proyectoId/:presupuestoId/hoja',
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request<{ proyectoId: string; presupuestoId: string }>, res: Response) => {
+    const user = req.user!;
+    const proyectoId = parseId(req.params.proyectoId);
+    const presupuestoId = parseId(req.params.presupuestoId);
+    if (proyectoId == null || presupuestoId == null) {
+      res.status(400).json({ success: false, message: 'Identificador invalido' });
+      return;
+    }
+    const body = req.body as GuardarHojaBody;
+    const invalido = validateRenglones(body.renglones ?? []);
+    if (invalido) {
+      res.status(400).json({ success: false, message: invalido });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const cur = await client.query<{ origen: 'desglose' | 'cero'; updated_at: string }>(
+        `SELECT origen, ${updatedAtSql()} AS updated_at FROM presupuestos
+          WHERE id = $1 AND proyecto_id = $2 AND activo = TRUE FOR UPDATE`,
+        [presupuestoId, proyectoId],
+      );
+      if (!cur.rows.length) throw new NotFoundError('Presupuesto no encontrado');
+      // La estructura de uno copiado del desglose no se toca aqui: alli las
+      // filas, las cantidades y los precios son del desglose, y lo unico que se
+      // escribe es el costo. Esa es la otra ruta.
+      if (cur.rows[0].origen !== 'cero') {
+        throw new BadRequestError(
+          'Este presupuesto salio de un desglose: sus renglones no se editan, solo sus costos',
+        );
+      }
+      if (cur.rows[0].updated_at !== body.baseUpdatedAt) {
+        throw new ConflictError('Otro usuario guardo cambios; recarga para combinar');
+      }
+
+      await replaceRenglones(client, presupuestoId, body.renglones);
+      if (body.nombre != null) {
+        const nombre = String(body.nombre).trim().slice(0, MAX_NOMBRE);
+        if (nombre) {
+          await client.query(
+            `UPDATE presupuestos SET nombre = $2 WHERE id = $1`,
+            [presupuestoId, nombre],
+          );
+        }
+      }
+      await client.query(
+        `UPDATE presupuestos SET updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [presupuestoId],
+      );
+      await client.query('COMMIT');
+
+      try {
+        await registrarAudit(user.id, 'editar', 'presupuesto', presupuestoId, {
+          proyecto_id: proyectoId, renglones: body.renglones.length,
+        });
+      } catch (auditErr) {
+        console.error('Error registrando audit de presupuesto:', auditErr);
+      }
+
+      res.json({ success: true, data: await loadDoc(await loadMeta(proyectoId, presupuestoId)) });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (err instanceof NotFoundError) {
+        res.status(404).json({ success: false, message: err.message });
+        return;
+      }
+      if (err instanceof BadRequestError) {
+        res.status(400).json({ success: false, message: err.message });
         return;
       }
       if (err instanceof ConflictError) {
