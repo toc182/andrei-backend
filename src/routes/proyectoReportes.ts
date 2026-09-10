@@ -413,6 +413,10 @@ router.get(
       `SELECT r.id, r.numero, r.fecha, r.clima, r.horas_perdidas, r.motivo,
               r.personal_calificado, r.ayudantes, r.equipo, r.creado_por,
               r.created_at, r.updated_at, r.enviado_at,
+              -- Solo el arranque del texto: la lista lo muestra recortado y
+              -- pide hasta 2000 filas de una vez. El texto completo va en el
+              -- detalle.
+              left(r.que_se_hizo, 300) AS que_se_hizo,
               u.nombre AS creador_nombre,
               (SELECT COUNT(*)::int FROM proyecto_reporte_fotos f
                 WHERE f.reporte_id = r.id) AS fotos,
