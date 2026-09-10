@@ -1082,7 +1082,7 @@ router.get(
 
 /** A dónde va el reporte. Configurable sin tocar código ni desplegar. */
 const CORREO_ADMINISTRACION =
-  process.env.REPORTES_EMAIL_TO || 'info@pinellaspanama.com';
+  process.env.REPORTES_EMAIL_TO || 'ivan@pinellaspanama.com';
 
 // POST /api/proyecto-reportes/:proyectoId/:id/emitir
 //
