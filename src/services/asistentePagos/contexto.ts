@@ -182,16 +182,10 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
     porPago.set(a.solicitud_pago_id, lista);
   }
 
-  // Un tope por pago. Casi todas las solicitudes traen una o dos lineas, pero
-  // una de caja menuda puede traer treinta articulos sueltos, y treinta lineas
-  // de un solo pago no pueden comerse el sitio de los otros veintiocho pagos.
-  // Con las primeras basta para saber de que va la compra.
-  const MAX_LINEAS = 12;
   const lineasPorPago = new Map<number, PagoContexto['lineas']>();
   for (const l of lineas.rows) {
     if (l.descripcion == null) continue;
     const lista = lineasPorPago.get(l.solicitud_pago_id) ?? [];
-    if (lista.length >= MAX_LINEAS) continue;
     lista.push({
       cantidad: numero(l.cantidad),
       unidad: l.unidad,

@@ -4,7 +4,7 @@
 // Sin base de datos y sin llamar a la inteligencia artificial: el contexto es
 // de mentira y las herramientas son funciones puras sobre el. Esto es lo que
 // decide y lo que calcula, asi que es lo que mas falta hace tener amarrado.
-import { ejecutarHerramienta, HERRAMIENTAS, MAX_PAGOS_POR_PROPUESTA } from '../src/services/asistentePagos/herramientas.js';
+import { ejecutarHerramienta, HERRAMIENTAS } from '../src/services/asistentePagos/herramientas.js';
 import { Borrador, huellaDePago } from '../src/services/asistentePagos/propuesta.js';
 import type { ContextoProyecto } from '../src/services/asistentePagos/contexto.js';
 
@@ -73,8 +73,9 @@ const correr = (nombre: string, input: unknown, ctx = contexto(), b = new Borrad
   const rango = correr('buscar_pagos', { desde: '2026-08-18', hasta: '2026-08-28' }).r.contenido as { total: number };
   ok(rango.total === 2, 'buscar: filtra por fechas', rango);
 
-  const corto = correr('buscar_pagos', { limite: 1 }).r.contenido as { hay_mas: boolean; mostrados: number };
-  ok(corto.hay_mas === true && corto.mostrados === 1, 'buscar: avisa cuando la lista se queda corta', corto);
+  // Ya no hay tope ni recorte: lo que devuelve es la lista entera.
+  const todos = correr('buscar_pagos', {}).r.contenido as { total: number; pagos: unknown[] };
+  ok(todos.pagos.length === todos.total, 'buscar: devuelve todos los que coinciden, sin recortar', todos);
 }
 
 // ---- buscar_partidas ----
@@ -109,11 +110,6 @@ const correr = (nombre: string, input: unknown, ctx = contexto(), b = new Borrad
   const vacio = correr('proponer_asignacion', { solicitudIds: [], rowUid: UID.cajon, motivo: 'x' });
   ok(!vacio.r.ok, 'asignar: rechaza la lista vacia de pagos');
 
-  const muchos = correr('proponer_asignacion', {
-    solicitudIds: Array.from({ length: MAX_PAGOS_POR_PROPUESTA + 1 }, (_, i) => i + 1),
-    rowUid: UID.cajon, motivo: 'x',
-  });
-  ok(!muchos.r.ok, 'asignar: rechaza demasiados pagos de una vez');
 }
 
 // ---- proponer_reparto ----

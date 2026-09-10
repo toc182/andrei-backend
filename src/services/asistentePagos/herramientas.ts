@@ -25,11 +25,6 @@ import type { ContextoProyecto, PagoContexto } from './contexto.js';
 import { repartirPorPeso, type ParteConPeso } from './reparto.js';
 import { Borrador, type LineaPropuesta, type ReglaPropuesta } from './propuesta.js';
 
-/** Cuantos pagos puede tocar una sola propuesta. Un tope alto pero real: si una
- *  frase toca mas que esto, casi seguro se entendio mal. */
-export const MAX_PAGOS_POR_PROPUESTA = 150;
-/** Cuantas partidas puede llevar un pago repartido. */
-export const MAX_PARTIDAS_POR_PAGO = 30;
 
 const centavos = (n: number): number => Math.round(n * 100);
 
@@ -54,8 +49,7 @@ export const HERRAMIENTAS = [
     name: 'buscar_pagos',
     description:
       'Busca pagos ya pagados de este proyecto. Uselo siempre antes de proponer, ' +
-      'para saber exactamente cuales son. Si el resultado dice que hay mas de los ' +
-      'que se muestran, pregunte al usuario en vez de proponer sobre una lista incompleta.',
+      'para saber exactamente cuales son. Devuelve todos los que coinciden.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -67,7 +61,6 @@ export const HERRAMIENTAS = [
         monto_min: { type: 'number' },
         monto_max: { type: 'number' },
         categoria_codigo: { type: 'string', description: 'Codigo de la categoria de gasto' },
-        limite: { type: 'integer', description: 'Cuantos devolver, por defecto 50, maximo 200' },
       },
       additionalProperties: false,
     },
@@ -82,7 +75,6 @@ export const HERRAMIENTAS = [
       properties: {
         texto: { type: 'string', description: 'Busca en el numero de item y en la descripcion' },
         seccion_uid: { type: 'string', description: 'Solo las de esta seccion' },
-        limite: { type: 'integer', description: 'Por defecto 30, maximo 100' },
       },
       additionalProperties: false,
     },
@@ -143,11 +135,6 @@ export const HERRAMIENTAS = [
 // La ejecucion
 // ---------------------------------------------------------------------------
 
-const tope = (v: unknown, porDefecto: number, maximo: number): number => {
-  const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : porDefecto;
-  return Math.max(1, Math.min(n, maximo));
-};
-
 const sinPartidaViva = (p: PagoContexto): boolean =>
   p.partidas.length === 0 || p.partidas.every((x) => x.item == null);
 
@@ -172,19 +159,12 @@ function buscarPagos(ctx: ContextoProyecto, input: Record<string, unknown>): Res
     pagos = pagos.filter((p) => normalizar(p.categoria ?? '').startsWith(cod));
   }
 
-  const limite = tope(input.limite, 50, 200);
-  const mostrados = pagos.slice(0, limite);
-
   return {
     ok: true,
     contenido: {
       total: pagos.length,
-      mostrados: mostrados.length,
-      // Que el modelo sepa cuando la lista se quedo corta, para preguntar en
-      // vez de proponer sobre una parte.
-      hay_mas: pagos.length > mostrados.length,
       suma: Math.round(pagos.reduce((s, p) => s + p.monto, 0) * 100) / 100,
-      pagos: mostrados,
+      pagos,
     },
   };
 }
@@ -201,15 +181,11 @@ function buscarPartidas(ctx: ContextoProyecto, input: Record<string, unknown>): 
       normalizar(p.item).includes(texto) || normalizar(p.descripcion).includes(texto));
   }
 
-  const limite = tope(input.limite, 30, 100);
-  const mostradas = partidas.slice(0, limite);
-
   return {
     ok: true,
     contenido: {
       total: partidas.length,
-      hay_mas: partidas.length > mostradas.length,
-      partidas: mostradas,
+      partidas,
     },
   };
 }
@@ -221,9 +197,6 @@ function resolverPagos(
 ): { pagos: PagoContexto[] } | { error: string } {
   const ids = Array.isArray(input.solicitudIds) ? input.solicitudIds : null;
   if (!ids || ids.length === 0) return { error: 'Hay que decir al menos un pago' };
-  if (ids.length > MAX_PAGOS_POR_PROPUESTA) {
-    return { error: `Son demasiados pagos de una vez (maximo ${MAX_PAGOS_POR_PROPUESTA}). Acote la busqueda o preguntele al usuario.` };
-  }
 
   const pagos: PagoContexto[] = [];
   for (const id of ids) {
@@ -283,9 +256,6 @@ function proponerReparto(
 
   const crudas = Array.isArray(input.partidas) ? input.partidas : [];
   if (crudas.length === 0) return falla('Hay que decir entre que partidas se reparte.');
-  if (crudas.length > MAX_PARTIDAS_POR_PAGO) {
-    return falla(`Son demasiadas partidas para un pago (maximo ${MAX_PARTIDAS_POR_PAGO}).`);
-  }
 
   const pesos: ParteConPeso[] = [];
   for (const cruda of crudas as { rowUid?: unknown; porcentaje?: unknown }[]) {
