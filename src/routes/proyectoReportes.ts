@@ -25,6 +25,7 @@ import { construirNumeroReporte } from '../services/reporteNumero.js';
 import {
   diffCampos,
   describirCambios,
+  diffFilas,
   parseHoras,
   type Cambio,
 } from '../services/reporteCambios.js';
@@ -51,6 +52,18 @@ interface ReporteBody {
   que_se_hizo?: string;
   atrasos?: string | null;
   novedades?: string | null;
+  // Las tres secciones que son filas. OJO: `equipos` (plural) son las filas
+  // nuevas con unidades y horas; `equipo` (singular, arriba) es la lista de
+  // texto vieja, que se queda con sus datos y ya nadie escribe.
+  personal?: { puesto_id: number; cantidad: number | string }[];
+  equipos?: { equipo_id: number; unidades: number | string; horas: number | string }[];
+  entregas?: {
+    categoria_id: number;
+    descripcion: string;
+    cantidad?: number | string | null;
+    unidad?: string | null;
+    notas?: string | null;
+  }[];
 }
 
 interface ReporteRow {
@@ -191,6 +204,163 @@ function validarAlta(body: ReporteBody): string | null {
   if (!body.clima || !CLIMAS.includes(body.clima)) return 'Clima inválido';
   if (!body.que_se_hizo?.trim()) return 'Debes describir qué se hizo hoy';
   return null;
+}
+
+/**
+ * Guarda las filas de Personal, Equipo y Entregas de un reporte.
+ *
+ * Una seccion ausente del cuerpo NO se toca: es la misma regla que el UPDATE de
+ * los campos sueltos. Presente y vacia si borra, porque eso es lo que dice una
+ * correccion que quito todas las filas.
+ *
+ * No se guardan las filas en cero. "Vacio es cero" quiere decir que la ausencia
+ * de fila ya significa cero, y guardar un cero por cada puesto de cada empresa
+ * todos los dias llenaria la tabla de nada.
+ *
+ * Los identificadores se filtran contra las listas de ESTE proyecto: sin eso,
+ * un id de otra obra colaria un puesto ajeno en el reporte.
+ */
+async function guardarFilas(
+  reporteId: number | string,
+  proyectoId: number,
+  body: ReporteBody,
+): Promise<void> {
+  if (body.personal !== undefined) {
+    await query('DELETE FROM proyecto_reporte_personal WHERE reporte_id = $1', [reporteId]);
+    const filas = body.personal.filter((f) => Number(f.cantidad) > 0);
+    if (filas.length > 0) {
+      await query(
+        `INSERT INTO proyecto_reporte_personal (reporte_id, puesto_id, cantidad)
+         SELECT $1, p.id, v.cantidad
+           FROM unnest($2::int[], $3::int[]) AS v(puesto_id, cantidad)
+           JOIN proyecto_puestos p
+             ON p.id = v.puesto_id AND p.proyecto_id = $4 AND p.activo = true`,
+        [reporteId, filas.map((f) => Number(f.puesto_id)),
+          filas.map((f) => Number(f.cantidad)), proyectoId],
+      );
+    }
+  }
+
+  if (body.equipos !== undefined) {
+    await query('DELETE FROM proyecto_reporte_equipos WHERE reporte_id = $1', [reporteId]);
+    // Basta con que tenga unidades U horas: una maquina puede estar en obra
+    // sin haber trabajado, y tambien al reves si nadie conto las unidades.
+    const filas = body.equipos.filter(
+      (f) => Number(f.unidades) > 0 || Number(f.horas) > 0,
+    );
+    if (filas.length > 0) {
+      await query(
+        `INSERT INTO proyecto_reporte_equipos (reporte_id, equipo_id, unidades, horas)
+         SELECT $1, e.id, v.unidades, v.horas
+           FROM unnest($2::int[], $3::int[], $4::numeric[]) AS v(equipo_id, unidades, horas)
+           JOIN proyecto_equipos e
+             ON e.id = v.equipo_id AND e.proyecto_id = $5 AND e.activo = true`,
+        [reporteId, filas.map((f) => Number(f.equipo_id)),
+          filas.map((f) => Number(f.unidades) || 0),
+          filas.map((f) => Number(f.horas) || 0), proyectoId],
+      );
+    }
+  }
+
+  if (body.entregas !== undefined) {
+    await query('DELETE FROM proyecto_reporte_entregas WHERE reporte_id = $1', [reporteId]);
+    const filas = body.entregas.filter((f) => String(f.descripcion ?? '').trim() !== '');
+    for (const [i, f] of filas.entries()) {
+      await query(
+        `INSERT INTO proyecto_reporte_entregas
+           (reporte_id, categoria_id, descripcion, cantidad, unidad, notas, orden)
+         SELECT $1, c.id, $3, $4, $5, $6, $7
+           FROM proyecto_entrega_categorias c
+          WHERE c.id = $2 AND c.proyecto_id = $8 AND c.activo = true`,
+        [reporteId, Number(f.categoria_id), String(f.descripcion).trim(),
+          f.cantidad === undefined || f.cantidad === null || f.cantidad === ''
+            ? null : Number(f.cantidad),
+          String(f.unidad ?? '').trim() || null,
+          String(f.notas ?? '').trim() || null,
+          i + 1, proyectoId],
+      );
+    }
+  }
+}
+
+/**
+ * Las filas de Personal, Equipo y Entregas de un reporte, ya con sus nombres.
+ *
+ * Se leen por JOIN contra las listas SIN filtrar por `activo`: un puesto que se
+ * quito despues sigue siendo lo que ese reporte dijo ese dia, y esconderlo
+ * cambiaria el pasado.
+ */
+async function leerFilas(reporteId: number | string) {
+  const [personal, equipos, entregas] = await Promise.all([
+    query(
+      `SELECT rp.puesto_id, rp.cantidad, p.nombre, p.empresa_id, p.orden,
+              e.nombre AS empresa_nombre
+         FROM proyecto_reporte_personal rp
+         JOIN proyecto_puestos p ON p.id = rp.puesto_id
+         LEFT JOIN proyecto_empresas e ON e.id = p.empresa_id
+        WHERE rp.reporte_id = $1
+        ORDER BY e.orden NULLS FIRST, e.id NULLS FIRST, p.orden, p.id`,
+      [reporteId],
+    ),
+    query(
+      `SELECT re.equipo_id, re.unidades, re.horas, q.nombre
+         FROM proyecto_reporte_equipos re
+         JOIN proyecto_equipos q ON q.id = re.equipo_id
+        WHERE re.reporte_id = $1
+        ORDER BY q.orden, q.id`,
+      [reporteId],
+    ),
+    query(
+      `SELECT en.id, en.categoria_id, en.descripcion, en.cantidad, en.unidad,
+              en.notas, en.orden, c.nombre AS categoria
+         FROM proyecto_reporte_entregas en
+         JOIN proyecto_entrega_categorias c ON c.id = en.categoria_id
+        WHERE en.reporte_id = $1
+        ORDER BY en.orden, en.id`,
+      [reporteId],
+    ),
+  ]);
+  return {
+    personal: personal.rows,
+    equipos: equipos.rows,
+    entregas: entregas.rows,
+  };
+}
+
+/**
+ * Las filas de un reporte en la forma que compara reporteCambios.
+ *
+ * La clave lleva el id, no el nombre: el mismo puesto puede existir en el
+ * bloque propio y en el de un subcontratista, y si la clave fuera el nombre,
+ * corregir los ayudantes de uno pisaria a los del otro en el rastro.
+ */
+function paraComparar(filas: {
+  personal: Record<string, unknown>[];
+  equipos: Record<string, unknown>[];
+  entregas: Record<string, unknown>[];
+}) {
+  const conEmpresa = (f: Record<string, unknown>) =>
+    f.empresa_nombre ? `${String(f.empresa_nombre)} · ${String(f.nombre)}` : String(f.nombre);
+
+  return {
+    personal: filas.personal.map((f) => ({
+      clave: `puesto:${String(f.puesto_id)}`,
+      label: conEmpresa(f),
+      valor: Number(f.cantidad),
+    })),
+    equipos: filas.equipos.map((f) => ({
+      clave: `equipo:${String(f.equipo_id)}`,
+      label: String(f.nombre),
+      valor: `${Number(f.unidades)} u · ${Number(f.horas)} h`,
+    })),
+    entregas: filas.entregas.map((f) => ({
+      clave: `entrega:${String(f.descripcion).toLowerCase()}`,
+      label: String(f.descripcion),
+      valor: [f.cantidad === null ? null : Number(f.cantidad), f.unidad]
+        .filter((x) => x !== null && x !== undefined && x !== '')
+        .join(' ') || '—',
+    })),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +583,8 @@ router.get(
 
     const autorId = (reporte.rows[0] as { creado_por: number }).creado_por;
 
+    const filas = await leerFilas(req.params.id);
+
     res.json({
       success: true,
       data: {
@@ -420,6 +592,7 @@ router.get(
         areas: areas.rows,
         fotos: fotosConUrl,
         correcciones: correcciones.rows,
+        ...filas,
         // Para que la pantalla no ofrezca "Editar" donde la API va a negarlo.
         puede_editar: puedeCorregir(req, autorId),
       },
@@ -503,6 +676,8 @@ router.post(
         [reporte.id, body.areas, proyectoId],
       );
     }
+
+    await guardarFilas(reporte.id, proyectoId, body);
 
     await registrarAudit(req.user!.id, 'crear', 'reporte_diario', reporte.id, {
       proyecto_id: proyectoId,
@@ -612,6 +787,11 @@ router.put(
       }
     }
 
+    // El antes se lee ANTES de guardar; si no, se compararia contra si mismo.
+    const filasAntes = paraComparar(await leerFilas(req.params.id));
+
+    await guardarFilas(req.params.id, proyectoId, body);
+
     const areasAhora = await query<{ id: number }>(
       'SELECT area_id AS id FROM proyecto_reporte_areas WHERE reporte_id = $1',
       [req.params.id],
@@ -634,6 +814,20 @@ router.put(
         areas: body.areas ? areasAhora.rows.map((a) => a.id) : undefined,
       },
     );
+
+    // Las filas se comparan aparte, porque diffCampos solo sabe de campos
+    // sueltos. Solo entran las secciones que la peticion menciono: una
+    // correccion que no habla de Personal no lo esta cambiando.
+    const filasAhora = paraComparar(await leerFilas(req.params.id));
+    if (body.personal !== undefined) {
+      Object.assign(cambios, diffFilas(filasAntes.personal, filasAhora.personal, 0));
+    }
+    if (body.equipos !== undefined) {
+      Object.assign(cambios, diffFilas(filasAntes.equipos, filasAhora.equipos, null));
+    }
+    if (body.entregas !== undefined) {
+      Object.assign(cambios, diffFilas(filasAntes.entregas, filasAhora.entregas, null));
+    }
 
     // Un guardado que no movio nada no deja linea: si cada guardado dejara
     // rastro, el rastro se llenaria de ruido y dejaria de leerse.
@@ -732,6 +926,8 @@ export async function buildReportePdfInput(
     [reporteId],
   );
 
+  const filas = await leerFilas(reporteId);
+
   // pg devuelve una columna DATE como objeto Date, no como texto: cortarlo
   // con slice daba "Tue Sep 08" y de ahi "Invalid Date". Se toman los
   // componentes y se rearma a mediodia, para que ningun cambio de huso corra
@@ -770,6 +966,24 @@ export async function buildReportePdfInput(
     personalCalificado: Number(row.personal_calificado),
     ayudantes: Number(row.ayudantes),
     equipo: row.equipo ?? [],
+    personal: (filas.personal as Record<string, unknown>[]).map((f) => ({
+      nombre: String(f.nombre),
+      empresa: f.empresa_nombre === null || f.empresa_nombre === undefined
+        ? null : String(f.empresa_nombre),
+      cantidad: Number(f.cantidad),
+    })),
+    equipos: (filas.equipos as Record<string, unknown>[]).map((f) => ({
+      nombre: String(f.nombre),
+      unidades: Number(f.unidades),
+      horas: Number(f.horas),
+    })),
+    entregas: (filas.entregas as Record<string, unknown>[]).map((f) => ({
+      categoria: String(f.categoria),
+      descripcion: String(f.descripcion),
+      cantidad: f.cantidad === null || f.cantidad === undefined ? null : Number(f.cantidad),
+      unidad: f.unidad === null || f.unidad === undefined ? null : String(f.unidad),
+      notas: f.notas === null || f.notas === undefined ? null : String(f.notas),
+    })),
     areas: areas.rows.map((a) => a.nombre),
     queSeHizo: row.que_se_hizo,
     atrasos: row.atrasos,

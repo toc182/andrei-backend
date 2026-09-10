@@ -55,6 +55,7 @@ import projectTodosRoutes from './routes/projectTodos.js';
 import projectBitacoraRoutes from './routes/projectBitacora.js';
 import asistentePagosRoutes from './routes/asistentePagos.js';
 import proyectoAreasRoutes from './routes/proyectoAreas.js';
+import proyectoListasRoutes from './routes/proyectoListas.js';
 import proyectoReportesRoutes from './routes/proyectoReportes.js';
 import usersRoutes from './routes/users.js';
 import solicitudesPagoRoutes from './routes/solicitudesPago.js';
@@ -123,6 +124,7 @@ app.use('/api/project-todos', projectTodosRoutes);
 app.use('/api/project-bitacora', projectBitacoraRoutes);
 app.use('/api/costs', asistentePagosRoutes);
 app.use('/api/proyecto-areas', proyectoAreasRoutes);
+app.use('/api/proyecto-listas', proyectoListasRoutes);
 app.use('/api/proyecto-reportes', proyectoReportesRoutes);
 app.use('/api/users', usersRoutes);
 // Inyectar token de query param para el endpoint PDF (window.open no envía headers)

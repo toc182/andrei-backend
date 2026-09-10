@@ -20,7 +20,7 @@ export const CAMPO_LABELS: Record<string, string> = {
   ayudantes: 'Ayudantes',
   equipo: 'Equipo utilizado',
   areas: 'Áreas',
-  que_se_hizo: '¿Qué se hizo hoy?',
+  que_se_hizo: 'Trabajo ejecutado',
   atrasos: 'Atrasos o impedimentos',
   novedades: 'Novedades del día',
 };
@@ -130,6 +130,60 @@ export function diffCampos(
     };
   }
 
+  return salida;
+}
+
+/**
+ * Una fila de Personal, Equipo o Entregas, reducida a lo que hace falta para
+ * compararla: una clave estable, el nombre que lee la gente, y su valor.
+ */
+export interface FilaComparable {
+  clave: string;
+  label: string;
+  valor: string | number;
+}
+
+/**
+ * Compara dos conjuntos de filas y devuelve las que se movieron.
+ *
+ * Existe porque diffCampos solo sabe de campos sueltos: cuando Personal paso a
+ * ser filas, corregir de 14 a 9 ayudantes dejaba de aparecer en el rastro.
+ *
+ * `faltante` es lo que vale una fila que no esta. En Personal y Equipo una fila
+ * ausente significa cero —es la regla acordada, "vacio es cero"—, asi que se
+ * pasa 0 y el rastro dice "Ayudantes de 0 a 9". En Entregas no hay cero posible:
+ * una entrega existe o no, asi que se pasa null y el rastro dice "se agrego
+ * Varilla #5".
+ *
+ * Puro a proposito, como el resto del modulo: sin consultas a la base.
+ */
+export function diffFilas(
+  antes: FilaComparable[],
+  despues: FilaComparable[],
+  faltante: 0 | null = 0,
+): Record<string, Cambio> {
+  const porClave = (filas: FilaComparable[]) => {
+    const m = new Map<string, FilaComparable>();
+    for (const f of filas) m.set(f.clave, f);
+    return m;
+  };
+  const a = porClave(antes);
+  const b = porClave(despues);
+
+  const salida: Record<string, Cambio> = {};
+  for (const clave of new Set([...a.keys(), ...b.keys()])) {
+    const va = a.get(clave);
+    const vb = b.get(clave);
+    const valorA = va ? va.valor : faltante;
+    const valorB = vb ? vb.valor : faltante;
+    if (String(valorA) === String(valorB)) continue;
+    salida[clave] = {
+      // El label sale de la fila que exista; si se quito, de la vieja.
+      label: (vb ?? va)!.label,
+      antes: valorA,
+      despues: valorB,
+    };
+  }
   return salida;
 }
 

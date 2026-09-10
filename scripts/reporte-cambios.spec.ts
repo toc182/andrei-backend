@@ -6,7 +6,8 @@
 // no registrar un cambio real, y registrar ruido hasta que el rastro deje de
 // leerse.
 import {
-  diffCampos, describirCambios, parseHoras,
+  diffCampos, describirCambios, diffFilas, parseHoras,
+  type FilaComparable,
 } from '../src/services/reporteCambios.js';
 
 let passed = 0; let failed = 0;
@@ -98,6 +99,82 @@ const campos = (o: object) => Object.keys(o).sort().join(',');
   ok(parseHoras('1.5') === 1.5, 'texto numerico se convierte');
   ok(parseHoras(0) === 0, 'el cero explicito se conserva');
   ok(parseHoras('abc') === null, 'basura no se convierte en NaN silencioso');
+}
+
+
+// ---- filas: Personal y Equipo, donde una fila ausente vale cero ----
+{
+  const antes: FilaComparable[] = [
+    { clave: 'puesto:1', label: 'Calificados', valor: 14 },
+    { clave: 'puesto:2', label: 'Ayudantes', valor: 9 },
+  ];
+  const despues: FilaComparable[] = [
+    { clave: 'puesto:1', label: 'Calificados', valor: 14 },
+    { clave: 'puesto:2', label: 'Ayudantes', valor: 5 },
+  ];
+  const c = diffFilas(antes, despues);
+  ok(campos(c) === 'puesto:2', 'solo la fila que cambio entra al rastro');
+  ok(c['puesto:2'].antes === 9 && c['puesto:2'].despues === 5, 'guarda de 9 a 5');
+  ok(describirCambios(c) === 'Ayudantes de 9 a 5', 'se lee como una frase');
+}
+
+{
+  // Una fila que no estaba significa cero, no "se agrego": es la regla
+  // acordada de que la casilla vacia es cero.
+  const c = diffFilas([], [{ clave: 'puesto:3', label: 'Timekeeper', valor: 1 }]);
+  ok(describirCambios(c) === 'Timekeeper de 0 a 1', 'una fila nueva se lee desde cero');
+}
+
+{
+  const c = diffFilas([{ clave: 'puesto:3', label: 'Timekeeper', valor: 1 }], []);
+  ok(describirCambios(c) === 'Timekeeper de 1 a 0', 'una fila que desaparece cae a cero');
+}
+
+{
+  const iguales: FilaComparable[] = [
+    { clave: 'eq:1', label: 'Retroexcavadora', valor: '1 u - 6 h' },
+  ];
+  ok(campos(diffFilas(iguales, iguales)) === '', 'un guardado que no movio nada no deja linea');
+}
+
+{
+  // El mismo puesto en dos bloques son dos filas distintas: la clave lleva el
+  // id, no el nombre. Sin esto, cambiar los ayudantes de un subcontratista
+  // pisaria a los propios en el rastro.
+  const c = diffFilas(
+    [
+      { clave: 'puesto:2', label: 'Ayudantes', valor: 9 },
+      { clave: 'puesto:7', label: 'Aceros del Caribe - Ayudantes', valor: 2 },
+    ],
+    [
+      { clave: 'puesto:2', label: 'Ayudantes', valor: 9 },
+      { clave: 'puesto:7', label: 'Aceros del Caribe - Ayudantes', valor: 4 },
+    ],
+  );
+  ok(campos(c) === 'puesto:7', 'dos bloques con el mismo puesto no se confunden');
+  ok(c['puesto:7'].label === 'Aceros del Caribe - Ayudantes', 'el label dice de que empresa es');
+}
+
+// ---- filas: Entregas, donde no hay cero posible ----
+{
+  const c = diffFilas([], [{ clave: 'ent:1', label: 'Varilla #5', valor: '2 ton' }], null);
+  ok(describirCambios(c) === 'se agrego Varilla #5'.replace('agrego', 'agregó'),
+     'una entrega nueva se agrega, no sube de cero');
+}
+
+{
+  const c = diffFilas([{ clave: 'ent:1', label: 'Varilla #5', valor: '2 ton' }], [], null);
+  ok(describirCambios(c) === 'se quito Varilla #5'.replace('quito', 'quitó'),
+     'una entrega borrada se quita');
+}
+
+{
+  const c = diffFilas(
+    [{ clave: 'ent:1', label: 'Varilla #5', valor: '2 ton' }],
+    [{ clave: 'ent:1', label: 'Varilla #5', valor: '3 ton' }],
+    null,
+  );
+  ok(describirCambios(c) === 'Varilla #5 de 2 ton a 3 ton', 'una entrega corregida dice de que a que');
 }
 
 console.log(`\n${passed} pasaron, ${failed} fallaron`);
