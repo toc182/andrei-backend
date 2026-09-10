@@ -1296,69 +1296,69 @@ router.get(
         solicitud_pago_id: number; row_uid: string; monto: string;
         item: string | null; descripcion: string | null;
       }>(
+        // Solo el presupuesto OFICIAL resuelve el nombre de la partida. Una
+        // clasificacion hecha contra otro presupuesto vuelve con item y
+        // descripcion en null, y la pantalla la trata como pendiente de
+        // reasignar — que es lo que debe pasar al mover la estrella.
         `${PAGADAS_CTE}
          SELECT sp.solicitud_pago_id, sp.row_uid, sp.monto::text AS monto,
-                i.item, i.descripcion
+                r.codigo AS item, r.descripcion
            FROM pagadas pg
            JOIN solicitud_pago_partidas sp ON sp.solicitud_pago_id = pg.id
-           LEFT JOIN desglose_items i
-                  ON i.desglose_id = sp.desglose_id AND i.row_uid = sp.row_uid
+           LEFT JOIN presupuestos p
+                  ON p.id = sp.presupuesto_id AND p.activo AND p.es_principal
+           LEFT JOIN presupuesto_renglones r
+                  ON r.presupuesto_id = p.id AND r.row_uid = sp.row_uid
           ORDER BY sp.id`,
         [proyectoId],
       ),
-      // Presupuestado contra gastado, partida por partida. El puente entre los
-      // dos lados es row_uid: el presupuesto guarda de que fila del desglose
-      // nacio cada renglon, y el gasto se asigna a esa misma fila.
+      // Presupuestado contra gastado, partida por partida. Desde la migracion
+      // 161 los dos lados viven en la misma tabla —el gasto se ancla al renglon
+      // del presupuesto— asi que ya no hace falta puente por desglose_row_uid.
       //
-      // Van TODAS las partidas del desglose, tengan gasto o no: el cuadro es el
-      // presupuesto entero, y una partida sin tocar tambien es informacion.
+      // Van TODAS las partidas del presupuesto, tengan gasto o no: el cuadro es
+      // el presupuesto entero, y una partida sin tocar tambien es informacion.
       query<{
         row_uid: string; item: string; descripcion: string;
         presupuestado: string | null; gastado: string | null;
       }>(
         `WITH oficial AS (
-           SELECT id FROM desgloses
-            WHERE proyecto_id = $1 AND tipo = 'oficial' AND activo = TRUE
+           SELECT id FROM presupuestos
+            WHERE proyecto_id = $1 AND activo = TRUE AND es_principal = TRUE
             ORDER BY id LIMIT 1
          ),
-         presu AS (
-           SELECT r.desglose_row_uid AS row_uid,
-                  SUM(r.cantidad * r.costo_unitario) AS presupuestado
-             FROM presupuestos p
-             JOIN presupuesto_renglones r ON r.presupuesto_id = p.id
-            WHERE p.proyecto_id = $1 AND p.activo = TRUE AND p.es_principal = TRUE
-              AND NOT EXISTS (SELECT 1 FROM presupuesto_renglones h WHERE h.parent_id = r.id)
-            GROUP BY r.desglose_row_uid
-         ),
          gasto AS (
-           SELECT sp.row_uid, SUM(sp.monto) AS gastado
+           SELECT sp.presupuesto_id, sp.row_uid, SUM(sp.monto) AS gastado
              FROM solicitud_pago_partidas sp
              JOIN solicitudes_pago s ON s.id = sp.solicitud_pago_id
             WHERE s.proyecto_id = $1 AND s.activo = TRUE
               AND s.estado IN ('pagada', 'facturada')
-            GROUP BY sp.row_uid
+            GROUP BY sp.presupuesto_id, sp.row_uid
          )
-         SELECT i.row_uid, i.item, i.descripcion,
-                pr.presupuestado::text AS presupuestado,
-                g.gastado::text        AS gastado
-           FROM desglose_items i
-           JOIN oficial o ON o.id = i.desglose_id
-           LEFT JOIN presu pr ON pr.row_uid = i.row_uid
-           LEFT JOIN gasto g  ON g.row_uid  = i.row_uid
-          WHERE NOT EXISTS (SELECT 1 FROM desglose_items h WHERE h.parent_id = i.id)
-          ORDER BY i.orden`,
+         SELECT r.row_uid, r.codigo AS item, r.descripcion,
+                (r.cantidad * r.costo_unitario)::text AS presupuestado,
+                g.gastado::text                       AS gastado
+           FROM presupuesto_renglones r
+           JOIN oficial o ON o.id = r.presupuesto_id
+           LEFT JOIN gasto g
+                  ON g.presupuesto_id = r.presupuesto_id AND g.row_uid = r.row_uid
+          WHERE NOT EXISTS (SELECT 1 FROM presupuesto_renglones h WHERE h.parent_id = r.id)
+          ORDER BY r.orden`,
         [proyectoId],
       ),
       // Cuantos pagos no caen en ninguna fila viva del cuadro: los que no tienen
-      // reparto, y los que lo tienen contra una partida ya borrada.
+      // reparto, los que lo tienen contra una partida ya borrada, y los que lo
+      // tienen contra un presupuesto que ya no es el oficial.
       query<{ pagos: string }>(
         `${PAGADAS_CTE}
          SELECT COUNT(*)::text AS pagos
            FROM pagadas pg
           WHERE NOT EXISTS (
             SELECT 1 FROM solicitud_pago_partidas sp
-              JOIN desglose_items i
-                ON i.desglose_id = sp.desglose_id AND i.row_uid = sp.row_uid
+              JOIN presupuestos p
+                ON p.id = sp.presupuesto_id AND p.activo AND p.es_principal
+              JOIN presupuesto_renglones r
+                ON r.presupuesto_id = p.id AND r.row_uid = sp.row_uid
              WHERE sp.solicitud_pago_id = pg.id
           )`,
         [proyectoId],
@@ -1473,7 +1473,7 @@ router.get(
       return;
     }
     const data = await partidasDelProyecto(proyectoId);
-    res.json({ success: true, data: data ?? { desgloseId: null, partidas: [], secciones: [] } });
+    res.json({ success: true, data: data ?? { presupuestoId: null, partidas: [], secciones: [] } });
   }),
 );
 
@@ -1547,7 +1547,7 @@ router.put(
       await client.query('BEGIN');
       await aplicarPartidasDePago(client, {
         solicitudId,
-        desgloseId: disponible.desgloseId,
+        presupuestoId: disponible.presupuestoId,
         lineas,
         montoTotalCentavos: totalPago,
         validas,
@@ -1569,7 +1569,7 @@ router.put(
       await registrarAudit(user.id, 'editar', 'solicitud_pago', solicitudId, {
         accion: 'asignar_partidas',
         proyecto_id: proyectoId,
-        desglose_id: disponible.desgloseId,
+        presupuesto_id: disponible.presupuestoId,
         partidas: lineas.length,
       });
     } catch (auditErr) {

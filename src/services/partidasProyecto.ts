@@ -1,10 +1,14 @@
 // src/services/partidasProyecto.ts
-// A que partida del desglose pertenece cada pago.
+// A que partida pertenece cada pago.
 //
-// El ancla es (desglose_id, row_uid) del desglose OFICIAL del proyecto, no el
-// presupuesto: los presupuestos van y vienen —y la estrella se puede mover a
-// mitad de obra— mientras que el desglose es la lista de partidas del contrato.
-// Asi, cambiar de presupuesto no descoloca el gasto ya clasificado.
+// El ancla es (presupuesto_id, row_uid) del presupuesto OFICIAL del proyecto.
+// Antes era el desglose del contrato, y se cambio porque un desglose puede
+// tener 8 lineas: con eso no se controla un costo. El detalle esta en el
+// presupuesto (Ivan, 2026-09-10; migracion 161).
+//
+// Que la clasificacion guarde SU presupuesto es lo que hace seguro mover la
+// estrella: las lineas del presupuesto anterior dejan de casar y todo aparece
+// en cero, pero no se borran. Volver a marcarlo las devuelve.
 //
 // Solo son costeables las filas SIN HIJOS. Una fila con hijos es un contenedor:
 // su total sube desde abajo, y meterle gasto propio seria contarlo dos veces
@@ -28,9 +32,9 @@ export interface PartidaWire {
   rowUid: string;
   item: string;
   descripcion: string;
-  /** Lo que el presupuesto oficial le puso a esta partida. Es el peso con el
-   *  que se reparte un gasto general: una partida que es el 20% del
-   *  presupuesto carga el 20% del extintor. null = sin costo escrito, y
+  /** Lo que el presupuesto le puso a esta partida: cantidad x costo unitario.
+   *  Es el peso con el que se reparte un gasto general — una partida que es el
+   *  20% del presupuesto carga el 20% del extintor. null = sin costo escrito, y
    *  entonces no entra en el reparto porque no hay con que calcular su parte. */
   presupuestado: number | null;
   /** El grupo del que cuelga, para poder repartir solo dentro de una seccion.
@@ -46,13 +50,14 @@ export interface SeccionWire {
 }
 
 export interface PartidasDelProyecto {
-  desgloseId: number;
+  presupuestoId: number;
   partidas: PartidaWire[];
   secciones: SeccionWire[];
 }
 
 /** Una linea de reparto de un pago. item/descripcion van en null cuando la fila
- *  ya no esta en el desglose: la partida se borro despues de asignarla. */
+ *  ya no esta en el presupuesto: o se borro despues de asignarla, o la estrella
+ *  se movio a otro presupuesto y esta linea es del anterior. */
 export interface PartidaAsignadaWire {
   rowUid: string;
   item: string | null;
@@ -69,45 +74,39 @@ export interface LineaPartida {
  *  Las rutas lo traducen a un 400 con ese mismo mensaje. */
 export class RepartoInvalidoError extends Error {}
 
-/** El desglose oficial del proyecto, sus filas costeables y las secciones que
- *  las agrupan. null si el proyecto no tiene desglose. */
+/** El presupuesto oficial del proyecto, sus filas costeables y las secciones
+ *  que las agrupan. null si el proyecto no tiene presupuesto oficial — y
+ *  entonces no hay a que clasificar, igual que antes pasaba sin desglose.
+ *
+ *  Costeable = fila SIN HIJOS. Una fila con hijos es un contenedor: su total
+ *  sube desde abajo y meterle gasto propio seria contarlo dos veces. */
 export async function partidasDelProyecto(
   proyectoId: number,
 ): Promise<PartidasDelProyecto | null> {
-  const d = await query<{ id: number }>(
-    `SELECT id FROM desgloses
-      WHERE proyecto_id = $1 AND tipo = 'oficial' AND activo = TRUE
+  const p = await query<{ id: number }>(
+    `SELECT id FROM presupuestos
+      WHERE proyecto_id = $1 AND activo = TRUE AND es_principal = TRUE
       ORDER BY id LIMIT 1`,
     [proyectoId],
   );
-  if (!d.rows.length) return null;
-  const desgloseId = d.rows[0].id;
+  if (!p.rows.length) return null;
+  const presupuestoId = p.rows[0].id;
 
   const filas = await query<{
     row_uid: string; item: string; descripcion: string; presupuestado: string | null;
     seccion_uid: string | null; seccion_item: string | null; seccion_desc: string | null;
   }>(
-    `WITH presu AS (
-       SELECT r.desglose_row_uid AS row_uid,
-              SUM(r.cantidad * r.costo_unitario) AS presupuestado
-         FROM presupuestos p
-         JOIN presupuesto_renglones r ON r.presupuesto_id = p.id
-        WHERE p.proyecto_id = $2 AND p.activo = TRUE AND p.es_principal = TRUE
-          AND NOT EXISTS (SELECT 1 FROM presupuesto_renglones h WHERE h.parent_id = r.id)
-        GROUP BY r.desglose_row_uid
-     )
-     SELECT i.row_uid, i.item, i.descripcion,
-            pr.presupuestado::text AS presupuestado,
-            g.row_uid    AS seccion_uid,
-            g.item       AS seccion_item,
+    `SELECT r.row_uid, r.codigo AS item, r.descripcion,
+            (r.cantidad * r.costo_unitario)::text AS presupuestado,
+            g.row_uid     AS seccion_uid,
+            g.codigo      AS seccion_item,
             g.descripcion AS seccion_desc
-       FROM desglose_items i
-       LEFT JOIN desglose_items g ON g.id = i.parent_id
-       LEFT JOIN presu pr ON pr.row_uid = i.row_uid
-      WHERE i.desglose_id = $1
-        AND NOT EXISTS (SELECT 1 FROM desglose_items h WHERE h.parent_id = i.id)
-      ORDER BY i.orden`,
-    [desgloseId, proyectoId],
+       FROM presupuesto_renglones r
+       LEFT JOIN presupuesto_renglones g ON g.id = r.parent_id
+      WHERE r.presupuesto_id = $1
+        AND NOT EXISTS (SELECT 1 FROM presupuesto_renglones h WHERE h.parent_id = r.id)
+      ORDER BY r.orden`,
+    [presupuestoId],
   );
 
   const secciones: SeccionWire[] = [];
@@ -126,7 +125,7 @@ export async function partidasDelProyecto(
   }
 
   return {
-    desgloseId,
+    presupuestoId,
     partidas: filas.rows.map((f) => ({
       rowUid: f.row_uid,
       item: f.item,
@@ -149,7 +148,7 @@ export function normalizarLineas(
     const rowUid = typeof l.rowUid === 'string' ? l.rowUid : '';
     const monto = typeof l.monto === 'number' ? l.monto : NaN;
     if (!validas.has(rowUid)) {
-      throw new RepartoInvalidoError('Esa partida no está en el desglose del proyecto');
+      throw new RepartoInvalidoError('Esa partida no está en el presupuesto del proyecto');
     }
     if (!Number.isFinite(monto) || centavos(monto) <= 0) {
       throw new RepartoInvalidoError('Cada partida necesita un monto mayor que cero');
@@ -183,14 +182,14 @@ export async function aplicarPartidasDePago(
   client: PoolClient,
   args: {
     solicitudId: number;
-    desgloseId: number;
+    presupuestoId: number;
     lineas: LineaPartida[];
     montoTotalCentavos: number;
     validas: Set<string>;
     userId: number;
   },
 ): Promise<void> {
-  const { solicitudId, desgloseId, lineas, montoTotalCentavos, validas, userId } = args;
+  const { solicitudId, presupuestoId, lineas, montoTotalCentavos, validas, userId } = args;
 
   const limpias = normalizarLineas(lineas, validas);
   comprobarSuma(limpias, montoTotalCentavos);
@@ -202,26 +201,29 @@ export async function aplicarPartidasDePago(
   for (const l of limpias) {
     await client.query(
       `INSERT INTO solicitud_pago_partidas
-         (solicitud_pago_id, desglose_id, row_uid, monto, creado_por)
+         (solicitud_pago_id, presupuesto_id, row_uid, monto, creado_por)
        VALUES ($1, $2, $3, $4, $5)`,
-      [solicitudId, desgloseId, l.rowUid, l.monto, userId],
+      [solicitudId, presupuestoId, l.rowUid, l.monto, userId],
     );
   }
 }
 
 /** El reparto de un pago tal como lo pinta la pantalla. LEFT JOIN a proposito:
- *  si la fila desaparecio del desglose, la linea sigue aqui con el nombre vacio
- *  y la pantalla la trata como pendiente de volver a asignar. */
+ *  si la fila ya no esta —se borro, o la estrella se movio a otro presupuesto—
+ *  la linea sigue aqui con el nombre vacio y la pantalla la trata como
+ *  pendiente de volver a asignar. */
 export async function leerPartidasDePago(
   solicitudId: number,
 ): Promise<PartidaAsignadaWire[]> {
   const guardadas = await query<{
     row_uid: string; monto: string; item: string | null; descripcion: string | null;
   }>(
-    `SELECT sp.row_uid, sp.monto::text AS monto, i.item, i.descripcion
+    `SELECT sp.row_uid, sp.monto::text AS monto, r.codigo AS item, r.descripcion
        FROM solicitud_pago_partidas sp
-       LEFT JOIN desglose_items i
-              ON i.desglose_id = sp.desglose_id AND i.row_uid = sp.row_uid
+       LEFT JOIN presupuestos p
+              ON p.id = sp.presupuesto_id AND p.activo AND p.es_principal
+       LEFT JOIN presupuesto_renglones r
+              ON r.presupuesto_id = p.id AND r.row_uid = sp.row_uid
       WHERE sp.solicitud_pago_id = $1
       ORDER BY sp.id`,
     [solicitudId],

@@ -83,6 +83,7 @@ interface ListaRow {
   costo: string | null;
   precio: string | null;
   renglones: string;
+  pagos: string;
 }
 
 /** La lista del proyecto. Los totales se suman en SQL y nunca se guardan.
@@ -97,7 +98,13 @@ async function listaPresupuestos(proyectoId: number): Promise<PresupuestoListaWi
             to_char(p.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS creado_at,
             SUM(rr.cantidad * rr.costo_unitario)  AS costo,
             SUM(rr.cantidad * rr.precio_unitario) AS precio,
-            COUNT(rr.id)::text AS renglones
+            COUNT(rr.id)::text AS renglones,
+            -- Cuantos pagos tienen su gasto clasificado contra ESTE presupuesto.
+            -- Va como subconsulta y no como JOIN a proposito: un JOIN mas
+            -- multiplicaria las filas y ensuciaria las sumas de arriba.
+            (SELECT COUNT(DISTINCT sp.solicitud_pago_id)
+               FROM solicitud_pago_partidas sp
+              WHERE sp.presupuesto_id = p.id)::text AS pagos
        FROM presupuestos p
        LEFT JOIN presupuesto_renglones rr
               ON rr.presupuesto_id = p.id
@@ -116,6 +123,7 @@ async function listaPresupuestos(proyectoId: number): Promise<PresupuestoListaWi
     costo: num(x.costo) ?? 0,
     precio: num(x.precio) ?? 0,
     renglones: parseInt(x.renglones, 10),
+    pagosClasificados: parseInt(x.pagos, 10),
   }));
 }
 

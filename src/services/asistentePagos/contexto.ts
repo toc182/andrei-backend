@@ -71,7 +71,7 @@ export interface PagoContexto {
 
 export interface ContextoProyecto {
   proyecto: { id: number; nombre: string };
-  desgloseId: number | null;
+  presupuestoId: number | null;
   partidas: PartidaWire[];
   secciones: SeccionWire[];
   categorias: { codigo: string; nombre: string }[];
@@ -125,12 +125,17 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
       solicitud_pago_id: number; row_uid: string; monto: string;
       item: string | null; descripcion: string | null;
     }>(
+      // Solo el presupuesto OFICIAL resuelve el nombre: un pago clasificado
+      // contra otro presupuesto vuelve sin nombre y el asistente no lo usa
+      // como precedente, que es lo correcto — ese reparto ya no cuenta.
       `SELECT sp.solicitud_pago_id, sp.row_uid, sp.monto::text AS monto,
-              i.item, i.descripcion
+              r.codigo AS item, r.descripcion
          FROM solicitud_pago_partidas sp
          JOIN solicitudes_pago s ON s.id = sp.solicitud_pago_id
-         LEFT JOIN desglose_items i
-                ON i.desglose_id = sp.desglose_id AND i.row_uid = sp.row_uid
+         LEFT JOIN presupuestos p
+                ON p.id = sp.presupuesto_id AND p.activo AND p.es_principal
+         LEFT JOIN presupuesto_renglones r
+                ON r.presupuesto_id = p.id AND r.row_uid = sp.row_uid
         WHERE s.proyecto_id = $1 AND s.activo = TRUE
           AND s.estado IN ('pagada', 'facturada')
         ORDER BY sp.id`,
@@ -198,7 +203,7 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
 
   return {
     proyecto: { id: proy.rows[0].id, nombre: proy.rows[0].nombre },
-    desgloseId: desglose?.desgloseId ?? null,
+    presupuestoId: desglose?.presupuestoId ?? null,
     partidas: desglose?.partidas ?? [],
     secciones: desglose?.secciones ?? [],
     categorias: categorias.rows,

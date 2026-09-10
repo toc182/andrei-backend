@@ -47,6 +47,10 @@ export interface PresupuestoListaWire {
   costo: number;
   precio: number;
   renglones: number;
+  /** Cuantos pagos tienen su gasto clasificado contra este presupuesto. Sirve
+   *  para avisar, antes de mover la estrella, cuantos van a quedar sin partida
+   *  — no se borran, pero dejan de contar mientras el oficial sea otro. */
+  pagosClasificados: number;
 }
 
 /** El desglose oficial del proyecto, para saber si se puede armar a partir de

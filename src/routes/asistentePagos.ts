@@ -303,7 +303,7 @@ router.post(
         const pago = pagos.rows.find((p) => p.id === c.solicitudId)!;
         await aplicarPartidasDePago(client, {
           solicitudId: c.solicitudId,
-          desgloseId: disponible.desgloseId,
+          presupuestoId: disponible.presupuestoId,
           lineas: c.lineas,
           montoTotalCentavos: centavos(parseFloat(pago.monto_total)),
           validas,
