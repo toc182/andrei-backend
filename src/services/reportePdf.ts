@@ -14,6 +14,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import puppeteer, { Browser } from 'puppeteer';
 import type { LaunchOptions } from 'puppeteer';
+import sharp from 'sharp';
 import { downloadFile } from './storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,34 +61,97 @@ function esc(s: string): string {
 }
 
 /**
+ * Lado largo al que se reduce cada foto, y techo de peso del bloque ya
+ * codificado.
+ *
+ * La rejilla imprime dos fotos por fila en papel carta: cada una ocupa unas
+ * 3.6 pulgadas, asi que 1400px son casi 400 puntos por pulgada. Subir de ahi
+ * no se ve en el papel, solo pesa.
+ */
+const FOTO_LADO_MAX = 1400;
+const FOTOS_PESO_MAX = 12 * 1024 * 1024;
+
+/**
  * Las fotos van incrustadas como datos, no como direcciones.
  *
  * El PDF se arma desde una cadena de texto con setContent: una direccion
  * firmada de R2 obligaria al navegador sin ventana a salir a buscarla, y esas
  * direcciones ademas vencen. Se traen los bytes y se meten en el documento.
+ *
+ * Y se reducen antes de meterlos, que es lo que rompio en produccion el
+ * 2026-09-10. Una foto de celular pesa unos 2 MB, y setContent no aguanta una
+ * cadena enorme: pasado cierto punto no tarda mas, se cuelga y no vuelve, hasta
+ * que Puppeteer se rinde a los 30 segundos. Medido: 8 fotos a tamano original
+ * (20 MB) salen en 2 s, 12 fotos (31 MB) no salen ni en 180 s. Tumbaba tanto el
+ * envio por correo como el boton de ver el PDF, y sin decir por que.
  */
 async function incrustarFotos(
   fotos: ReportePdfInput['fotos'],
-): Promise<{ src: string; pie: string }[]> {
-  const salida: { src: string; pie: string }[] = [];
+): Promise<{ lista: { src: string; pie: string }[]; omitidas: number }> {
+  const lista: { src: string; pie: string }[] = [];
+  let peso = 0;
+  let omitidas = 0;
+  let msBajar = 0;
+  let msReducir = 0;
+
   for (const f of fotos) {
+    let bytes: Buffer;
+    const t0 = Date.now();
     try {
-      const buf = await downloadFile(f.r2_key);
-      salida.push({
-        src: `data:${f.tipo_mime || 'image/jpeg'};base64,${buf.toString('base64')}`,
-        pie: f.nombre_archivo,
-      });
+      bytes = await downloadFile(f.r2_key);
     } catch {
       // Una foto que ya no esta no puede hundir el reporte entero.
+      continue;
     }
+    msBajar += Date.now() - t0;
+
+    let mime = f.tipo_mime || 'image/jpeg';
+    const t1 = Date.now();
+    try {
+      bytes = await sharp(bytes)
+        .rotate() // respeta como venia girado el celular
+        .resize(FOTO_LADO_MAX, FOTO_LADO_MAX, {
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .jpeg({ quality: 82 })
+        .toBuffer();
+      mime = 'image/jpeg';
+    } catch (err) {
+      console.error(`[reportePdf] no se pudo reducir ${f.r2_key}:`, err);
+    }
+    msReducir += Date.now() - t1;
+
+    // Techo de peso. Con la reduccion funcionando nunca se alcanza: 20 fotos
+    // pesan unos 9 MB. Es la red por si sharp falla, para no volver al cuelgue:
+    // vale mas un reporte que avisa que le faltan fotos que uno que no sale.
+    const src = `data:${mime};base64,${bytes.toString('base64')}`;
+    if (peso + src.length > FOTOS_PESO_MAX) {
+      omitidas++;
+      continue;
+    }
+    peso += src.length;
+    lista.push({ src, pie: f.nombre_archivo });
   }
-  return salida;
+
+  if (omitidas > 0) {
+    console.error(
+      `[reportePdf] ${omitidas} foto(s) quedaron fuera del PDF por peso`,
+    );
+  }
+  if (fotos.length) {
+    console.log(
+      `[reportePdf] ${lista.length} foto(s): bajar ${msBajar} ms, reducir ${msReducir} ms, ${(peso / 1024 / 1024).toFixed(1)} MB al documento`,
+    );
+  }
+  return { lista, omitidas };
 }
 
 function armarHtml(
   d: ReportePdfInput,
   fotos: { src: string; pie: string }[],
   logo: string,
+  omitidas: number,
 ): string {
   const emitido = new Date().toLocaleString('es-PA', {
     day: 'numeric',
@@ -102,8 +166,13 @@ function armarHtml(
       ? `<span style="color:${WARN}">${d.horasPerdidas} h</span>`
       : '0 h';
 
-  const bloqueFotos = fotos.length
-    ? `<div class="sect"><div class="sect-h">Fotos del día · ${fotos.length}</div>
+  // Si alguna quedo fuera se dice en el papel, no solo en el log: quien lea
+  // el reporte tiene que saber que no esta viendo todo lo que se subio.
+  const aviso = omitidas
+    ? ` · <span style="color:${WARN}">${omitidas} no se pudieron incluir</span>`
+    : '';
+  const bloqueFotos = fotos.length || omitidas
+    ? `<div class="sect"><div class="sect-h">Fotos del día · ${fotos.length}${aviso}</div>
          <div class="shots">${fotos
            .map(
              (f, i) =>
@@ -371,13 +440,14 @@ export async function generateReportePDF(d: ReportePdfInput): Promise<Buffer> {
     // Sin logo el documento se sigue emitiendo.
   }
 
-  const fotos = await incrustarFotos(d.fotos);
-  const html = armarHtml(d, fotos, logo);
+  const { lista: fotos, omitidas } = await incrustarFotos(d.fotos);
+  const html = armarHtml(d, fotos, logo, omitidas);
 
   let browser: Browser | undefined;
   try {
     browser = await puppeteer.launch(configPuppeteer());
     const page = await browser.newPage();
+    const tRender = Date.now();
     await page.setContent(html, { waitUntil: 'networkidle0' });
     const pdf = await page.pdf({
       format: 'letter',
@@ -391,6 +461,7 @@ export async function generateReportePDF(d: ReportePdfInput): Promise<Buffer> {
           <span>Página <span class="pageNumber"></span> de <span class="totalPages"></span></span>
         </div>`,
     });
+    console.log(`[reportePdf] navegador ${Date.now() - tRender} ms`);
     return Buffer.from(pdf);
   } finally {
     if (browser) await browser.close();
