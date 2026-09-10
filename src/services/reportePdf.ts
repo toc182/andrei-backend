@@ -121,24 +121,30 @@ function armarHtml(
     v ? `<p>${esc(v)}</p>` : `<p class="none">${vacio}</p>`;
 
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><style>
+    /* Los tamanos van en px porque Chrome compone la pagina, pero la vara es
+       el reporte impreso: 1px = 0.75pt. El cuerpo a 12.5px son 9.4pt, que es
+       donde estaba el reporte que Ivan puso de referencia; antes estaba en
+       10px = 7.5pt y se leia chico. El h1 se queda en 17px (12.75pt) a
+       proposito: ya coincidia, y subirlo aplastaria la proporcion con el
+       cuerpo, que en la referencia es de 1.37. */
     * { box-sizing: border-box; }
-    body { margin:0; font-family: Arial, Helvetica, sans-serif; color:#000; font-size:10px; }
+    body { margin:0; font-family: Arial, Helvetica, sans-serif; color:#000; font-size:12.5px; }
     .head { display:flex; align-items:flex-start; justify-content:space-between; }
     .logo { height:34px; }
-    .doc-kind { font-size:11px; font-weight:700; letter-spacing:.13em;
+    .doc-kind { font-size:13px; font-weight:700; letter-spacing:.13em;
                 text-transform:uppercase; color:${NAVY}; text-align:right; }
-    .doc-id { font-size:9px; color:${GRAY}; text-align:right; margin-top:3px; }
+    .doc-id { font-size:11px; color:${GRAY}; text-align:right; margin-top:3px; }
     .rule { height:1.5px; background:${NAVY}; margin-top:10px; }
     h1 { font-size:17px; color:${NAVY}; margin:18px 0 0; }
     .meta { margin-top:14px; display:flex; background:${LIGHT_BG};
             border:1px solid ${RULE}; border-radius:3px; }
     .meta > div { flex:1; padding:8px 11px; }
     .meta > div + div { border-left:1px solid ${RULE}; }
-    .k { font-size:7.5px; font-weight:700; letter-spacing:.07em;
+    .k { font-size:9.5px; font-weight:700; letter-spacing:.07em;
          text-transform:uppercase; color:${GRAY}; }
-    .v { font-size:10px; font-weight:700; margin-top:2px; }
+    .v { font-size:12.5px; font-weight:700; margin-top:2px; }
     .sect { margin-top:17px; page-break-inside:avoid; }
-    .sect-h { font-size:8.5px; font-weight:700; letter-spacing:.11em;
+    .sect-h { font-size:10.5px; font-weight:700; letter-spacing:.11em;
               text-transform:uppercase; color:#fff; background:${NAVY};
               padding:4px 9px; border-radius:2px; }
     .sect-b { padding:10px 2px 0; }
@@ -146,13 +152,13 @@ function armarHtml(
     .cols > div { flex:1; }
     .cols > div.ancho { flex:2; }
     .prose { margin-top:11px; }
-    .prose p { margin:0; font-size:10.5px; line-height:1.5; white-space:pre-wrap; }
+    .prose p { margin:0; font-size:13px; line-height:1.5; white-space:pre-wrap; }
     .none { color:${GRAY}; font-style:italic; }
     .shots { display:flex; flex-wrap:wrap; gap:12px; padding-top:10px; }
     .shot { width:calc(50% - 6px); margin:0; page-break-inside:avoid; }
     .shot img { width:100%; height:auto; border:1px solid ${RULE}; border-radius:2px; }
-    .shot figcaption { font-size:8.5px; color:${GRAY}; margin-top:3px; }
-    .fixes { width:100%; border-collapse:collapse; font-size:9.5px; margin-top:10px; }
+    .shot figcaption { font-size:10px; color:${GRAY}; margin-top:3px; }
+    .fixes { width:100%; border-collapse:collapse; font-size:11.5px; margin-top:10px; }
     .fixes td { padding:5px 9px; border:1px solid ${RULE}; vertical-align:top; }
     .fixes .when { width:130px; color:${GRAY}; white-space:nowrap; }
     .fixes .who { width:120px; font-weight:700; white-space:nowrap; }
@@ -255,7 +261,7 @@ export async function generateReportePDF(d: ReportePdfInput): Promise<Buffer> {
       displayHeaderFooter: true,
       headerTemplate: '<span></span>',
       footerTemplate: `<div style="width:100%;padding:0 0.5in;font-family:Arial,Helvetica,sans-serif;
-          font-size:7.5px;color:${GRAY};display:flex;justify-content:space-between;">
+          font-size:9.5px;color:${GRAY};display:flex;justify-content:space-between;">
           <span>Pinellas, S.A. — Reporte diario de obra</span>
           <span>Página <span class="pageNumber"></span> de <span class="totalPages"></span></span>
         </div>`,
