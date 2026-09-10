@@ -4,7 +4,7 @@
 // Sin base de datos y sin llamar a la inteligencia artificial: el contexto es
 // de mentira y las herramientas son funciones puras sobre el. Esto es lo que
 // decide y lo que calcula, asi que es lo que mas falta hace tener amarrado.
-import { ejecutarHerramienta, MAX_PAGOS_POR_PROPUESTA } from '../src/services/asistentePagos/herramientas.js';
+import { ejecutarHerramienta, HERRAMIENTAS, MAX_PAGOS_POR_PROPUESTA } from '../src/services/asistentePagos/herramientas.js';
 import { Borrador, huellaDePago } from '../src/services/asistentePagos/propuesta.js';
 import type { ContextoProyecto } from '../src/services/asistentePagos/contexto.js';
 
@@ -218,12 +218,17 @@ const correr = (nombre: string, input: unknown, ctx = contexto(), b = new Borrad
     'reparto: y el segundo con lo suyo');
 }
 
-// ---- proponer_sin_partida ----
+// ---- dejar sin partida no existe ----
+// La hubo y se quito: el asistente la usaba como salida facil en vez de
+// preguntar. Estas dos son la reja, para que nadie la reponga sin querer.
 {
+  const nombres = HERRAMIENTAS.map((h) => h.name);
+  ok(!nombres.includes('proponer_sin_partida'),
+    'sin partida: el modelo no ve ninguna herramienta para dejar sin partida');
+
   const { r, b } = correr('proponer_sin_partida', { solicitudIds: [108], motivo: 'no era de ahi' });
-  const c = b.cambios()[0];
-  ok(r.ok && c.despues.length === 0, 'sin partida: lo deja vacio');
-  ok(c.antes.length === 1, 'sin partida: guarda lo que tenia');
+  ok(!r.ok, 'sin partida: si se la inventa, se le rechaza');
+  ok(b.cambios().length === 0, 'sin partida: y no entra nada al borrador');
 }
 
 // ---- el borrador ----

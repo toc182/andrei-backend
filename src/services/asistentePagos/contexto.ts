@@ -57,6 +57,15 @@ export interface PagoContexto {
    *  numero suelto no le dice nada al asistente y se presta a confusion con el
    *  id del pago. */
   categoria: string | null;
+  /** Lo que de verdad se compro, renglon por renglon. SIEMPRE hay al menos una:
+   *  ninguna solicitud se crea sin lineas de descripcion.
+   *
+   *  Este es EL dato que dice a que partida pertenece un gasto, y es el que
+   *  faltaba. Sin el, un pago cuyo "concepto" viene vacio llegaba al asistente
+   *  como "Matco Internacional, 72.10, Materiales" —con eso nadie clasifica
+   *  nada— y contestaba que no podia saberlo. Con la linea llega como
+   *  "Kit de derrame - 5 gal", que ya es una respuesta. */
+  lineas: { cantidad: number; unidad: string | null; descripcion: string; precio: number }[];
   partidas: { rowUid: string; item: string | null; descripcion: string | null; monto: number }[];
 }
 
@@ -78,7 +87,7 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
   );
   if (!proy.rows.length) return null;
 
-  const [desglose, categorias, pagos, asignadas] = await Promise.all([
+  const [desglose, categorias, pagos, asignadas, lineas] = await Promise.all([
     partidasDelProyecto(proyectoId),
     query<{ codigo: string; nombre: string }>(
       `SELECT codigo, nombre FROM categorias_gastos
@@ -127,6 +136,33 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
         ORDER BY sp.id`,
       [proyectoId],
     ),
+    // Las lineas de detalle: lo que se compro. Columnas escritas una por una,
+    // como manda la regla de arriba. La descripcion larga se pega a la corta
+    // cuando existe y aporta algo, y el conjunto va recortado: es texto libre
+    // y un parrafo no puede llevarse el sitio de los demas pagos.
+    query<{
+      solicitud_pago_id: number; cantidad: string | null; unidad: string | null;
+      descripcion: string | null; precio: string | null;
+    }>(
+      `SELECT i.solicitud_pago_id,
+              i.cantidad::text AS cantidad,
+              i.unidad,
+              LEFT(
+                NULLIF(TRIM(CONCAT_WS(' — ',
+                  NULLIF(TRIM(i.descripcion), ''),
+                  NULLIF(TRIM(i.descripcion_detallada), '')
+                )), ''),
+                220
+              ) AS descripcion,
+              i.precio_total::text AS precio
+         FROM solicitud_pago_items i
+         JOIN solicitudes_pago s ON s.id = i.solicitud_pago_id
+        WHERE s.proyecto_id = $1
+          AND s.activo = TRUE
+          AND s.estado IN ('pagada', 'facturada')
+        ORDER BY i.solicitud_pago_id, i.orden NULLS LAST, i.id`,
+      [proyectoId],
+    ),
   ]);
 
   const porPago = new Map<number, PagoContexto['partidas']>();
@@ -139,6 +175,25 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
       monto: numero(a.monto),
     });
     porPago.set(a.solicitud_pago_id, lista);
+  }
+
+  // Un tope por pago. Casi todas las solicitudes traen una o dos lineas, pero
+  // una de caja menuda puede traer treinta articulos sueltos, y treinta lineas
+  // de un solo pago no pueden comerse el sitio de los otros veintiocho pagos.
+  // Con las primeras basta para saber de que va la compra.
+  const MAX_LINEAS = 12;
+  const lineasPorPago = new Map<number, PagoContexto['lineas']>();
+  for (const l of lineas.rows) {
+    if (l.descripcion == null) continue;
+    const lista = lineasPorPago.get(l.solicitud_pago_id) ?? [];
+    if (lista.length >= MAX_LINEAS) continue;
+    lista.push({
+      cantidad: numero(l.cantidad),
+      unidad: l.unidad,
+      descripcion: l.descripcion,
+      precio: numero(l.precio),
+    });
+    lineasPorPago.set(l.solicitud_pago_id, lista);
   }
 
   return {
@@ -157,6 +212,7 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
       categoria: p.categoria_codigo != null
         ? `${p.categoria_codigo} · ${p.categoria_nombre ?? ''}`.trim()
         : null,
+      lineas: lineasPorPago.get(p.id) ?? [],
       partidas: porPago.get(p.id) ?? [],
     })),
   };

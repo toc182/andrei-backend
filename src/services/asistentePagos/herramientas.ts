@@ -1,10 +1,18 @@
 // src/services/asistentePagos/herramientas.ts
-// Las cinco cosas que el asistente puede hacer. No hay una sexta.
+// Las cuatro cosas que el asistente puede hacer. No hay una quinta.
 //
-// Dos de leer y tres de proponer. Ninguna escribe en la base: las de leer
+// Dos de leer y dos de proponer. Ninguna escribe en la base: las de leer
 // filtran el contexto que ya esta en memoria, y las de proponer llenan un
 // borrador que muere con la peticion. El unico camino a la base es el boton de
 // aplicar, que pulsa una persona.
+//
+// NO HAY UNA HERRAMIENTA PARA DEJAR UN PAGO SIN PARTIDA, y no se vuelve a
+// anadir. La hubo, y el asistente la usaba como salida facil: cuando no tenia
+// clara la partida, insistia en ofrecer "lo dejamos sin partida" en vez de
+// preguntar. Todo gasto pagado pertenece a alguna partida del contrato; que
+// todavia no se sepa a cual es una pregunta, no un destino. Quitarle la partida
+// a un pago sigue siendo posible a mano, vaciando el reparto en el cuadro y
+// guardando: eso lo decide una persona mirando, no una frase de chat.
 //
 // TODA la validacion vive aqui, no en las instrucciones que se le dan al
 // modelo. Las instrucciones son una recomendacion; esto es una puerta. Un pago
@@ -126,19 +134,6 @@ export const HERRAMIENTAS = [
         motivo: { type: 'string' },
       },
       required: ['solicitudIds', 'regla', 'partidas', 'motivo'],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'proponer_sin_partida',
-    description: 'Propone dejar estos pagos sin partida, quitandoles la que tuvieran.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        solicitudIds: { type: 'array', items: { type: 'integer' } },
-        motivo: { type: 'string' },
-      },
-      required: ['solicitudIds', 'motivo'],
       additionalProperties: false,
     },
   },
@@ -381,23 +376,6 @@ function proponerReparto(
   };
 }
 
-function proponerSinPartida(
-  ctx: ContextoProyecto, borrador: Borrador, input: Record<string, unknown>,
-): ResultadoHerramienta {
-  const resueltos = resolverPagos(ctx, input);
-  if ('error' in resueltos) return falla(resueltos.error);
-
-  const motivo = typeof input.motivo === 'string' ? input.motivo : '';
-  for (const pago of resueltos.pagos) {
-    borrador.poner(pago, [], 'sin_partida', motivo);
-  }
-
-  return {
-    ok: true,
-    contenido: { propuestos: resueltos.pagos.length, en_el_borrador: borrador.tamano },
-  };
-}
-
 /** Corre una herramienta. Nunca lanza: un rechazo es un resultado, y el modelo
  *  lo lee y se corrige. */
 export function ejecutarHerramienta(
@@ -413,7 +391,14 @@ export function ejecutarHerramienta(
     case 'buscar_partidas': return buscarPartidas(ctx, args);
     case 'proponer_asignacion': return proponerAsignacion(ctx, borrador, args);
     case 'proponer_reparto': return proponerReparto(ctx, borrador, args);
-    case 'proponer_sin_partida': return proponerSinPartida(ctx, borrador, args);
+    // Si el modelo se inventa la que ya no existe, el rechazo le dice que hacer
+    // en su lugar en vez de dejarlo dando vueltas.
+    case 'proponer_sin_partida':
+      return falla(
+        'Dejar un pago sin partida no es una opcion y esa herramienta no existe. '
+        + 'Todo gasto pagado pertenece a alguna partida del contrato. Si no sabe a '
+        + 'cual, preguntele al usuario y no proponga nada para ese pago.',
+      );
     default: return falla(`No existe la herramienta ${nombre}.`);
   }
 }

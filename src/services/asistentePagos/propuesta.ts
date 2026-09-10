@@ -20,8 +20,7 @@ export type ReglaPropuesta =
   | 'una_partida'
   | 'proporcional_presupuesto'
   | 'partes_iguales'
-  | 'porcentajes'
-  | 'sin_partida';
+  | 'porcentajes';
 
 export interface LineaPropuesta {
   rowUid: string;
@@ -38,7 +37,7 @@ export interface CambioPropuesto {
   monto: number;
   /** Como esta hoy. Lista vacia = sin partida. */
   antes: LineaPropuesta[];
-  /** Como quedaria. Lista vacia = dejarlo sin partida. */
+  /** Como quedaria. Nunca llega vacia: el asistente no propone dejar sin partida. */
   despues: LineaPropuesta[];
   regla: ReglaPropuesta;
   motivo: string;

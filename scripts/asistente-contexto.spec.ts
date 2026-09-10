@@ -37,7 +37,12 @@ const fuente = readFileSync(join(aqui, '..', 'src', 'services', 'asistentePagos'
 
   ok(!/select\s+\*/i.test(sql), 'codigo: no hay SELECT *');
   ok(!/select\s+[a-z_]+\.\*/i.test(sql), 'codigo: no hay SELECT tabla.*');
-  ok(!sql.includes('solicitud_pago_items'), 'codigo: no se piden los renglones del pago');
+  // Los renglones SI se piden, y a proposito. Antes no, y el asistente veia
+  // "Matco Internacional, 72.10, Materiales" y contestaba que no podia saber a
+  // que partida iba —que es justo lo que no sirve—. No traen dato bancario
+  // ninguno, y las columnas prohibidas de arriba se revisan sobre esta consulta
+  // igual que sobre las demas.
+  ok(sql.includes('solicitud_pago_items'), 'codigo: se piden los renglones del pago');
   ok(!/\bfrom\s+users\b/i.test(sql), 'codigo: no se consulta la tabla de usuarios');
 }
 
@@ -86,6 +91,15 @@ const fuente = readFileSync(join(aqui, '..', 'src', 'services', 'asistentePagos'
       ok('concepto' in unPago, 'resultado: los pagos llevan su concepto');
       ok(ctx.pagos.every((x) => x.concepto == null || x.concepto.length <= 300),
         'resultado: el concepto va recortado');
+
+      // Y los renglones, que son el dato por el que se hizo todo esto. "Alguno"
+      // y no "todos": los pagos sembrados de prueba no tienen, los de verdad si.
+      ok(ctx.pagos.some((x) => x.lineas.length > 0),
+        'resultado: los pagos llevan sus renglones');
+      ok(ctx.pagos.every((x) => x.lineas.length <= 12),
+        'resultado: los renglones van topados por pago');
+      ok(ctx.pagos.every((x) => x.lineas.every((l) => l.descripcion.length <= 220)),
+        'resultado: la descripcion del renglon va recortada');
     }
   }
 }
