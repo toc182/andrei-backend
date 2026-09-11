@@ -19,6 +19,7 @@ import {
   authenticateToken,
   checkPermission,
   checkProjectAccess,
+  requireAdmin,
 } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { construirNumeroReporte } from '../services/reporteNumero.js';
@@ -1160,6 +1161,56 @@ router.post(
     res.json({
       success: true,
       data: { encolado: true, reenviado: yaEnviado },
+    });
+  }),
+);
+
+// DELETE /api/proyecto-reportes/:proyectoId/:id
+//
+// Baja logica. El reporte deja de verse en la lista, en el detalle, en el PDF
+// y en la cola de envio —todo eso ya filtra por activo— pero la fila se queda,
+// y sus PDF siguen archivados en R2: son la prueba de que se emitio lo que se
+// emitio, y eso no se tira porque alguien mando el reporte dos veces.
+//
+// Solo admin y co-admin. Nace de los tres reportes repetidos del 2026-09-10:
+// el ingeniero creyo que no se habia guardado y lo mando tres veces, y no
+// habia forma de quitar las copias.
+router.delete(
+  '/:proyectoId/:id',
+  authenticateToken,
+  requireAdmin,
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const reporte = await query<{ numero: string; fecha: Date }>(
+      `SELECT numero, fecha FROM proyecto_reportes
+        WHERE id = $1 AND proyecto_id = $2 AND activo = true`,
+      [req.params.id, req.params.proyectoId],
+    );
+    if (reporte.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
+    // Sale tambien de la cola: un reporte dado de baja no puede seguir
+    // intentando salir por correo.
+    await query(
+      `UPDATE proyecto_reportes
+          SET activo = false, envio_proximo_intento = NULL
+        WHERE id = $1`,
+      [req.params.id],
+    );
+
+    await registrarAudit(
+      req.user!.id,
+      'eliminar',
+      'reporte_diario',
+      Number(req.params.id),
+      { numero: reporte.rows[0].numero },
+    );
+
+    res.json({
+      success: true,
+      message: `Reporte ${reporte.rows[0].numero} eliminado`,
     });
   }),
 );
