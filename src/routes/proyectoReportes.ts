@@ -34,6 +34,14 @@ import {
   type ReportePdfInput,
 } from '../services/reportePdf.js';
 import { sendEmail } from '../services/emailService.js';
+import {
+  encolarEnvio,
+  reservarPendientes,
+  marcarEnviado,
+  anotarFallo,
+  marcarAvisado,
+  MAX_INTENTOS,
+} from '../services/reporteEnvio.js';
 import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
@@ -1132,52 +1140,113 @@ router.post(
       return;
     }
 
-    const archivado = await archivarReportePdf(Number(req.params.id));
-    if (!archivado) {
-      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
-      return;
-    }
-
-    const datos = await buildReportePdfInput(Number(req.params.id));
-    const destinatarios = [CORREO_ADMINISTRACION];
-    if (datos?.autorEmail && !destinatarios.includes(datos.autorEmail)) {
-      destinatarios.push(datos.autorEmail);
-    }
-
-    await sendEmail(
-      destinatarios,
-      `Reporte diario ${datos!.numero} — ${datos!.proyectoNombre}`,
-      `<p>Se registró el reporte diario del <b>${datos!.fechaCorta}</b> en
-         <b>${datos!.proyectoNombre}</b>, elaborado por ${datos!.autorNombre}.</p>
-       <p>El PDF va adjunto.</p>`,
-      [{ filename: `${datos!.numero}.pdf`, content: archivado.buffer }],
-    );
-
-    const marcado = await query<{ enviado_at: Date }>(
-      `UPDATE proyecto_reportes SET enviado_at = CURRENT_TIMESTAMP
-        WHERE id = $1 RETURNING enviado_at`,
-      [req.params.id],
-    );
+    // Aqui NO se manda nada. Se pone en cola y se contesta enseguida.
+    //
+    // Antes este endpoint generaba el PDF y esperaba a Resend con el navegador
+    // del ingeniero colgado del otro lado. El 2026-09-10 el PDF tardo mas de 30
+    // segundos, esto reviento con un 500, y como nadie reintentaba, el reporte
+    // se quedo sin salir. Ahora el trabajo pesado es del servidor y el
+    // ingeniero no espera por un correo que no le incumbe.
+    await encolarEnvio(Number(req.params.id));
 
     await registrarAudit(
       req.user!.id,
       'enviar',
       'reporte_diario',
       Number(req.params.id),
-      { destinatarios, version: archivado.version, reenvio: yaEnviado },
+      { encolado: true, reenvio: yaEnviado },
     );
 
     res.json({
       success: true,
-      data: {
-        enviado_at: marcado.rows[0].enviado_at,
-        reenviado: yaEnviado,
-        destinatarios,
-        version: archivado.version,
-      },
+      data: { encolado: true, reenviado: yaEnviado },
     });
   }),
 );
+
+/**
+ * El trabajador de la cola. Lo llama el cron; no hay endpoint que lo dispare.
+ *
+ * Cada reporte se intenta por separado: que uno falle no puede dejar sin
+ * mandar a los demas. Y el fallo se guarda con su motivo real, que es lo que
+ * falto el 2026-09-10 para saber que pasaba sin ir a leer los logs de Railway.
+ */
+export async function procesarEnviosPendientes(): Promise<void> {
+  const enCola = await reservarPendientes();
+  if (enCola.length === 0) return;
+
+  for (const r of enCola) {
+    try {
+      const archivado = await archivarReportePdf(r.id);
+      if (!archivado) throw new Error('El reporte ya no existe');
+
+      const datos = await buildReportePdfInput(r.id);
+      if (!datos) throw new Error('El reporte ya no existe');
+
+      const destinatarios = [CORREO_ADMINISTRACION];
+      if (datos.autorEmail && !destinatarios.includes(datos.autorEmail)) {
+        destinatarios.push(datos.autorEmail);
+      }
+
+      await sendEmail(
+        destinatarios,
+        `Reporte diario ${datos.numero} — ${datos.proyectoNombre}`,
+        `<p>Se registró el reporte diario del <b>${datos.fechaCorta}</b> en
+           <b>${datos.proyectoNombre}</b>, elaborado por ${datos.autorNombre}.</p>
+         <p>El PDF va adjunto.</p>`,
+        [{ filename: `${datos.numero}.pdf`, content: archivado.buffer }],
+      );
+
+      await marcarEnviado(r.id);
+      console.log(
+        `📧 Reporte ${datos.numero} enviado a ${destinatarios.join(', ')}`,
+      );
+    } catch (err) {
+      const motivo = err instanceof Error ? err.message : String(err);
+      const agotado = await anotarFallo(r.id, r.envio_intentos, motivo);
+      console.error(
+        `[reporteEnvio] reporte ${r.id}, intento ${r.envio_intentos + 1}: ${motivo}`,
+      );
+      if (agotado) await avisarEnvioAgotado(r.id, motivo);
+    }
+  }
+}
+
+/** El motivo del fallo va dentro de un correo HTML; puede traer < o &. */
+const escaparHtml = (t: string): string =>
+  t.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
+
+/**
+ * Se acabaron los intentos. Alguien tiene que enterarse, porque si no esto
+ * vuelve a ser lo de siempre: un reporte que no sale y nadie lo sabe.
+ *
+ * El aviso va a la misma direccion que los reportes. Si tampoco puede salir,
+ * al menos queda en el log y en la propia fila, en envio_ultimo_error.
+ */
+async function avisarEnvioAgotado(
+  reporteId: number,
+  motivo: string,
+): Promise<void> {
+  try {
+    const datos = await buildReportePdfInput(reporteId);
+    const numero = datos?.numero ?? `#${reporteId}`;
+    await sendEmail(
+      [CORREO_ADMINISTRACION],
+      `No se pudo enviar el reporte ${numero}`,
+      `<p>El reporte <b>${numero}</b>${datos ? ` de <b>${datos.proyectoNombre}</b>` : ''}
+          no pudo enviarse despues de ${MAX_INTENTOS} intentos.</p>
+       <p>Ultimo motivo: <code>${escaparHtml(motivo)}</code></p>
+       <p>El reporte esta guardado. Se puede reintentar desde su pantalla.</p>`,
+    );
+  } catch (err) {
+    console.error(
+      `[reporteEnvio] tampoco se pudo avisar del reporte ${reporteId}:`,
+      err,
+    );
+  } finally {
+    await marcarAvisado(reporteId);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Fotos

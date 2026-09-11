@@ -25,7 +25,7 @@ export async function sendEmail(
   subject: string,
   html: string,
   attachments?: EmailAttachment[],
-): Promise<void> {
+): Promise<string | null> {
   if (!resend) {
     const destino = Array.isArray(to) ? to.join(', ') : to;
     const adjuntos = attachments?.length
@@ -34,10 +34,10 @@ export async function sendEmail(
     console.log(
       `📧 Email skipped (no Resend config): to=${destino}, subject="${subject}"${adjuntos}`,
     );
-    return;
+    return null;
   }
 
-  await resend.emails.send({
+  const { data, error } = await resend.emails.send({
     from: 'Pinellas <info@pinellaspanama.com>',
     to,
     subject,
@@ -51,4 +51,20 @@ export async function sendEmail(
       }
       : {}),
   });
+
+  // Resend NO lanza cuando rechaza un correo: devuelve el motivo en `error` y
+  // la promesa se resuelve igual. Sin mirar eso, un correo rechazado —adjunto
+  // demasiado pesado, dominio sin verificar, clave vencida— se daba por
+  // enviado. Era el unico sitio del sistema capaz de mentir sobre un envio, y
+  // por eso un reporte podia quedar marcado como enviado sin que llegara a
+  // ninguna bandeja. Ahora se lanza, y quien llama decide si eso tumba la
+  // operacion o solo se anota: los avisos de solicitudes y el correo diario ya
+  // lo envuelven en su propio try/catch.
+  if (error) {
+    const detalle =
+      (error as { message?: string }).message ?? JSON.stringify(error);
+    throw new Error(`Resend rechazo el correo: ${detalle}`);
+  }
+
+  return data?.id ?? null;
 }

@@ -56,7 +56,20 @@ router.post(
     </div>
   `;
 
-    await sendEmail(userEmail, 'Prueba de email — Sistema Andrei', html);
+    // Este boton existe para responder «¿el correo funciona?». Desde que
+    // sendEmail avisa cuando Resend rechaza, la respuesta puede ser que no —y
+    // entonces hay que decir por que, no soltar «Error interno del servidor».
+    try {
+      await sendEmail(userEmail, 'Prueba de email — Sistema Andrei', html);
+    } catch (err) {
+      const motivo = err instanceof Error ? err.message : String(err);
+      console.error('Fallo el email de prueba:', err);
+      res.status(502).json({
+        success: false,
+        message: `No se pudo enviar el email de prueba: ${motivo}`,
+      });
+      return;
+    }
 
     res.json({
       success: true,
