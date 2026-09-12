@@ -15,7 +15,7 @@ import { fileURLToPath } from 'url';
 import puppeteer, { Browser } from 'puppeteer';
 import type { LaunchOptions } from 'puppeteer';
 import sharp from 'sharp';
-import { downloadFile } from './storage.js';
+import { downloadFile, uploadFile } from './storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,6 +72,30 @@ const FOTO_LADO_MAX = 1400;
 const FOTOS_PESO_MAX = 12 * 1024 * 1024;
 
 /**
+ * Donde vive la copia reducida de una foto, derivada de la clave del original.
+ *
+ * Se calcula en vez de guardarse en una columna: la copia es un derivado puro
+ * del original, no un dato del negocio. Si algun dia se decide otro tamano,
+ * basta cambiar el sufijo y las viejas se regeneran solas la primera vez que
+ * alguien pida el PDF.
+ */
+export function claveReducida(r2Key: string): string {
+  return `${r2Key}.r${FOTO_LADO_MAX}.jpg`;
+}
+
+/** Reduce una foto al tamano con el que entra al PDF. */
+export async function reducirFoto(bytes: Buffer): Promise<Buffer> {
+  return sharp(bytes)
+    .rotate() // respeta como venia girado el celular
+    .resize(FOTO_LADO_MAX, FOTO_LADO_MAX, {
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .jpeg({ quality: 82 })
+    .toBuffer();
+}
+
+/**
  * Las fotos van incrustadas como datos, no como direcciones.
  *
  * El PDF se arma desde una cadena de texto con setContent: una direccion
@@ -94,33 +118,69 @@ async function incrustarFotos(
   let msBajar = 0;
   let msReducir = 0;
 
-  for (const f of fotos) {
-    let bytes: Buffer;
-    const t0 = Date.now();
-    try {
-      bytes = await downloadFile(f.r2_key);
-    } catch {
-      // Una foto que ya no esta no puede hundir el reporte entero.
-      continue;
-    }
-    msBajar += Date.now() - t0;
+  let regeneradas = 0;
 
-    let mime = f.tipo_mime || 'image/jpeg';
-    const t1 = Date.now();
-    try {
-      bytes = await sharp(bytes)
-        .rotate() // respeta como venia girado el celular
-        .resize(FOTO_LADO_MAX, FOTO_LADO_MAX, {
-          fit: 'inside',
-          withoutEnlargement: true,
-        })
-        .jpeg({ quality: 82 })
-        .toBuffer();
-      mime = 'image/jpeg';
-    } catch (err) {
-      console.error(`[reportePdf] no se pudo reducir ${f.r2_key}:`, err);
+  // Las copias reducidas, todas de golpe y en tandas.
+  //
+  // Aqui el orden importa: mientras se bajaban los ORIGINALES esto no servia de
+  // nada, porque lo que mandaba eran los 29 MB y el ancho de banda no se
+  // reparte. Con las copias son 4 MB, y entonces lo que pesa son las idas y
+  // vueltas — doce de ellas. Medido: bajar paso de 2367 ms a la mitad larga.
+  //
+  // Tandas de seis, no todas a la vez, para que la memoria no dependa de
+  // cuantas fotos traiga el reporte.
+  const TANDA = 6;
+  const reducidas: (Buffer | null)[] = [];
+  const t0 = Date.now();
+  for (let i = 0; i < fotos.length; i += TANDA) {
+    const tanda = await Promise.all(
+      fotos.slice(i, i + TANDA).map((f) =>
+        // Que no exista es lo normal en una foto de antes de este cambio; se
+        // rescata abajo.
+        downloadFile(claveReducida(f.r2_key)).catch(() => null),
+      ),
+    );
+    reducidas.push(...tanda);
+  }
+  msBajar = Date.now() - t0;
+
+  for (const [indice, f] of fotos.entries()) {
+    let bytes: Buffer | null = reducidas[indice];
+    let mime = 'image/jpeg';
+
+    if (!bytes) {
+      // Camino de rescate para las fotos viejas: se baja el original, se
+      // reduce, y se guarda la copia para que la proxima vez ya este. Asi el
+      // sistema se pone al dia solo, sin una pasada de migracion por encima de
+      // miles de fotos.
+      const t1 = Date.now();
+      let original: Buffer;
+      try {
+        original = await downloadFile(f.r2_key);
+      } catch {
+        // Una foto que ya no esta no puede hundir el reporte entero.
+        continue;
+      }
+      msBajar += Date.now() - t1;
+
+      const t2 = Date.now();
+      try {
+        bytes = await reducirFoto(original);
+        regeneradas += 1;
+        // Guardar la copia es un extra: si falla, el PDF sale igual y la
+        // proxima vez se vuelve a intentar.
+        void uploadFile(claveReducida(f.r2_key), bytes, 'image/jpeg').catch(
+          (err: unknown) => {
+            console.error(`[reportePdf] no se pudo archivar la copia de ${f.r2_key}:`, err);
+          },
+        );
+      } catch (err) {
+        console.error(`[reportePdf] no se pudo reducir ${f.r2_key}:`, err);
+        bytes = original;
+        mime = f.tipo_mime || 'image/jpeg';
+      }
+      msReducir += Date.now() - t2;
     }
-    msReducir += Date.now() - t1;
 
     // Techo de peso. Con la reduccion funcionando nunca se alcanza: 20 fotos
     // pesan unos 9 MB. Es la red por si sharp falla, para no volver al cuelgue:
@@ -141,7 +201,7 @@ async function incrustarFotos(
   }
   if (fotos.length) {
     console.log(
-      `[reportePdf] ${lista.length} foto(s): bajar ${msBajar} ms, reducir ${msReducir} ms, ${(peso / 1024 / 1024).toFixed(1)} MB al documento`,
+      `[reportePdf] ${lista.length} foto(s): bajar ${msBajar} ms, reducir ${msReducir} ms, ${(peso / 1024 / 1024).toFixed(1)} MB al documento${regeneradas ? `, ${regeneradas} copia(s) regenerada(s)` : ''}`,
     );
   }
   return { lista, omitidas };

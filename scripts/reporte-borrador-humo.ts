@@ -13,6 +13,7 @@
 import jwt from 'jsonwebtoken';
 import { query, pool } from '../src/database/config.js';
 import { deleteFile } from '../src/services/storage.js';
+import { claveReducida } from '../src/services/reportePdf.js';
 import {
   barrerBorradoresAbandonados,
 } from '../src/routes/proyectoReportes.js';
@@ -181,7 +182,10 @@ const main = async () => {
     c(fb.activo === false, 'uno de hace mas de 24 horas si se da de baja');
     c(fb.completo === false, 'y sigue siendo borrador, no se destruye la fila');
   } finally {
-    for (const k of claves) await deleteFile(k).catch(() => {});
+    for (const k of claves) {
+      await deleteFile(k).catch(() => {});
+      await deleteFile(claveReducida(k)).catch(() => {});
+    }
     for (const id of creados) {
       await query('DELETE FROM audit_log WHERE entidad = $1 AND entidad_id = $2',
         ['reporte_diario', id]);

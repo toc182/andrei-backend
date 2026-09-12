@@ -32,6 +32,8 @@ import {
 } from '../services/reporteCambios.js';
 import {
   generateReportePDF,
+  claveReducida,
+  reducirFoto,
   type ReportePdfInput,
 } from '../services/reportePdf.js';
 import { sendEmail } from '../services/emailService.js';
@@ -1613,6 +1615,19 @@ router.post(
       // Primero R2 y despues la base: si la subida falla, no queda una fila
       // apuntando a un archivo que no existe.
       await uploadFile(key, file.buffer, file.mimetype);
+
+      // Y la copia reducida, que es la que usa el PDF. Hacerla aqui —una vez,
+      // al subir— en vez de cada vez que alguien pide el PDF es la diferencia
+      // entre bajar 29 MB o 4 para armar el mismo documento.
+      //
+      // Es un extra, no un requisito: si falla, la foto queda subida igual y el
+      // PDF la reduce al vuelo la primera vez, guardando entonces la copia.
+      try {
+        const reducida = await reducirFoto(file.buffer);
+        await uploadFile(claveReducida(key), reducida, 'image/jpeg');
+      } catch (err) {
+        console.error(`[reportes] no se pudo guardar la copia reducida de ${key}:`, err);
+      }
       const row = await query<{
         id: number;
         nombre_archivo: string;
@@ -1691,6 +1706,9 @@ router.delete(
       req.params.fotoId,
     ]);
     await deleteFile(foto.rows[0].r2_key);
+    // Y su copia reducida. Si no existe —foto de antes del cambio— no pasa
+    // nada: borrar algo que no esta no es un error que deba verse.
+    await deleteFile(claveReducida(foto.rows[0].r2_key)).catch(() => {});
 
     await registrarAudit(
       req.user!.id,

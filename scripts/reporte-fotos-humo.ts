@@ -11,6 +11,7 @@ import jwt from 'jsonwebtoken';
 import sharp from 'sharp';
 import { query, pool } from '../src/database/config.js';
 import { deleteFile, downloadFile } from '../src/services/storage.js';
+import { claveReducida } from '../src/services/reportePdf.js';
 import { generateReportePDF } from '../src/services/reportePdf.js';
 
 const API = 'http://localhost:5000/api';
@@ -107,11 +108,48 @@ const main = async () => {
     });
     c(propio.length > 200 * 1024, 'el generador llamado directo tambien saca el PDF');
 
+    // ---- el camino de las fotos de antes de este cambio ----
+    //
+    // Las miles que ya estan en produccion no tienen copia reducida. El PDF
+    // tiene que salir igual, bajando el original y encogiendolo al vuelo, y de
+    // paso dejar la copia hecha para que la proxima vez ya este. Sin esto
+    // haria falta una pasada de migracion sobre todo R2.
+    await deleteFile(claveReducida(claves[0]));
+    let sinCopia = false;
+    try {
+      await downloadFile(claveReducida(claves[0]));
+    } catch {
+      sinCopia = true;
+    }
+    c(sinCopia, 'se quito la copia reducida de una foto, como las viejas');
+
+    const rescatado = await generateReportePDF({
+      numero: 'PRUEBA-002', fechaLarga: '10 de septiembre de 2026', fechaCorta: '10 sep',
+      proyectoNombre: 'Prueba', autorNombre: 'Prueba', clima: 'Soleado',
+      horasPerdidas: null, motivo: null, personalCalificado: 0, ayudantes: 0,
+      equipo: [], personal: [], equipos: [], entregas: [], areas: [],
+      queSeHizo: 'Prueba', atrasos: null, novedades: null, correcciones: [],
+      fotos: claves.map((k, i) => ({ r2_key: k, nombre_archivo: `obra-${i + 1}.jpg`, tipo_mime: 'image/jpeg' })),
+    });
+    c(rescatado.length > 200 * 1024, 'el PDF sale igual sin la copia reducida');
+
+    // La copia se archiva en segundo plano; se le da un momento.
+    await new Promise((r) => setTimeout(r, 1500));
+    let recuperada = false;
+    try {
+      await downloadFile(claveReducida(claves[0]));
+      recuperada = true;
+    } catch { /* sigue sin estar */ }
+    c(recuperada, 'y deja la copia hecha para la proxima vez');
+
     // El original se guarda intacto: solo se reduce la copia que va al papel.
     const guardada = await downloadFile(claves[0]);
     c(guardada.length === fotos[0].length, 'la foto guardada sigue a tamano original');
   } finally {
-    for (const k of claves) await deleteFile(k).catch(() => {});
+    for (const k of claves) {
+      await deleteFile(k).catch(() => {});
+      await deleteFile(claveReducida(k)).catch(() => {});
+    }
     if (id) await query('DELETE FROM proyecto_reportes WHERE id = $1', [id]);
     const quedan = await query<{ n: string }>(
       'SELECT count(*) n FROM proyecto_reporte_fotos WHERE reporte_id = $1', [id ?? 0]);
