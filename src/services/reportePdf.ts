@@ -331,10 +331,24 @@ function armarHtml(
     .prose { margin-top:12px; }
     .prose p { margin:0; font-size:13px; line-height:20px; white-space:pre-wrap; }
     .none { color:${GRAY}; font-style:italic; }
+    /* Tope de ALTO, no de ancho, y nada de recortar.
+     *
+     * Una foto de celular llega en vertical u horizontal, y a la misma anchura
+     * de columna la vertical mide casi el doble de alto: cuatro verticales
+     * ocupaban dos paginas enteras mientras cuatro horizontales cabian en una.
+     * Con el tope, la vertical se reduce —sale mas estrecha y centrada, pero
+     * COMPLETA— y la horizontal ni se entera porque ya es mas baja que el tope.
+     *
+     * 4.2in sale de la hoja carta: 9.9in de alto util menos el titulo de la
+     * seccion, partido en dos filas con su pie y su separacion. Da 4 verticales
+     * por pagina, o 6 horizontales. Subirlo devuelve el problema; bajarlo
+     * empequeñece las fotos sin ganar ninguna fila.
+     */
     .shots { display:flex; flex-wrap:wrap; gap:12px; padding-top:10px; }
-    .shot { width:calc(50% - 6px); margin:0; page-break-inside:avoid; }
-    .shot img { width:100%; height:auto; border:1px solid ${RULE}; border-radius:2px; }
-    .shot figcaption { font-size:10px; color:${GRAY}; margin-top:3px; }
+    .shot { width:calc(50% - 6px); margin:0; page-break-inside:avoid; text-align:center; }
+    .shot img { max-width:100%; max-height:4.2in; width:auto; height:auto;
+                border:1px solid ${RULE}; border-radius:2px; }
+    .shot figcaption { font-size:10px; color:${GRAY}; margin-top:3px; text-align:center; }
     /* Las tablas de filas: nombre a la izquierda y numeros a la derecha,
        alineados en columna, como en la pantalla.
        Personal va en una columna y Equipo con Entregas en la otra: a lo ancho
