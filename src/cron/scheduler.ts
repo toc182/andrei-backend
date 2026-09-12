@@ -1,6 +1,9 @@
 import cron from 'node-cron';
 import { sendDailyNotifications } from '../services/dailyNotification.js';
-import { procesarEnviosPendientes } from '../routes/proyectoReportes.js';
+import {
+  procesarEnviosPendientes,
+  barrerBorradoresAbandonados,
+} from '../routes/proyectoReportes.js';
 
 export function startScheduler(): void {
   // Lunes a viernes a las 3:30 PM hora Panamá
@@ -47,7 +50,22 @@ export function startScheduler(): void {
     }
   });
 
+  // Los borradores abandonados, una vez al dia de madrugada. No corre cada
+  // minuto como la cola porque no hay ninguna prisa: un borrador invisible no
+  // le estorba a nadie mientras espera su turno.
+  cron.schedule(
+    '20 3 * * *',
+    async () => {
+      try {
+        await barrerBorradoresAbandonados();
+      } catch (err) {
+        console.error('⏰ Error barriendo borradores abandonados:', err);
+      }
+    },
+    { timezone: 'America/Panama' },
+  );
+
   console.log(
-    '✅ Cron scheduler started (L-V 3:30PM, Sáb 11:30AM — America/Panama; cola de reportes cada minuto)',
+    '✅ Cron scheduler started (L-V 3:30PM, Sáb 11:30AM — America/Panama; cola de reportes cada minuto; borradores 3:20AM)',
   );
 }

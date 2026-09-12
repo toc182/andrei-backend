@@ -50,6 +50,14 @@ const main = async () => {
   c(creado.estado === 201, 'crea el reporte');
   const id = creado.cuerpo.data.id;
 
+  // Desde el estado borrador, un reporte recien creado NO existe para nadie
+  // hasta que /emitir lo completa. Sin esta llamada, todo lo que venga despues
+  // recibe 404, que es exactamente lo que se busca.
+  const completado = await pedir('POST', `/proyecto-reportes/${P}/${id}/emitir`);
+  c(completado.estado === 200, 'emitir lo completa y le pone numero');
+  c(typeof completado.cuerpo?.data?.numero === 'string',
+    'y devuelve el numero que le acaba de asignar');
+
   const det = (await pedir('GET', `/proyecto-reportes/${P}/${id}`)).cuerpo.data;
   c(det.personal.length === 2, `personal guarda 2 filas y salta el cero (dio ${det.personal?.length})`);
   c(det.personal[0].nombre === puestos[0].nombre, 'la fila de personal trae el nombre del puesto');

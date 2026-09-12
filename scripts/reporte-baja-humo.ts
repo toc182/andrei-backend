@@ -38,6 +38,11 @@ const main = async () => {
 
   let id: number | null = null;
 
+  const enLista = async () => {
+    const l = await pedir('GET', `/proyecto-reportes/${P}`);
+    return (l.cuerpo?.data ?? []).some((r: { id: number }) => r.id === id);
+  };
+
   try {
     const creado = await pedir('POST', `/proyecto-reportes/${P}`, {
       fecha: '2026-09-11', clima: 'Nublado', que_se_hizo: 'Prueba de baja',
@@ -45,10 +50,14 @@ const main = async () => {
     c(creado.estado === 201, `crea el reporte (dio ${creado.estado})`);
     id = creado.cuerpo.data.id as number;
 
-    const enLista = async () => {
-      const l = await pedir('GET', `/proyecto-reportes/${P}`);
-      return (l.cuerpo?.data ?? []).some((r: { id: number }) => r.id === id);
-    };
+    c(!(await enLista()), 'como borrador NO aparece en la lista');
+
+    // Desde el estado borrador, un reporte recien creado NO existe para nadie
+    // hasta que /emitir lo completa. Sin esta llamada, todo lo que venga
+    // despues recibe 404, que es exactamente lo que se busca.
+    c((await pedir('POST', `/proyecto-reportes/${P}/${id}/emitir`)).estado === 200,
+      'emitir lo completa');
+
     c(await enLista(), 'aparece en la lista antes de darlo de baja');
     c((await pedir('GET', `/proyecto-reportes/${P}/${id}`)).estado === 200,
       'y su detalle se puede abrir');

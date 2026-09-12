@@ -75,6 +75,11 @@ const main = async () => {
     for (const f of subidas?.data ?? []) claves.push(f.r2_key);
     c(claves.length === CUANTAS, `quedaron guardadas las ${CUANTAS} (hay ${claves.length})`);
 
+    // Un reporte recien creado es borrador y su PDF da 404 hasta que /emitir
+    // lo completa.
+    const emitido = await pedir('POST', `/proyecto-reportes/${P}/${id}/emitir`);
+    c(emitido.estado === 200, `emitir completa el reporte (dio ${emitido.estado})`);
+
     // El fallo: aqui se colgaba.
     const t = Date.now();
     const res = await fetch(`${API}/proyecto-reportes/${P}/${id}/pdf`, {

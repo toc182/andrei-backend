@@ -13,7 +13,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
 import path from 'path';
-import { query } from '../database/config.js';
+import { query, pool } from '../database/config.js';
 import { uploadFile, deleteFile, getFileSignedUrl } from '../services/storage.js';
 import {
   authenticateToken,
@@ -154,12 +154,183 @@ function limpiarNombre(name: string): string {
  * La direccion del archivo en R2, con la misma forma que usan las solicitudes
  * de pago: primero el proyecto, para que el bucket se pueda recorrer por obra.
  */
+/**
+ * Donde vive la foto en R2.
+ *
+ * La carpeta lleva el ID del reporte, no su numero. Antes llevaba el numero, y
+ * eso dejo de poder ser cuando el numero paso a asignarse al completar: las
+ * fotos suben ANTES, asi que todas habrian caido en una carpeta llamada
+ * `null/` y se habrian quedado ahi para siempre, porque el numero llega despues
+ * y los archivos ya no se mueven. El id existe desde el primer instante y no
+ * cambia nunca.
+ *
+ * Las fotos subidas antes de este cambio conservan su ruta vieja: cada fila
+ * guarda su propia r2_key, asi que siguen resolviendo.
+ */
 function claveFoto(
   proyectoCorto: string,
-  numero: string,
+  reporteId: number,
   nombreOriginal: string,
 ): string {
-  return `${limpiarNombre(proyectoCorto)}/reportes/${numero}/${crypto.randomUUID()}_${limpiarNombre(nombreOriginal)}`;
+  return `${limpiarNombre(proyectoCorto)}/reportes/${reporteId}/${crypto.randomUUID()}_${limpiarNombre(nombreOriginal)}`;
+}
+
+/**
+ * El primer numero que no esta usado.
+ *
+ * Se BUSCA en vez de contarse. Contar parece equivalente y no lo es: el PUT deja
+ * cambiar la fecha de un reporte sin recalcular su numero —caso normalisimo,
+ * «reporte hoy lo de ayer»— y entonces el numero se queda con la fecha vieja
+ * mientras la cuenta de esa fecha baja. El siguiente reporte pide un numero que
+ * ya existe y choca contra uq_proyecto_reportes_numero.
+ *
+ * Lo usan los dos sitios que producen un numero —la vista previa que ve el
+ * ingeniero mientras escribe y la asignacion de verdad al completar— porque si
+ * cada uno usara su propia regla, la cabecera le anunciaria un numero y el
+ * reporte saldria con otro.
+ *
+ * `consultar` viene del pool o de un cliente en transaccion, segun quien llame.
+ */
+async function primerNumeroLibre(
+  consultar: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }>,
+  prefijo: string,
+  fecha: string,
+): Promise<string> {
+  for (let n = 0; ; n += 1) {
+    const candidato = construirNumeroReporte(prefijo, fecha, n);
+    const tomado = await consultar(
+      'SELECT 1 FROM proyecto_reportes WHERE numero = $1',
+      [candidato],
+    );
+    if (tomado.rows.length === 0) return candidato;
+    // Tope de cordura: 200 reportes del mismo dia y proyecto no es un caso
+    // real, es un bucle.
+    if (n > 200) {
+      throw new Error(`No se pudo numerar ${fecha}: 200 candidatos ocupados`);
+    }
+  }
+}
+
+/**
+ * Comprueba que el reporte se va a poder numerar, ANTES de que el ingeniero
+ * suba nada.
+ *
+ * El numero se asigna al completar, no al crear. Pero los dos motivos por los
+ * que puede fallar —el proyecto sin codigo, la fecha imposible— se conocen
+ * desde el primer momento, y decirselo al final seria cruel: habria llenado el
+ * formulario y subido doce fotos para enterarse entonces. Lanza los mismos
+ * errores que generateReporteNumero y se tira el resultado.
+ */
+async function validarNumerable(proyectoId: number, fecha: string): Promise<void> {
+  const proyecto = await query<{ sp_prefijo: string | null }>(
+    'SELECT sp_prefijo FROM proyectos WHERE id = $1',
+    [proyectoId],
+  );
+  if (proyecto.rows.length === 0) throw new Error('Proyecto no encontrado');
+  construirNumeroReporte(proyecto.rows[0].sp_prefijo ?? '', fecha, 0);
+}
+
+/**
+ * El reporte pasa a existir: se le asigna numero y se marca completo.
+ *
+ * Es el momento exacto en que un borrador se convierte en reporte, y hasta que
+ * esto corre no se ve en ninguna parte. Lo llama /emitir, que es la llamada que
+ * el navegador ya hace al terminar de subir las fotos — importante: tiene que
+ * seguir siendo alcanzable desde la secuencia VIEJA, porque un telefono con la
+ * pagina abierta durante el despliegue no conoce ningun endpoint nuevo, y si el
+ * paso a completo viviera solo en uno nuevo, ese ingeniero pasaria el resto del
+ * dia guardando reportes invisibles sin un solo error en pantalla.
+ *
+ * Transaccion de verdad —pool.connect() + BEGIN, como cajasMenudas.ts:418— y no
+ * `query('BEGIN')` sobre el pool, que no abre nada porque cada query toma una
+ * conexion distinta.
+ *
+ * El cerrojo de aviso serializa a los que completan el MISMO dia del MISMO
+ * proyecto. Sin el, dos ingenieros que terminan a la vez cuentan los mismos
+ * reportes previos, piden el mismo numero, y el segundo revienta contra el
+ * indice unico despues de haber subido sus fotos.
+ *
+ * Idempotente: si ya estaba completo devuelve su numero sin tocar nada, porque
+ * /emitir se llama tambien al reenviar.
+ */
+export async function completarReporte(
+  reporteId: number,
+  proyectoId: number,
+): Promise<{ numero: string; yaEstaba: boolean } | null> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // to_char y no la fecha cruda: pg devuelve un DATE como objeto Date, y de
+    // ahi salen los desfases de un dia.
+    const r = await client.query<{
+      fecha_ymd: string; numero: string | null; completo: boolean;
+    }>(
+      `SELECT to_char(fecha, 'YYYY-MM-DD') AS fecha_ymd, numero, completo
+         FROM proyecto_reportes
+        WHERE id = $1 AND proyecto_id = $2 AND activo = true
+        FOR UPDATE`,
+      [reporteId, proyectoId],
+    );
+    if (r.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    if (r.rows[0].completo) {
+      await client.query('COMMIT');
+      return { numero: r.rows[0].numero ?? '', yaEstaba: true };
+    }
+
+    const fecha = r.rows[0].fecha_ymd;
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)', [
+      `reporte:${proyectoId}:${fecha}`,
+    ]);
+
+    const proyecto = await client.query<{ sp_prefijo: string | null }>(
+      'SELECT sp_prefijo FROM proyectos WHERE id = $1',
+      [proyectoId],
+    );
+    // Un savepoint para poder reintentar dentro de la misma transaccion: sin el,
+    // un choque de clave unica la deja abortada y no se puede seguir.
+    await client.query('SAVEPOINT antes_de_numerar');
+
+    // El cerrojo de arriba serializa a los que completan el mismo dia del mismo
+    // proyecto, pero uq_proyecto_reportes_numero es unico sobre TODA la tabla y
+    // el numero solo depende de (prefijo, fecha): dos proyectos con el mismo
+    // sp_prefijo —nada lo impide, esa columna no es unica— podrian pedir el
+    // mismo numero a la vez sin verse. Por eso el choque se atrapa y se vuelve
+    // a buscar, en vez de dejar que salga como un 500 despues de que el
+    // ingeniero subiera doce fotos desde la obra.
+    let numero = '';
+    for (let intento = 0; ; intento += 1) {
+      numero = await primerNumeroLibre(
+        (sql, params) => client.query(sql, params as unknown[]),
+        proyecto.rows[0]?.sp_prefijo ?? '',
+        fecha,
+      );
+      try {
+        await client.query(
+          'UPDATE proyecto_reportes SET numero = $2, completo = true WHERE id = $1',
+          [reporteId, numero],
+        );
+        break;
+      } catch (err) {
+        const codigo = (err as { code?: string }).code;
+        if (codigo !== '23505' || intento >= 2) throw err;
+        // Otro se llevo el numero entre la comprobacion y la escritura. Se
+        // busca de nuevo; a la segunda ya no queda nadie por delante.
+        await client.query('ROLLBACK TO SAVEPOINT antes_de_numerar').catch(() => {});
+      }
+    }
+
+    await client.query('COMMIT');
+    return { numero, yaEstaba: false };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -193,17 +364,14 @@ export async function generateReporteNumero(
   );
   if (proyecto.rows.length === 0) throw new Error('Proyecto no encontrado');
 
-  const existentes = await query<{ total: string }>(
-    `SELECT COUNT(*)::text AS total
-       FROM proyecto_reportes
-      WHERE proyecto_id = $1 AND fecha = $2`,
-    [proyectoId, fecha],
-  );
-
-  return construirNumeroReporte(
+  // La MISMA regla que usa la asignacion de verdad, no una parecida. Si esta
+  // contara y aquella buscara hueco, la cabecera le anunciaria al ingeniero un
+  // numero y el reporte saldria con otro: inofensivo hasta que lo apunta en un
+  // albaran.
+  return primerNumeroLibre(
+    (sql, params) => query(sql, params as unknown[]),
     proyecto.rows[0].sp_prefijo ?? '',
     fecha,
-    parseInt(existentes.rows[0].total, 10),
   );
 }
 
@@ -391,7 +559,12 @@ router.get(
     const offset = parseInt(String(req.query.offset ?? '0'), 10) || 0;
 
     const params: unknown[] = [req.params.proyectoId];
-    const where: string[] = ['r.proyecto_id = $1', 'r.activo = true'];
+    // `completo` esconde los borradores: un reporte a medias no sale en la
+    // lista ni cuenta en el total del pie. El COUNT usa este mismo array, asi
+    // que las dos consultas quedan de acuerdo por construccion.
+    const where: string[] = [
+      'r.proyecto_id = $1', 'r.activo = true', 'r.completo = true',
+    ];
 
     if (mes) {
       params.push(`${mes}-01`);
@@ -463,10 +636,12 @@ router.get(
   checkPermission('reportes'),
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    // Sin filtrar borradores, un reporte a medias con fecha atrasada metia su
+    // mes en el desplegable: el usuario lo elegia y la tabla salia vacia.
     const result = await query<{ mes: string }>(
       `SELECT DISTINCT to_char(fecha, 'YYYY-MM') AS mes
          FROM proyecto_reportes
-        WHERE proyecto_id = $1 AND activo = true
+        WHERE proyecto_id = $1 AND activo = true AND completo = true
         ORDER BY mes DESC`,
       [req.params.proyectoId],
     );
@@ -500,9 +675,12 @@ router.get(
       return;
     }
 
+    // Un borrador propio no cuenta como «ya reportaste esta fecha»: avisarlo
+    // desanimaria al ingeniero de rehacer justo el reporte que hay que rehacer.
     const mio = await query<{ id: number; numero: string }>(
       `SELECT id, numero FROM proyecto_reportes
-        WHERE proyecto_id = $1 AND fecha = $2 AND creado_por = $3 AND activo = true
+        WHERE proyecto_id = $1 AND fecha = $2 AND creado_por = $3
+          AND activo = true AND completo = true
         LIMIT 1`,
       [req.params.proyectoId, fecha, req.user!.id],
     );
@@ -541,7 +719,8 @@ router.get(
          FROM proyecto_reportes r
          JOIN users u ON u.id = r.creado_por
          JOIN proyectos p ON p.id = r.proyecto_id
-        WHERE r.id = $1 AND r.proyecto_id = $2 AND r.activo = true`,
+        WHERE r.id = $1 AND r.proyecto_id = $2
+          AND r.activo = true AND r.completo = true`,
       [req.params.id, req.params.proyectoId],
     );
     if (reporte.rows.length === 0) {
@@ -633,9 +812,12 @@ router.post(
       return;
     }
 
-    let numero: string;
+    // El numero se asigna al COMPLETAR, no aqui: un borrador abandonado no
+    // gasta numero. Pero los dos motivos por los que podria no poder numerarse
+    // se comprueban ya, porque decirselo despues de subir doce fotos seria
+    // cruel.
     try {
-      numero = await generateReporteNumero(proyectoId, body.fecha!);
+      await validarNumerable(proyectoId, body.fecha!);
     } catch (err) {
       const msg = (err as Error).message;
       if (msg === 'PREFIJO_NO_CONFIGURADO') {
@@ -652,16 +834,18 @@ router.post(
       throw err;
     }
 
+    // Nace en borrador: sin numero y con completo = false. Hasta que /emitir
+    // lo complete no se ve en ninguna parte —ni lista, ni detalle, ni PDF, ni
+    // correo— asi que una subida que se corte a medias no deja nada a la vista.
     const inserted = await query<ReporteRow>(
       `INSERT INTO proyecto_reportes
-         (proyecto_id, numero, fecha, clima, horas_perdidas, motivo,
+         (proyecto_id, numero, completo, fecha, clima, horas_perdidas, motivo,
           personal_calificado, ayudantes, equipo, que_se_hizo, atrasos, novedades,
           creado_por)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       VALUES ($1,NULL,false,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING *`,
       [
         proyectoId,
-        numero,
         body.fecha,
         body.clima,
         parseHoras(body.horas_perdidas),
@@ -694,8 +878,8 @@ router.post(
 
     await registrarAudit(req.user!.id, 'crear', 'reporte_diario', reporte.id, {
       proyecto_id: proyectoId,
-      numero,
       fecha: body.fecha,
+      borrador: true,
     });
 
     res.status(201).json({ success: true, data: reporte });
@@ -712,6 +896,12 @@ router.put(
     const body = req.body as ReporteBody;
     const proyectoId = Number(req.params.proyectoId);
 
+    // A proposito SIN filtrar por completo: este es el camino del reintento.
+    // Si al ingeniero se le corta la subida y corrige el texto antes de volver
+    // a darle, ese PUT cae sobre su borrador; filtrarlo daria 404 y su
+    // correccion se perderia en silencio. Nadie ajeno puede llegar aqui: un
+    // borrador no sale en ninguna lista, asi que su id no se descubre, y
+    // puedeCorregir limita a quien lo escribio.
     const actual = await query<ReporteRow>(
       `SELECT * FROM proyecto_reportes
         WHERE id = $1 AND proyecto_id = $2 AND activo = true`,
@@ -903,7 +1093,7 @@ export async function buildReportePdfInput(
        FROM proyecto_reportes r
        JOIN users u ON u.id = r.creado_por
        JOIN proyectos p ON p.id = r.proyecto_id
-      WHERE r.id = $1 AND r.activo = true`,
+      WHERE r.id = $1 AND r.activo = true AND r.completo = true`,
     [reporteId],
   );
   if (r.rows.length === 0) return null;
@@ -1066,7 +1256,8 @@ router.get(
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const existe = await query(
       `SELECT 1 FROM proyecto_reportes
-        WHERE id = $1 AND proyecto_id = $2 AND activo = true`,
+        WHERE id = $1 AND proyecto_id = $2
+          AND activo = true AND completo = true`,
       [req.params.id, req.params.proyectoId],
     );
     if (existe.rows.length === 0) {
@@ -1141,6 +1332,20 @@ router.post(
       return;
     }
 
+    // Este es el momento en que el borrador pasa a ser reporte: se le asigna
+    // numero y se marca completo. Va ANTES de encolar y no despues — si se
+    // encolara primero, el trabajador de la cola buscaria un reporte que para
+    // el todavia no existe, fallaria cinco veces y acabaria mandando el correo
+    // de alarma por cada reporte bueno.
+    const completado = await completarReporte(
+      Number(req.params.id),
+      Number(req.params.proyectoId),
+    );
+    if (!completado) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
     // Aqui NO se manda nada. Se pone en cola y se contesta enseguida.
     //
     // Antes este endpoint generaba el PDF y esperaba a Resend con el navegador
@@ -1155,12 +1360,16 @@ router.post(
       'enviar',
       'reporte_diario',
       Number(req.params.id),
-      { encolado: true, reenvio: yaEnviado },
+      { encolado: true, reenvio: yaEnviado, numero: completado.numero },
     );
 
     res.json({
       success: true,
-      data: { encolado: true, reenviado: yaEnviado },
+      data: {
+        encolado: true,
+        reenviado: yaEnviado,
+        numero: completado.numero,
+      },
     });
   }),
 );
@@ -1214,6 +1423,47 @@ router.delete(
     });
   }),
 );
+
+/**
+ * Barre los borradores que nadie completo.
+ *
+ * Un borrador nace cuando el ingeniero pulsa Guardar y solo pasa a reporte
+ * cuando terminan las fotos. Si cierra el navegador, se le acaba la bateria o
+ * se queda sin senal en medio, esa fila se queda ahi. No molesta —no se ve en
+ * ninguna parte y ya no gasta numero— pero alguien tiene que responder por
+ * ella, o se acumulan para siempre.
+ *
+ * Baja logica, no borrado: la regla del proyecto es que un registro de negocio
+ * no se destruye, y aunque un intento fallido apenas lo sea, no es esta funcion
+ * quien debe decidir la excepcion. Las fotos se quedan en R2; si algun dia eso
+ * pesa, es una decision de producto, no un detalle de implementacion.
+ *
+ * Las 24 horas dan de sobra: la subida mas lenta desde una obra con mala senal
+ * se mide en minutos. Y SKIP LOCKED porque durante un despliegue solapado de
+ * Railway puede haber dos procesos con el mismo cron.
+ */
+export async function barrerBorradoresAbandonados(): Promise<number> {
+  const barridos = await query<{ id: number }>(
+    `UPDATE proyecto_reportes
+        SET activo = false
+      WHERE id IN (
+        SELECT id FROM proyecto_reportes
+         WHERE completo = false
+           AND activo = true
+           AND created_at < CURRENT_TIMESTAMP - INTERVAL '24 hours'
+         ORDER BY created_at
+         LIMIT 100
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id`,
+  );
+  if (barridos.rows.length > 0) {
+    console.log(
+      `[reportes] ${barridos.rows.length} borrador(es) abandonado(s) dados de baja`,
+    );
+  }
+  return barridos.rows.length;
+}
 
 /**
  * El trabajador de la cola. Lo llama el cron; no hay endpoint que lo dispare.
@@ -1359,7 +1609,7 @@ router.post(
     const guardadas = [];
     let orden = desde.rows[0].next;
     for (const file of files) {
-      const key = claveFoto(reporte.proyecto_corto, reporte.numero, file.originalname);
+      const key = claveFoto(reporte.proyecto_corto, Number(req.params.id), file.originalname);
       // Primero R2 y despues la base: si la subida falla, no queda una fila
       // apuntando a un archivo que no existe.
       await uploadFile(key, file.buffer, file.mimetype);

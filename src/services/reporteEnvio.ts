@@ -92,6 +92,7 @@ export async function reservarPendientes(
       WHERE id IN (
         SELECT id FROM proyecto_reportes
          WHERE activo = TRUE
+           AND completo = TRUE
            AND enviado_at IS NULL
            AND envio_proximo_intento IS NOT NULL
            AND envio_proximo_intento <= CURRENT_TIMESTAMP
