@@ -26,6 +26,12 @@ const main = async () => {
     if (cond) ok += 1; else { fallo += 1; console.log('FALLA ', etq); }
   };
 
+  // Todo va dentro de try/finally. Antes la limpieza estaba solo al final del
+  // camino feliz, y el 2026-09-11 la prueba revento a mitad y dejo dos
+  // reportes en la base. Una prueba que se cae tiene que limpiar igual que
+  // una que pasa.
+  let id: number | undefined;
+  try {
   const listas = (await pedir('GET', `/proyecto-listas/${P}`)).cuerpo.data;
   const puestos = listas.puestos as { id: number; nombre: string }[];
   const equipos = listas.equipos as { id: number; nombre: string }[];
@@ -48,7 +54,7 @@ const main = async () => {
     ],
   });
   c(creado.estado === 201, 'crea el reporte');
-  const id = creado.cuerpo.data.id;
+  id = creado.cuerpo.data.id;
 
   // Desde el estado borrador, un reporte recien creado NO existe para nadie
   // hasta que /emitir lo completa. Sin esta llamada, todo lo que venga despues
@@ -102,9 +108,12 @@ const main = async () => {
   c(cambios[clave]?.label === puestos[0].nombre, 'el rastro dice de que puesto habla');
   c(Number(cambios[clave]?.despues) === 7, 'el rastro guarda el valor nuevo');
 
-  await query('DELETE FROM proyecto_reportes WHERE id = $1', [id]);
+  } finally {
+    if (id) await query('DELETE FROM proyecto_reportes WHERE id = $1', [id]);
   const quedan = await query('SELECT count(*) n FROM proyecto_reportes WHERE proyecto_id = $1', [P]);
   console.log('\nreportes del proyecto tras limpiar:', quedan.rows[0]);
+  }
+
   console.log(`${ok} pasaron, ${fallo} fallaron`);
   await pool.end();
   process.exit(fallo ? 1 : 0);
