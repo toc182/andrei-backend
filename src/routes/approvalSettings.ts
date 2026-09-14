@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { param, body, validationResult } from 'express-validator';
-import { query } from '../database/config.js';
+import { query, pool } from '../database/config.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
@@ -94,33 +94,44 @@ router.put(
         return;
       }
 
-      await query('BEGIN');
-
+      // Transaccion de verdad: pool.connect() + BEGIN en ESE cliente.
+      //
+      // Estaba escrito con query('BEGIN') sobre el pool, que no abre nada: cada
+      // query toma la conexion que haya libre. Con el servidor ocupado, si el
+      // INSERT del final fallaba, el ROLLBACK caia en otra conexion y los pasos
+      // de antes se quedaban hechos —solicitudes devueltas a pendiente sin sus
+      // aprobaciones, y el proyecto sin aprobadores—, y el BEGIN dejaba una
+      // conexion con una transaccion abierta que el pool le prestaba despues a
+      // cualquier otra peticion. Lo prueba
+      // scripts/aprobadores-transaccion-humo.ts.
+      const client = await pool.connect();
       try {
+        await client.query('BEGIN');
+
         // Resetear solicitudes no finalizadas del proyecto
-        const affected = await query<{ id: number }>(
+        const affected = await client.query<{ id: number }>(
           `SELECT id FROM solicitudes_pago WHERE proyecto_id = $1 AND estado NOT IN ('pagada', 'facturada') AND activo = true`,
           [projectId],
         );
 
         if (affected.rows.length > 0) {
           const affectedIds = affected.rows.map((r) => r.id);
-          await query(
+          await client.query(
             'DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = ANY($1::int[])',
             [affectedIds],
           );
-          await query(
+          await client.query(
             'DELETE FROM solicitud_revisiones WHERE solicitud_pago_id = ANY($1::int[])',
             [affectedIds],
           );
-          await query(
+          await client.query(
             `UPDATE solicitudes_pago SET estado = 'pendiente' WHERE id = ANY($1::int[]) AND activo = true`,
             [affectedIds],
           );
         }
 
         // Eliminar aprobadores actuales
-        await query(
+        await client.query(
           'DELETE FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1',
           [projectId],
         );
@@ -134,7 +145,7 @@ router.put(
             projectId,
             ...approvers.flatMap((a) => [a.user_id, a.orden]),
           ];
-          await query(
+          await client.query(
             `
         INSERT INTO proyecto_ajustes_aprobacion (proyecto_id, user_id, orden, activo)
         VALUES ${values}
@@ -143,10 +154,12 @@ router.put(
           );
         }
 
-        await query('COMMIT');
+        await client.query('COMMIT');
       } catch (err) {
-        await query('ROLLBACK');
+        await client.query('ROLLBACK').catch(() => {});
         throw err;
+      } finally {
+        client.release();
       }
 
       // Retornar la lista actualizada
