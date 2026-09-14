@@ -13,6 +13,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import crypto from 'crypto';
 import path from 'path';
+import type { QueryResultRow } from 'pg';
 import { query, pool } from '../database/config.js';
 import { uploadFile, deleteFile, getFileSignedUrl } from '../services/storage.js';
 import {
@@ -386,6 +387,18 @@ function validarAlta(body: ReporteBody): string | null {
 }
 
 /**
+ * Quien ejecuta las consultas: el pool, o el cliente de una transaccion.
+ *
+ * Las funciones que leen y escriben las filas del reporte lo reciben porque el
+ * PUT las corre dentro de su transaccion: leidas desde el pool no verian lo
+ * que la transaccion lleva escrito, y escritas desde el pool quedarian fuera
+ * de ella.
+ */
+type Consultar = (sql: string, params: unknown[]) => Promise<{ rows: QueryResultRow[] }>;
+
+const conPool: Consultar = (sql, params) => query(sql, params);
+
+/**
  * Guarda las filas de Personal, Equipo y Entregas de un reporte.
  *
  * Una seccion ausente del cuerpo NO se toca: es la misma regla que el UPDATE de
@@ -403,12 +416,13 @@ async function guardarFilas(
   reporteId: number | string,
   proyectoId: number,
   body: ReporteBody,
+  consultar: Consultar = conPool,
 ): Promise<void> {
   if (body.personal !== undefined) {
-    await query('DELETE FROM proyecto_reporte_personal WHERE reporte_id = $1', [reporteId]);
+    await consultar('DELETE FROM proyecto_reporte_personal WHERE reporte_id = $1', [reporteId]);
     const filas = body.personal.filter((f) => Number(f.cantidad) > 0);
     if (filas.length > 0) {
-      await query(
+      await consultar(
         `INSERT INTO proyecto_reporte_personal (reporte_id, puesto_id, cantidad)
          SELECT $1, p.id, v.cantidad
            FROM unnest($2::int[], $3::int[]) AS v(puesto_id, cantidad)
@@ -421,14 +435,14 @@ async function guardarFilas(
   }
 
   if (body.equipos !== undefined) {
-    await query('DELETE FROM proyecto_reporte_equipos WHERE reporte_id = $1', [reporteId]);
+    await consultar('DELETE FROM proyecto_reporte_equipos WHERE reporte_id = $1', [reporteId]);
     // Basta con que tenga unidades U horas: una maquina puede estar en obra
     // sin haber trabajado, y tambien al reves si nadie conto las unidades.
     const filas = body.equipos.filter(
       (f) => Number(f.unidades) > 0 || Number(f.horas) > 0,
     );
     if (filas.length > 0) {
-      await query(
+      await consultar(
         `INSERT INTO proyecto_reporte_equipos (reporte_id, equipo_id, unidades, horas)
          SELECT $1, e.id, v.unidades, v.horas
            FROM unnest($2::int[], $3::int[], $4::numeric[]) AS v(equipo_id, unidades, horas)
@@ -442,10 +456,10 @@ async function guardarFilas(
   }
 
   if (body.entregas !== undefined) {
-    await query('DELETE FROM proyecto_reporte_entregas WHERE reporte_id = $1', [reporteId]);
+    await consultar('DELETE FROM proyecto_reporte_entregas WHERE reporte_id = $1', [reporteId]);
     const filas = body.entregas.filter((f) => String(f.descripcion ?? '').trim() !== '');
     for (const [i, f] of filas.entries()) {
-      await query(
+      await consultar(
         `INSERT INTO proyecto_reporte_entregas
            (reporte_id, categoria_id, descripcion, cantidad, unidad, notas, orden)
          SELECT $1, c.id, $3, $4, $5, $6, $7
@@ -469,9 +483,9 @@ async function guardarFilas(
  * quito despues sigue siendo lo que ese reporte dijo ese dia, y esconderlo
  * cambiaria el pasado.
  */
-async function leerFilas(reporteId: number | string) {
+async function leerFilas(reporteId: number | string, consultar: Consultar = conPool) {
   const [personal, equipos, entregas] = await Promise.all([
-    query(
+    consultar(
       `SELECT rp.puesto_id, rp.cantidad, p.nombre, p.empresa_id, p.orden,
               e.nombre AS empresa_nombre
          FROM proyecto_reporte_personal rp
@@ -481,7 +495,7 @@ async function leerFilas(reporteId: number | string) {
         ORDER BY e.orden NULLS FIRST, e.id NULLS FIRST, p.orden, p.id`,
       [reporteId],
     ),
-    query(
+    consultar(
       `SELECT re.equipo_id, re.unidades, re.horas, q.nombre
          FROM proyecto_reporte_equipos re
          JOIN proyecto_equipos q ON q.id = re.equipo_id
@@ -489,7 +503,7 @@ async function leerFilas(reporteId: number | string) {
         ORDER BY q.orden, q.id`,
       [reporteId],
     ),
-    query(
+    consultar(
       `SELECT en.id, en.categoria_id, en.descripcion, en.cantidad, en.unidad,
               en.notas, en.orden, c.nombre AS categoria
          FROM proyecto_reporte_entregas en
@@ -898,163 +912,198 @@ router.put(
     const body = req.body as ReporteBody;
     const proyectoId = Number(req.params.proyectoId);
 
-    // A proposito SIN filtrar por completo: este es el camino del reintento.
-    // Si al ingeniero se le corta la subida y corrige el texto antes de volver
-    // a darle, ese PUT cae sobre su borrador; filtrarlo daria 404 y su
-    // correccion se perderia en silencio. Nadie ajeno puede llegar aqui: un
-    // borrador no sale en ninguna lista, asi que su id no se descubre, y
-    // puedeCorregir limita a quien lo escribio.
-    const actual = await query<ReporteRow>(
-      `SELECT * FROM proyecto_reportes
-        WHERE id = $1 AND proyecto_id = $2 AND activo = true`,
-      [req.params.id, proyectoId],
-    );
-    if (actual.rows.length === 0) {
-      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
-      return;
-    }
-
-    if (!puedeCorregir(req, actual.rows[0].creado_por)) {
-      res.status(403).json({
-        success: false,
-        message: 'Solo quien escribió el reporte puede corregirlo',
-      });
-      return;
-    }
-
-    if (body.clima !== undefined && !CLIMAS.includes(body.clima)) {
-      res.status(400).json({ success: false, message: 'Clima inválido' });
-      return;
-    }
-    if (body.que_se_hizo !== undefined && !body.que_se_hizo.trim()) {
-      res
-        .status(400)
-        .json({ success: false, message: 'Debes describir qué se hizo hoy' });
-      return;
-    }
-
-    const areasAntes = await query<{ id: number }>(
-      'SELECT area_id AS id FROM proyecto_reporte_areas WHERE reporte_id = $1',
-      [req.params.id],
-    );
-
-    // El SET se arma solo con los campos que vienen en la peticion.
+    // Todo el guardado va en UNA transaccion, con la fila del reporte bloqueada
+    // desde la primera lectura.
     //
-    // Con una lista fija de columnas no habia forma de distinguir "no estoy
-    // tocando este campo" de "quiero dejarlo vacio": una correccion que solo
-    // mandaba las horas borraba en silencio los atrasos y las novedades que
-    // el ingeniero habia escrito. Ausente significa no tocar; presente y
-    // vacio significa borrar.
-    const sets: string[] = [];
-    const valores: unknown[] = [];
-    const set = (columna: string, valor: unknown) => {
-      valores.push(valor);
-      sets.push(`${columna} = $${valores.length}`);
-    };
+    // El 2026-09-14, en produccion, a un iPhone se le corto la subida de una
+    // foto; al darle a Guardar otra vez llegaron dos copias de este PUT con
+    // 170 ms de diferencia —nadie pulso dos veces; lo mas probable es que el
+    // telefono lo repitiera solo tras la conexion cortada— y las dos corrieron
+    // a la vez. Cada seccion se
+    // guarda borrando y volviendo a escribir, y sin transaccion las dos copias
+    // lo hacian intercaladas: la segunda revento contra la clave de las areas,
+    // «Error interno del servidor» justo en el reintento que debia rescatar la
+    // subida. Las entregas, que no tienen clave unica, se habrian duplicado sin
+    // error ninguno.
+    //
+    // Con el FOR UPDATE la segunda copia espera a que la primera confirme, lee
+    // lo que esa dejo, no encuentra nada que cambiar y no deja rastro. Lo
+    // prueba scripts/reporte-guardado-doble-humo.ts.
+    const client = await pool.connect();
+    const consultar: Consultar = (sql, params) => client.query(sql, params);
+    try {
+      await client.query('BEGIN');
 
-    if (body.fecha !== undefined) set('fecha', body.fecha);
-    if (body.clima !== undefined) set('clima', body.clima);
-    if (body.horas_perdidas !== undefined)
-      set('horas_perdidas', parseHoras(body.horas_perdidas));
-    if (body.motivo !== undefined) set('motivo', body.motivo?.trim() || null);
-    if (body.personal_calificado !== undefined)
-      set('personal_calificado', Number(body.personal_calificado));
-    if (body.ayudantes !== undefined) set('ayudantes', Number(body.ayudantes));
-    if (body.equipo !== undefined) set('equipo', body.equipo);
-    if (body.que_se_hizo !== undefined)
-      set('que_se_hizo', body.que_se_hizo.trim());
-    if (body.atrasos !== undefined) set('atrasos', body.atrasos?.trim() || null);
-    if (body.novedades !== undefined)
-      set('novedades', body.novedades?.trim() || null);
-
-    sets.push('updated_at = CURRENT_TIMESTAMP');
-    valores.push(req.params.id, proyectoId);
-
-    const updated = await query<ReporteRow>(
-      `UPDATE proyecto_reportes SET ${sets.join(', ')}
-        WHERE id = $${valores.length - 1} AND proyecto_id = $${valores.length}
-        RETURNING *`,
-      valores,
-    );
-
-    if (body.areas) {
-      await query('DELETE FROM proyecto_reporte_areas WHERE reporte_id = $1', [
-        req.params.id,
-      ]);
-      if (body.areas.length) {
-        await query(
-          `INSERT INTO proyecto_reporte_areas (reporte_id, area_id)
-           SELECT $1, a.id
-             FROM proyecto_areas a
-            WHERE a.id = ANY($2::int[]) AND a.proyecto_id = $3 AND a.activo = true`,
-          [req.params.id, body.areas, proyectoId],
-        );
+      // A proposito SIN filtrar por completo: este es el camino del reintento.
+      // Si al ingeniero se le corta la subida y corrige el texto antes de volver
+      // a darle, ese PUT cae sobre su borrador; filtrarlo daria 404 y su
+      // correccion se perderia en silencio. Nadie ajeno puede llegar aqui: un
+      // borrador no sale en ninguna lista, asi que su id no se descubre, y
+      // puedeCorregir limita a quien lo escribio.
+      const actual = await client.query<ReporteRow>(
+        `SELECT * FROM proyecto_reportes
+          WHERE id = $1 AND proyecto_id = $2 AND activo = true
+          FOR UPDATE`,
+        [req.params.id, proyectoId],
+      );
+      if (actual.rows.length === 0) {
+        await client.query('ROLLBACK');
+        res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+        return;
       }
-    }
 
-    // El antes se lee ANTES de guardar; si no, se compararia contra si mismo.
-    const filasAntes = paraComparar(await leerFilas(req.params.id));
+      if (!puedeCorregir(req, actual.rows[0].creado_por)) {
+        await client.query('ROLLBACK');
+        res.status(403).json({
+          success: false,
+          message: 'Solo quien escribió el reporte puede corregirlo',
+        });
+        return;
+      }
 
-    await guardarFilas(req.params.id, proyectoId, body);
+      if (body.clima !== undefined && !CLIMAS.includes(body.clima)) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ success: false, message: 'Clima inválido' });
+        return;
+      }
+      if (body.que_se_hizo !== undefined && !body.que_se_hizo.trim()) {
+        await client.query('ROLLBACK');
+        res
+          .status(400)
+          .json({ success: false, message: 'Debes describir qué se hizo hoy' });
+        return;
+      }
 
-    const areasAhora = await query<{ id: number }>(
-      'SELECT area_id AS id FROM proyecto_reporte_areas WHERE reporte_id = $1',
-      [req.params.id],
-    );
-
-    const cambios: Record<string, Cambio> = diffCampos(
-      {
-        ...actual.rows[0],
-        horas_perdidas:
-          actual.rows[0].horas_perdidas === null
-            ? null
-            : Number(actual.rows[0].horas_perdidas),
-        areas: areasAntes.rows.map((a) => a.id),
-      },
-      {
-        ...body,
-        // Las areas se comparan contra lo que de verdad quedo guardado, no
-        // contra lo que se pidio: un id de otra obra no entra, y decir que
-        // entro seria mentira.
-        areas: body.areas ? areasAhora.rows.map((a) => a.id) : undefined,
-      },
-    );
-
-    // Las filas se comparan aparte, porque diffCampos solo sabe de campos
-    // sueltos. Solo entran las secciones que la peticion menciono: una
-    // correccion que no habla de Personal no lo esta cambiando.
-    const filasAhora = paraComparar(await leerFilas(req.params.id));
-    if (body.personal !== undefined) {
-      Object.assign(cambios, diffFilas(filasAntes.personal, filasAhora.personal, 0));
-    }
-    if (body.equipos !== undefined) {
-      Object.assign(cambios, diffFilas(filasAntes.equipos, filasAhora.equipos, null));
-    }
-    if (body.entregas !== undefined) {
-      Object.assign(cambios, diffFilas(filasAntes.entregas, filasAhora.entregas, null));
-    }
-
-    // Un guardado que no movio nada no deja linea: si cada guardado dejara
-    // rastro, el rastro se llenaria de ruido y dejaria de leerse.
-    if (Object.keys(cambios).length > 0) {
-      await registrarAudit(
-        req.user!.id,
-        'editar',
-        'reporte_diario',
-        Number(req.params.id),
-        { cambios },
+      const areasAntes = await client.query<{ id: number }>(
+        'SELECT area_id AS id FROM proyecto_reporte_areas WHERE reporte_id = $1',
+        [req.params.id],
       );
 
-      // Cada correccion congela su propia version en R2, para que quede
-      // constancia de que decia el documento antes y despues. Va aparte de la
-      // respuesta: armar un PDF tarda, y una falla al archivar no debe
-      // tumbar una correccion que ya quedo guardada.
-      void archivarReportePdf(Number(req.params.id)).catch((err: unknown) => {
-        console.error('Error archivando el PDF de la corrección:', err);
-      });
-    }
+      // El SET se arma solo con los campos que vienen en la peticion.
+      //
+      // Con una lista fija de columnas no habia forma de distinguir "no estoy
+      // tocando este campo" de "quiero dejarlo vacio": una correccion que solo
+      // mandaba las horas borraba en silencio los atrasos y las novedades que
+      // el ingeniero habia escrito. Ausente significa no tocar; presente y
+      // vacio significa borrar.
+      const sets: string[] = [];
+      const valores: unknown[] = [];
+      const set = (columna: string, valor: unknown) => {
+        valores.push(valor);
+        sets.push(`${columna} = $${valores.length}`);
+      };
 
-    res.json({ success: true, data: updated.rows[0] });
+      if (body.fecha !== undefined) set('fecha', body.fecha);
+      if (body.clima !== undefined) set('clima', body.clima);
+      if (body.horas_perdidas !== undefined)
+        set('horas_perdidas', parseHoras(body.horas_perdidas));
+      if (body.motivo !== undefined) set('motivo', body.motivo?.trim() || null);
+      if (body.personal_calificado !== undefined)
+        set('personal_calificado', Number(body.personal_calificado));
+      if (body.ayudantes !== undefined) set('ayudantes', Number(body.ayudantes));
+      if (body.equipo !== undefined) set('equipo', body.equipo);
+      if (body.que_se_hizo !== undefined)
+        set('que_se_hizo', body.que_se_hizo.trim());
+      if (body.atrasos !== undefined) set('atrasos', body.atrasos?.trim() || null);
+      if (body.novedades !== undefined)
+        set('novedades', body.novedades?.trim() || null);
+
+      sets.push('updated_at = CURRENT_TIMESTAMP');
+      valores.push(req.params.id, proyectoId);
+
+      const updated = await client.query<ReporteRow>(
+        `UPDATE proyecto_reportes SET ${sets.join(', ')}
+          WHERE id = $${valores.length - 1} AND proyecto_id = $${valores.length}
+          RETURNING *`,
+        valores,
+      );
+
+      if (body.areas) {
+        await client.query('DELETE FROM proyecto_reporte_areas WHERE reporte_id = $1', [
+          req.params.id,
+        ]);
+        if (body.areas.length) {
+          await client.query(
+            `INSERT INTO proyecto_reporte_areas (reporte_id, area_id)
+             SELECT $1, a.id
+               FROM proyecto_areas a
+              WHERE a.id = ANY($2::int[]) AND a.proyecto_id = $3 AND a.activo = true`,
+            [req.params.id, body.areas, proyectoId],
+          );
+        }
+      }
+
+      // El antes se lee ANTES de guardar; si no, se compararia contra si mismo.
+      const filasAntes = paraComparar(await leerFilas(req.params.id, consultar));
+
+      await guardarFilas(req.params.id, proyectoId, body, consultar);
+
+      const areasAhora = await client.query<{ id: number }>(
+        'SELECT area_id AS id FROM proyecto_reporte_areas WHERE reporte_id = $1',
+        [req.params.id],
+      );
+
+      const cambios: Record<string, Cambio> = diffCampos(
+        {
+          ...actual.rows[0],
+          horas_perdidas:
+            actual.rows[0].horas_perdidas === null
+              ? null
+              : Number(actual.rows[0].horas_perdidas),
+          areas: areasAntes.rows.map((a) => a.id),
+        },
+        {
+          ...body,
+          // Las areas se comparan contra lo que de verdad quedo guardado, no
+          // contra lo que se pidio: un id de otra obra no entra, y decir que
+          // entro seria mentira.
+          areas: body.areas ? areasAhora.rows.map((a) => a.id) : undefined,
+        },
+      );
+
+      // Las filas se comparan aparte, porque diffCampos solo sabe de campos
+      // sueltos. Solo entran las secciones que la peticion menciono: una
+      // correccion que no habla de Personal no lo esta cambiando.
+      const filasAhora = paraComparar(await leerFilas(req.params.id, consultar));
+      if (body.personal !== undefined) {
+        Object.assign(cambios, diffFilas(filasAntes.personal, filasAhora.personal, 0));
+      }
+      if (body.equipos !== undefined) {
+        Object.assign(cambios, diffFilas(filasAntes.equipos, filasAhora.equipos, null));
+      }
+      if (body.entregas !== undefined) {
+        Object.assign(cambios, diffFilas(filasAntes.entregas, filasAhora.entregas, null));
+      }
+
+      await client.query('COMMIT');
+
+      // Un guardado que no movio nada no deja linea: si cada guardado dejara
+      // rastro, el rastro se llenaria de ruido y dejaria de leerse.
+      if (Object.keys(cambios).length > 0) {
+        await registrarAudit(
+          req.user!.id,
+          'editar',
+          'reporte_diario',
+          Number(req.params.id),
+          { cambios },
+        );
+
+        // Cada correccion congela su propia version en R2, para que quede
+        // constancia de que decia el documento antes y despues. Va aparte de la
+        // respuesta: armar un PDF tarda, y una falla al archivar no debe
+        // tumbar una correccion que ya quedo guardada.
+        void archivarReportePdf(Number(req.params.id)).catch((err: unknown) => {
+          console.error('Error archivando el PDF de la corrección:', err);
+        });
+      }
+
+      res.json({ success: true, data: updated.rows[0] });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }),
 );
 
