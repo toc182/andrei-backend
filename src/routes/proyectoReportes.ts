@@ -104,9 +104,16 @@ interface ReporteRow {
 // convierte a JPEG al subir desde el celular, asi que casi nunca llega.
 const FORMATOS = /^(jpe?g|png|webp|gif)$/;
 
+// El tope por foto. Era 10 MB y el 2026-09-14 una foto de 11 MB de un
+// ingeniero dejo su reporte sin enviar; Ivan lo subio a 15. Desde que el PDF
+// usa una copia reducida, una foto grande solo cuesta almacenamiento en R2.
+// La pantalla comprueba el mismo tope antes de subir: si se cambia aqui, se
+// cambia alli (FOTO_MB_MAX en ReporteForm.tsx).
+const FOTO_MB_MAX = 15;
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: FOTO_MB_MAX * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
     const mime = file.mimetype.replace('image/', '').toLowerCase();
@@ -126,7 +133,7 @@ const upload = multer({
  * Multer avisa de sus rechazos lanzando, y el manejador general los convierte
  * en "Error interno del servidor", que al ingeniero no le dice nada. Aqui se
  * traducen a un 400 con el motivo real. El limite de tamano importa mas que
- * el de formato: una foto de celular pasada de 10 MB va a ser comun.
+ * el de formato: una foto de celular pasada del tope va a ser comun.
  */
 function subirFotos(req: Request, res: Response, next: (err?: unknown) => void): void {
   upload.array('fotos', 20)(req, res, (err: unknown) => {
@@ -137,7 +144,7 @@ function subirFotos(req: Request, res: Response, next: (err?: unknown) => void):
     const esMulter = err instanceof multer.MulterError;
     let mensaje = (err as Error).message;
     if (esMulter && (err as multer.MulterError).code === 'LIMIT_FILE_SIZE') {
-      mensaje = 'Cada foto debe pesar menos de 10 MB';
+      mensaje = `Cada foto debe pesar menos de ${FOTO_MB_MAX} MB`;
     } else if (esMulter && (err as multer.MulterError).code === 'LIMIT_FILE_COUNT') {
       mensaje = 'Máximo 20 fotos por reporte';
     }
@@ -723,6 +730,99 @@ router.get(
   }),
 );
 
+/**
+ * Las partes de un reporte que viven fuera de su fila: areas, fotos con su url
+ * firmada, y las filas de Personal, Equipo y Entregas.
+ *
+ * Las usan el detalle y el borrador: los dos le entregan a la pantalla el
+ * reporte con la misma forma, que es la que ReporteForm ya sabe cargar.
+ */
+async function leerPartesDelReporte(reporteId: number | string) {
+  const areas = await query(
+    `SELECT a.id, a.nombre
+       FROM proyecto_reporte_areas ra
+       JOIN proyecto_areas a ON a.id = ra.area_id
+      WHERE ra.reporte_id = $1
+      ORDER BY a.orden, a.id`,
+    [reporteId],
+  );
+
+  const fotos = await query<{
+    id: number;
+    nombre_archivo: string;
+    r2_key: string;
+    tipo_mime: string | null;
+    tamano: number | null;
+    orden: number;
+  }>(
+    `SELECT id, nombre_archivo, r2_key, tipo_mime, tamano, orden
+       FROM proyecto_reporte_fotos
+      WHERE reporte_id = $1
+      ORDER BY orden, id`,
+    [reporteId],
+  );
+
+  // Las direcciones de R2 se firman al vuelo y vencen; nunca se guardan.
+  const fotosConUrl = await Promise.all(
+    fotos.rows.map(async (f) => ({
+      ...f,
+      url: await getFileSignedUrl(f.r2_key, 900),
+    })),
+  );
+
+  return {
+    areas: areas.rows,
+    fotos: fotosConUrl,
+    ...(await leerFilas(reporteId)),
+  };
+}
+
+// GET /api/proyecto-reportes/:proyectoId/borrador
+//
+// El reporte que QUIEN PREGUNTA dejo sin enviar en este proyecto, entero, o null.
+//
+// El 2026-09-14 el ingeniero Cesar lleno un reporte en Playa Blanca, una foto
+// paso del tope, el envio fallo y salio del formulario. Todo lo que habia
+// escrito estaba aqui como borrador, pero ninguna pantalla lo mostraba, asi
+// que para el se habia perdido. El formulario llama a esto al abrir «Nuevo
+// reporte» y le ofrece seguirlo.
+//
+// Solo los propios: un borrador es trabajo a medias de una persona, y ofrecerle
+// a otro que lo continue le haria mandar un reporte que no escribio. Si hay
+// varios, el mas reciente; los demas se los lleva el barrido de la madrugada.
+//
+// Mismo asunto de orden que /meses: va antes de '/:proyectoId/:id'.
+router.get(
+  '/:proyectoId/borrador',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const borrador = await query<{ id: number }>(
+      `SELECT r.*, u.nombre AS creador_nombre
+         FROM proyecto_reportes r
+         JOIN users u ON u.id = r.creado_por
+        WHERE r.proyecto_id = $1 AND r.creado_por = $2
+          AND r.activo = true AND r.completo = false
+        ORDER BY r.updated_at DESC, r.id DESC
+        LIMIT 1`,
+      [req.params.proyectoId, req.user!.id],
+    );
+    if (borrador.rows.length === 0) {
+      res.json({ success: true, data: null });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...borrador.rows[0],
+        ...(await leerPartesDelReporte(borrador.rows[0].id)),
+      },
+    });
+  }),
+);
+
 // GET /api/proyecto-reportes/:proyectoId/:id
 router.get(
   '/:proyectoId/:id',
@@ -744,38 +844,6 @@ router.get(
       return;
     }
 
-    const areas = await query(
-      `SELECT a.id, a.nombre
-         FROM proyecto_reporte_areas ra
-         JOIN proyecto_areas a ON a.id = ra.area_id
-        WHERE ra.reporte_id = $1
-        ORDER BY a.orden, a.id`,
-      [req.params.id],
-    );
-
-    const fotos = await query<{
-      id: number;
-      nombre_archivo: string;
-      r2_key: string;
-      tipo_mime: string | null;
-      tamano: number | null;
-      orden: number;
-    }>(
-      `SELECT id, nombre_archivo, r2_key, tipo_mime, tamano, orden
-         FROM proyecto_reporte_fotos
-        WHERE reporte_id = $1
-        ORDER BY orden, id`,
-      [req.params.id],
-    );
-
-    // Las direcciones de R2 se firman al vuelo y vencen; nunca se guardan.
-    const fotosConUrl = await Promise.all(
-      fotos.rows.map(async (f) => ({
-        ...f,
-        url: await getFileSignedUrl(f.r2_key, 900),
-      })),
-    );
-
     // El rastro de correcciones. entidad/entidad_id es el par polimorfico
     // documentado en CLAUDE.md: se filtra por entidad primero.
     const correcciones = await query(
@@ -791,16 +859,12 @@ router.get(
 
     const autorId = (reporte.rows[0] as { creado_por: number }).creado_por;
 
-    const filas = await leerFilas(req.params.id);
-
     res.json({
       success: true,
       data: {
         ...reporte.rows[0],
-        areas: areas.rows,
-        fotos: fotosConUrl,
+        ...(await leerPartesDelReporte(req.params.id)),
         correcciones: correcciones.rows,
-        ...filas,
         // Para que la pantalla no ofrezca "Editar" donde la API va a negarlo.
         puede_editar: puedeCorregir(req, autorId),
       },
@@ -1472,6 +1536,63 @@ router.delete(
       success: true,
       message: `Reporte ${reporte.rows[0].numero} eliminado`,
     });
+  }),
+);
+
+// DELETE /api/proyecto-reportes/:proyectoId/:id/borrador
+//
+// «Descartarlo»: el ingeniero no quiere seguir el reporte que dejo sin enviar.
+// Aparte del DELETE de arriba porque aquel es de admin y para reportes enviados;
+// este es de quien lo escribio y solo para borradores.
+//
+// Baja logica, como el barrido de la madrugada: la fila se queda y sus fotos
+// siguen en R2. El `completo = false` va en el mismo UPDATE y no en una lectura
+// previa, para que un /emitir que termine a la vez no deje dado de baja un
+// reporte que ya se envio.
+router.delete(
+  '/:proyectoId/:id/borrador',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const borrador = await query<{ creado_por: number }>(
+      `SELECT creado_por FROM proyecto_reportes
+        WHERE id = $1 AND proyecto_id = $2 AND activo = true AND completo = false`,
+      [req.params.id, req.params.proyectoId],
+    );
+    if (borrador.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+    if (!puedeCorregir(req, borrador.rows[0].creado_por)) {
+      res.status(403).json({
+        success: false,
+        message: 'Solo quien escribió el reporte puede descartarlo',
+      });
+      return;
+    }
+
+    const descartado = await query(
+      `UPDATE proyecto_reportes
+          SET activo = false, envio_proximo_intento = NULL
+        WHERE id = $1 AND proyecto_id = $2 AND activo = true AND completo = false
+        RETURNING id`,
+      [req.params.id, req.params.proyectoId],
+    );
+    if (descartado.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
+    await registrarAudit(
+      req.user!.id,
+      'descartar',
+      'reporte_diario',
+      Number(req.params.id),
+      { borrador: true },
+    );
+
+    res.json({ success: true, message: 'Reporte descartado' });
   }),
 );
 
