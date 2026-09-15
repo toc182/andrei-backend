@@ -124,37 +124,6 @@ export type CreateEquipmentDTO = Omit<
 >;
 export type UpdateEquipmentDTO = Partial<CreateEquipmentDTO>;
 
-// ==================== EXPENSE ====================
-export type ExpenseType = 'real' | 'presupuestado';
-
-export interface ExpenseCategory {
-  id: number;
-  codigo: string;
-  nombre: string;
-  color?: string;
-  orden: number;
-  activo: boolean;
-}
-
-export interface ProjectExpense {
-  id: number;
-  proyecto_id: number;
-  categoria_id?: number;
-  proyecto_categoria_id?: number;
-  descripcion: string;
-  monto: number;
-  fecha: Date;
-  tipo: ExpenseType;
-  creado_por: number;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export type CreateExpenseDTO = Omit<
-  ProjectExpense,
-  'id' | 'created_at' | 'updated_at'
->;
-
 // ==================== REQUISICION ====================
 export type RequisicionStatus =
   | 'pendiente'
