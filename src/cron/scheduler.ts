@@ -3,6 +3,7 @@ import { sendDailyNotifications } from '../services/dailyNotification.js';
 import {
   procesarEnviosPendientes,
   barrerBorradoresAbandonados,
+  archivarCorreccionesPendientes,
 } from '../routes/proyectoReportes.js';
 
 export function startScheduler(): void {
@@ -50,9 +51,10 @@ export function startScheduler(): void {
     }
   });
 
-  // Los borradores abandonados, una vez al dia de madrugada. No corre cada
-  // minuto como la cola porque no hay ninguna prisa: un borrador invisible no
-  // le estorba a nadie mientras espera su turno.
+  // Los borradores abandonados y las correcciones que se quedaron sin su PDF,
+  // una vez al dia de madrugada. No corre cada minuto como la cola porque no
+  // hay ninguna prisa: ni un borrador invisible ni una version archivada de
+  // mas tarde le estorban a nadie mientras esperan su turno.
   cron.schedule(
     '20 3 * * *',
     async () => {
@@ -61,11 +63,16 @@ export function startScheduler(): void {
       } catch (err) {
         console.error('⏰ Error barriendo borradores abandonados:', err);
       }
+      try {
+        await archivarCorreccionesPendientes();
+      } catch (err) {
+        console.error('⏰ Error archivando correcciones pendientes:', err);
+      }
     },
     { timezone: 'America/Panama' },
   );
 
   console.log(
-    '✅ Cron scheduler started (L-V 3:30PM, Sáb 11:30AM — America/Panama; cola de reportes cada minuto; borradores 3:20AM)',
+    '✅ Cron scheduler started (L-V 3:30PM, Sáb 11:30AM — America/Panama; cola de reportes cada minuto; borradores y correcciones 3:20AM)',
   );
 }

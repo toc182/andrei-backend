@@ -17,6 +17,7 @@ import type { LaunchOptions } from 'puppeteer';
 import sharp from 'sharp';
 import { downloadFile, uploadFile } from './storage.js';
 import { nombreEmisor, nombrePropio, type Consorcio } from './consorcioProyecto.js';
+import type { CambioLegible, Trozo } from './reporteCambios.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -57,8 +58,16 @@ export interface ReportePdfInput {
   atrasos: string | null;
   novedades: string | null;
   fotos: { r2_key: string; nombre_archivo: string; tipo_mime: string | null }[];
-  correcciones: { cuando: string; quien: string; que: string }[];
+  correcciones: { cuando: string; quien: string; cambios: CambioLegible[] }[];
 }
+
+/**
+ * Las horas del papel van en la de Panamá, pase lo que pase con la del servidor.
+ *
+ * Railway corre en UTC: sin esto, el reporte que Cesar mando el 15 de
+ * septiembre a las 9:04 de la noche salio «emitido 16 sept 2026, 2:04 a. m.».
+ */
+export const HORA_PANAMA = { timeZone: 'America/Panama' } as const;
 
 function esc(s: string): string {
   return String(s).replace(
@@ -221,6 +230,7 @@ function armarHtml(
   omitidas: number,
 ): string {
   const emitido = new Date().toLocaleString('es-PA', {
+    ...HORA_PANAMA,
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -249,14 +259,32 @@ function armarHtml(
            .join('')}</div></div>`
     : '';
 
+  // Solo lo que cambio, con las mismas marcas que la pantalla: lo quitado
+  // tachado, lo agregado subrayado. La leyenda va porque este papel lo lee
+  // gente de fuera que no conoce la pantalla.
+  const trozoHtml = (t: Trozo): string => {
+    switch (t.tipo) {
+      case 'quitado': return `<del>${esc(t.texto)}</del>`;
+      case 'agregado': return `<ins>${esc(t.texto)}</ins>`;
+      case 'corte': return `<span class="gap">${esc(t.texto)}</span>`;
+      case 'nota': return `<span class="more">${esc(t.texto)}</span>`;
+      default: return esc(t.texto);
+    }
+  };
+  const cambioHtml = (k: CambioLegible): string =>
+    `<div class="chg"><span class="campo">${esc(k.etiqueta)}</span><span>${k.renglones
+      .map((r) => r.map(trozoHtml).join(' '))
+      .join('<br>')}</span></div>`;
   const bloqueCorrecciones = d.correcciones.length
     ? `<div class="sect"><div class="sect-h">Correcciones</div>
+         <div class="fixes-legend">Solo se muestra lo que cambió. Tachado: se quitó · Subrayado: se agregó.
+           El texto completo, ya corregido, está arriba en este documento.</div>
          <table class="fixes">${d.correcciones
            .map(
              (c) =>
                `<tr><td class="when">${esc(c.cuando)}</td>
                     <td class="who">${esc(c.quien)}</td>
-                    <td>${esc(c.que)}</td></tr>`,
+                    <td>${c.cambios.map(cambioHtml).join('')}</td></tr>`,
            )
            .join('')}</table></div>`
     : '';
@@ -444,10 +472,18 @@ function armarHtml(
     .suma { display:flex; justify-content:space-between; border-top:1px solid ${RULE};
             margin-top:4px; padding-top:8px; font-size:12.5px; line-height:16px; }
     .suma b { font-size:14px; }
-    .fixes { width:100%; border-collapse:collapse; font-size:11.5px; margin-top:10px; }
+    .fixes-legend { color:${GRAY}; font-size:10.5px; margin-top:7px; }
+    .fixes { width:100%; border-collapse:collapse; font-size:11.5px; line-height:15px; margin-top:8px; }
     .fixes td { padding:5px 9px; border:1px solid ${RULE}; vertical-align:top; }
-    .fixes .when { width:130px; color:${GRAY}; white-space:nowrap; }
-    .fixes .who { width:120px; font-weight:700; white-space:nowrap; }
+    .fixes .when { width:118px; color:${GRAY}; white-space:nowrap; }
+    .fixes .who { width:96px; font-weight:700; }
+    .fixes .chg { display:grid; grid-template-columns:132px 1fr; gap:8px; }
+    .fixes .chg + .chg { margin-top:4px; }
+    .fixes .campo, .fixes .gap, .fixes .more { color:${GRAY}; }
+    .fixes .more { font-size:11px; }
+    .fixes del { color:#b91c1c; text-decoration-thickness:1.5px; }
+    .fixes ins { color:#0f7b3a; text-decoration:underline; text-decoration-thickness:1.5px;
+                 text-underline-offset:2px; }
   </style></head><body>
     <div class="head">
       ${logo ? `<img class="logo" src="${esc(logo)}" alt="${esc(nombrePropio(d.consorcio))}">` : '<span></span>'}

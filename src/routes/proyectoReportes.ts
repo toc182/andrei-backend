@@ -26,15 +26,19 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { construirNumeroReporte } from '../services/reporteNumero.js';
 import {
   diffCampos,
-  describirCambios,
+  legibleCorreccion,
   diffFilas,
   parseHoras,
+  sumarACorreccion,
   type Cambio,
+  type ContenidoCorreccion,
+  type ParteCorreccion,
 } from '../services/reporteCambios.js';
 import {
   generateReportePDF,
   claveReducida,
   reducirFoto,
+  HORA_PANAMA,
   type ReportePdfInput,
 } from '../services/reportePdf.js';
 import {
@@ -98,6 +102,7 @@ interface ReporteRow {
   atrasos: string | null;
   novedades: string | null;
   creado_por: number;
+  completo: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -568,6 +573,115 @@ function paraComparar(filas: {
   };
 }
 
+/**
+ * La clave del «Guardar cambios» al que pertenece esta peticion, o null.
+ *
+ * La pantalla la inventa al abrir la correccion y la manda en `?correccion=`
+ * con el guardado, con cada foto y con el aviso final. Los reintentos y las
+ * copias repetidas de una peticion traen la misma, y eso es lo que las junta en
+ * una sola linea. Una pagina abierta desde antes de este cambio no la manda:
+ * entonces cada peticion anota su propia linea, como antes.
+ */
+function claveCorreccion(req: Request): string | null {
+  const clave = req.query.correccion;
+  return typeof clave === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(clave) ? clave : null;
+}
+
+/** Una correccion con algo que mostrar. Constante: no lleva nada del usuario. */
+const CON_CONTENIDO = `(c.cambios <> '{}'::jsonb
+  OR c.fotos_agregadas <> '[]'::jsonb
+  OR c.fotos_quitadas <> '[]'::jsonb)`;
+
+/**
+ * Anota en la seccion Correcciones lo que cambio esta peticion.
+ *
+ * Solo se llama para un reporte YA ENVIADO, y quien llama lo decide con
+ * `completo` leido bajo el FOR UPDATE del reporte, dentro de su misma
+ * transaccion: asi un /emitir no puede colarse entre la pregunta y la escritura.
+ * Lo que se sube mientras el reporte es borrador forma parte del envio y no
+ * corrige nada.
+ *
+ * Con clave, se suma a la linea de ese guardado si ya existe. Buscar y despues
+ * escribir es seguro porque ese mismo bloqueo del reporte pone en fila a todas
+ * las peticiones que llegan aqui.
+ *
+ * La linea vuelve a quedar pendiente de archivar, porque ya dice algo que la
+ * version archivada no dice.
+ *
+ * audit_log se sigue anotando aparte y con todo, como hasta ahora.
+ */
+async function anotarCorreccion(
+  consultar: Consultar,
+  reporteId: number,
+  usuarioId: number,
+  clave: string | null,
+  parte: ParteCorreccion,
+): Promise<void> {
+  const previa = clave === null
+    ? undefined
+    : (await consultar(
+        `SELECT id, cambios, fotos_agregadas, fotos_quitadas
+           FROM proyecto_reporte_correcciones
+          WHERE reporte_id = $1 AND clave = $2`,
+        [reporteId, clave],
+      )).rows[0] as (ContenidoCorreccion & { id: number }) | undefined;
+
+  const vacia: ContenidoCorreccion = { cambios: {}, fotos_agregadas: [], fotos_quitadas: [] };
+  const junta = sumarACorreccion(previa ?? vacia, parte);
+  const valores = [
+    JSON.stringify(junta.cambios),
+    JSON.stringify(junta.fotos_agregadas),
+    JSON.stringify(junta.fotos_quitadas),
+  ];
+
+  if (previa) {
+    await consultar(
+      `UPDATE proyecto_reporte_correcciones
+          SET cambios = $1, fotos_agregadas = $2, fotos_quitadas = $3,
+              pdf_version = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4`,
+      [...valores, previa.id],
+    );
+  } else {
+    await consultar(
+      `INSERT INTO proyecto_reporte_correcciones
+         (cambios, fotos_agregadas, fotos_quitadas, reporte_id, clave, creado_por)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [...valores, reporteId, clave, usuarioId],
+    );
+  }
+}
+
+/**
+ * La seccion Correcciones, con cada linea ya armada (legibleCorreccion). La
+ * leen la pantalla y el PDF, para que los dos digan lo mismo.
+ *
+ * Una correccion que no movio nada no sale.
+ */
+async function leerCorrecciones(reporteId: number | string) {
+  const filas = await query<ContenidoCorreccion & {
+    id: number;
+    created_at: Date;
+    usuario_nombre: string;
+  }>(
+    `SELECT c.id, c.created_at, u.nombre AS usuario_nombre,
+            c.cambios, c.fotos_agregadas, c.fotos_quitadas
+       FROM proyecto_reporte_correcciones c
+       JOIN users u ON u.id = c.creado_por
+      WHERE c.reporte_id = $1
+      ORDER BY c.created_at, c.id`,
+    [reporteId],
+  );
+  return filas.rows
+    .map((c) => ({
+      id: c.id,
+      created_at: c.created_at,
+      usuario_nombre: c.usuario_nombre,
+      cambios: legibleCorreccion(c),
+    }))
+    .filter((c) => c.cambios.length > 0);
+}
+
 // ---------------------------------------------------------------------------
 // Lectura
 // ---------------------------------------------------------------------------
@@ -850,19 +964,6 @@ router.get(
       return;
     }
 
-    // El rastro de correcciones. entidad/entidad_id es el par polimorfico
-    // documentado en CLAUDE.md: se filtra por entidad primero.
-    const correcciones = await query(
-      `SELECT al.id, al.created_at, al.detalles, u.nombre AS usuario_nombre
-         FROM audit_log al
-         JOIN users u ON u.id = al.user_id
-        WHERE al.entidad = 'reporte_diario'
-          AND al.entidad_id = $1
-          AND al.accion = 'editar'
-        ORDER BY al.created_at`,
-      [req.params.id],
-    );
-
     const { es_consorcio, contratista, ...fila } = reporte.rows[0] as {
       creado_por: number;
       es_consorcio: boolean;
@@ -877,7 +978,7 @@ router.get(
         // Como se llama la cuadrilla propia: Pinellas, o el consorcio.
         nombre_propio: nombrePropio(consorcioDelProyecto({ es_consorcio, contratista })),
         ...(await leerPartesDelReporte(req.params.id)),
-        correcciones: correcciones.rows,
+        correcciones: await leerCorrecciones(req.params.id),
         // Para que la pantalla no ofrezca "Editar" donde la API va a negarlo.
         puede_editar: puedeCorregir(req, autorId),
       },
@@ -1051,10 +1152,13 @@ router.put(
         return;
       }
 
-      const areasAntes = await client.query<{ id: number }>(
-        'SELECT area_id AS id FROM proyecto_reporte_areas WHERE reporte_id = $1',
-        [req.params.id],
-      );
+      // Las areas se comparan por nombre, que es lo que se lee en Correcciones:
+      // comparadas por id, la linea decia «Áreas: 3, 1» en vez de sus nombres.
+      const nombresDeAreas = `SELECT a.nombre
+           FROM proyecto_reporte_areas ra
+           JOIN proyecto_areas a ON a.id = ra.area_id
+          WHERE ra.reporte_id = $1`;
+      const areasAntes = await client.query<{ nombre: string }>(nombresDeAreas, [req.params.id]);
 
       // El SET se arma solo con los campos que vienen en la peticion.
       //
@@ -1115,10 +1219,7 @@ router.put(
 
       await guardarFilas(req.params.id, proyectoId, body, consultar);
 
-      const areasAhora = await client.query<{ id: number }>(
-        'SELECT area_id AS id FROM proyecto_reporte_areas WHERE reporte_id = $1',
-        [req.params.id],
-      );
+      const areasAhora = await client.query<{ nombre: string }>(nombresDeAreas, [req.params.id]);
 
       const cambios: Record<string, Cambio> = diffCampos(
         {
@@ -1127,14 +1228,14 @@ router.put(
             actual.rows[0].horas_perdidas === null
               ? null
               : Number(actual.rows[0].horas_perdidas),
-          areas: areasAntes.rows.map((a) => a.id),
+          areas: areasAntes.rows.map((a) => a.nombre),
         },
         {
           ...body,
           // Las areas se comparan contra lo que de verdad quedo guardado, no
           // contra lo que se pidio: un id de otra obra no entra, y decir que
           // entro seria mentira.
-          areas: body.areas ? areasAhora.rows.map((a) => a.id) : undefined,
+          areas: body.areas ? areasAhora.rows.map((a) => a.nombre) : undefined,
         },
       );
 
@@ -1152,11 +1253,25 @@ router.put(
         Object.assign(cambios, diffFilas(filasAntes.entregas, filasAhora.entregas, null));
       }
 
-      await client.query('COMMIT');
-
       // Un guardado que no movio nada no deja linea: si cada guardado dejara
       // rastro, el rastro se llenaria de ruido y dejaria de leerse.
-      if (Object.keys(cambios).length > 0) {
+      const hayCambios = Object.keys(cambios).length > 0;
+
+      // Y solo es correccion si el reporte ya se habia enviado. Guardar otra vez
+      // un borrador —el camino del reintento de arriba— no corrige nada: ese
+      // reporte todavia no ha salido.
+      //
+      // Aqui NO se archiva el PDF: faltan las fotos de este mismo guardado, que
+      // suben despues. Lo archiva el aviso final (/correcciones/terminar).
+      if (hayCambios && actual.rows[0].completo) {
+        await anotarCorreccion(
+          consultar, Number(req.params.id), req.user!.id, claveCorreccion(req), { cambios },
+        );
+      }
+
+      await client.query('COMMIT');
+
+      if (hayCambios) {
         await registrarAudit(
           req.user!.id,
           'editar',
@@ -1164,14 +1279,6 @@ router.put(
           Number(req.params.id),
           { cambios },
         );
-
-        // Cada correccion congela su propia version en R2, para que quede
-        // constancia de que decia el documento antes y despues. Va aparte de la
-        // respuesta: armar un PDF tarda, y una falla al archivar no debe
-        // tumbar una correccion que ya quedo guardada.
-        void archivarReportePdf(Number(req.params.id)).catch((err: unknown) => {
-          console.error('Error archivando el PDF de la corrección:', err);
-        });
       }
 
       res.json({ success: true, data: updated.rows[0] });
@@ -1249,18 +1356,7 @@ export async function buildReportePdfInput(
     [reporteId],
   );
 
-  const corr = await query<{
-    created_at: Date;
-    usuario_nombre: string;
-    detalles: { cambios?: Record<string, Cambio> } | null;
-  }>(
-    `SELECT al.created_at, u.nombre AS usuario_nombre, al.detalles
-       FROM audit_log al JOIN users u ON u.id = al.user_id
-      WHERE al.entidad = 'reporte_diario' AND al.entidad_id = $1
-        AND al.accion = 'editar'
-      ORDER BY al.created_at`,
-    [reporteId],
-  );
+  const corr = await leerCorrecciones(reporteId);
 
   const filas = await leerFilas(reporteId);
 
@@ -1326,8 +1422,9 @@ export async function buildReportePdfInput(
     atrasos: row.atrasos,
     novedades: row.novedades,
     fotos: fotos.rows,
-    correcciones: corr.rows.map((c) => ({
+    correcciones: corr.map((c) => ({
       cuando: new Date(c.created_at).toLocaleString('es-PA', {
+        ...HORA_PANAMA,
         day: 'numeric',
         month: 'short',
         year: 'numeric',
@@ -1335,9 +1432,7 @@ export async function buildReportePdfInput(
         minute: '2-digit',
       }),
       quien: c.usuario_nombre,
-      que: c.detalles?.cambios
-        ? describirCambios(c.detalles.cambios)
-        : 'Cambio registrado',
+      cambios: c.cambios,
     })),
   };
 }
@@ -1347,8 +1442,8 @@ export async function buildReportePdfInput(
  * que quien lo mande por correo no tenga que generarlo dos veces.
  *
  * La version 1 se archiva al crear el reporte, que es cuando sale por correo;
- * cada correccion posterior archiva la siguiente. Ver el reporte en pantalla
- * no archiva nada: eso se genera al vuelo.
+ * cada correccion posterior archiva la siguiente (archivarCorreccionesDelReporte).
+ * Ver el reporte en pantalla no archiva nada: eso se genera al vuelo.
  */
 export async function archivarReportePdf(
   reporteId: number,
@@ -1376,6 +1471,72 @@ export async function archivarReportePdf(
   );
 
   return { buffer, version, key };
+}
+
+/**
+ * Congela una version nueva del PDF si el reporte tiene correcciones que la
+ * ultima version archivada todavia no dice.
+ *
+ * Cada correccion deja su propia version en R2, para que quede constancia de
+ * que decia el documento antes y despues. Se archiva al final del guardado, ya
+ * con sus fotos: antes se archivaba al guardar el texto, cuando las fotos de esa
+ * misma correccion todavia no habian subido.
+ *
+ * Cada linea se marca con la version solo si no cambio mientras el PDF se
+ * armaba. Si una foto tardia llego en medio, la linea sigue pendiente y la
+ * siguiente pasada la archiva otra vez. La marca se lee como texto porque en JS
+ * una fecha pierde los microsegundos y ya no seria igual a la de la base.
+ */
+async function archivarCorreccionesDelReporte(reporteId: number): Promise<void> {
+  const pendientes = await query<{ id: number; marca: string }>(
+    `SELECT c.id, c.updated_at::text AS marca
+       FROM proyecto_reporte_correcciones c
+      WHERE c.reporte_id = $1 AND c.pdf_version IS NULL AND ${CON_CONTENIDO}`,
+    [reporteId],
+  );
+  if (pendientes.rows.length === 0) return;
+
+  const archivado = await archivarReportePdf(reporteId);
+  if (!archivado) return;
+
+  for (const p of pendientes.rows) {
+    await query(
+      `UPDATE proyecto_reporte_correcciones SET pdf_version = $1
+        WHERE id = $2 AND updated_at = $3::timestamptz`,
+      [archivado.version, p.id, p.marca],
+    );
+  }
+}
+
+/**
+ * Archiva las correcciones que se quedaron sin su version.
+ *
+ * Pasa cuando se corta la senal antes del aviso final: lo que llego ya se ve en
+ * la seccion Correcciones, pero nadie pidio el PDF. Lo corre el cron de la
+ * madrugada, junto con el barrido de borradores. La hora de margen es para no
+ * archivar una correccion que alguien sigue subiendo.
+ */
+export async function archivarCorreccionesPendientes(): Promise<number> {
+  const reportes = await query<{ reporte_id: number }>(
+    `SELECT DISTINCT c.reporte_id
+       FROM proyecto_reporte_correcciones c
+       JOIN proyecto_reportes r ON r.id = c.reporte_id
+      WHERE c.pdf_version IS NULL AND ${CON_CONTENIDO}
+        AND c.updated_at < CURRENT_TIMESTAMP - INTERVAL '1 hour'
+        AND r.activo = true AND r.completo = true`,
+  );
+  // Uno por uno, y que uno que falle no deje sin archivar a los demas.
+  for (const { reporte_id: id } of reportes.rows) {
+    try {
+      await archivarCorreccionesDelReporte(id);
+    } catch (err) {
+      console.error(`[reportes] no se pudo archivar la corrección del reporte ${id}:`, err);
+    }
+  }
+  if (reportes.rows.length > 0) {
+    console.log(`[reportes] ${reportes.rows.length} reporte(s) con correcciones archivadas`);
+  }
+  return reportes.rows.length;
 }
 
 // GET /api/proyecto-reportes/:proyectoId/:id/pdf
@@ -1505,6 +1666,48 @@ router.post(
         numero: completado.numero,
       },
     });
+  }),
+);
+
+// POST /api/proyecto-reportes/:proyectoId/:id/correcciones/terminar
+//
+// El aviso final de un «Guardar cambios»: el texto y las fotos de esa
+// correccion ya llegaron. Es para la correccion lo que /emitir es para el
+// borrador, y es cuando se archiva su version del PDF, ya con las fotos. Se
+// archiva todo lo pendiente del reporte, no solo lo de este guardado: si antes
+// quedo algo sin archivar, esta version ya lo dice tambien.
+//
+// Se contesta sin esperar al PDF: armarlo tarda, y el archivo es constancia
+// para la oficina, no algo que el ingeniero tenga que esperar. Si falla, o si
+// este aviso nunca llega, lo archiva el cron de la madrugada.
+router.post(
+  '/:proyectoId/:id/correcciones/terminar',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const reporte = await query<{ creado_por: number }>(
+      `SELECT creado_por FROM proyecto_reportes
+        WHERE id = $1 AND proyecto_id = $2 AND activo = true AND completo = true`,
+      [req.params.id, req.params.proyectoId],
+    );
+    if (reporte.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+    if (!puedeCorregir(req, reporte.rows[0].creado_por)) {
+      res.status(403).json({
+        success: false,
+        message: 'Solo quien escribió el reporte puede corregirlo',
+      });
+      return;
+    }
+
+    void archivarCorreccionesDelReporte(Number(req.params.id)).catch((err: unknown) => {
+      console.error('Error archivando el PDF de la corrección:', err);
+    });
+
+    res.json({ success: true });
   }),
 );
 
@@ -1791,18 +1994,11 @@ router.post(
       return;
     }
 
-    const desde = await query<{ next: number }>(
-      `SELECT COALESCE(MAX(orden), 0) + 1 AS next
-         FROM proyecto_reporte_fotos WHERE reporte_id = $1`,
-      [req.params.id],
-    );
-
-    const guardadas = [];
-    let orden = desde.rows[0].next;
+    // Primero R2 y despues la base: si una subida falla, no queda ninguna fila
+    // apuntando a un archivo que no existe.
+    const subidas: { file: Express.Multer.File; key: string }[] = [];
     for (const file of files) {
       const key = claveFoto(reporte.proyecto_corto, Number(req.params.id), file.originalname);
-      // Primero R2 y despues la base: si la subida falla, no queda una fila
-      // apuntando a un archivo que no existe.
       await uploadFile(key, file.buffer, file.mimetype);
 
       // Y la copia reducida, que es la que usa el PDF. Hacerla aqui —una vez,
@@ -1817,33 +2013,81 @@ router.post(
       } catch (err) {
         console.error(`[reportes] no se pudo guardar la copia reducida de ${key}:`, err);
       }
-      const row = await query<{
-        id: number;
-        nombre_archivo: string;
-        r2_key: string;
-        tipo_mime: string | null;
-        tamano: number | null;
-        orden: number;
-      }>(
-        `INSERT INTO proyecto_reporte_fotos
-           (reporte_id, nombre_archivo, r2_key, tipo_mime, tamano, orden, creado_por)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         RETURNING id, nombre_archivo, r2_key, tipo_mime, tamano, orden`,
-        [
-          req.params.id,
-          file.originalname,
-          key,
-          file.mimetype,
-          file.size,
-          orden++,
-          req.user!.id,
-        ],
-      );
-      guardadas.push({
-        ...row.rows[0],
-        url: await getFileSignedUrl(key, 900),
-      });
+      subidas.push({ file, key });
     }
+
+    // Las filas van en una transaccion, con el reporte bloqueado. Ahi se decide
+    // si estas fotos corrigen un reporte ya enviado o son parte de su envio, y
+    // la respuesta tiene que ser la misma que ve /emitir, que bloquea la misma
+    // fila. De paso, todas las fotos de la peticion entran o ninguna.
+    type FotoGuardada = {
+      id: number;
+      nombre_archivo: string;
+      r2_key: string;
+      tipo_mime: string | null;
+      tamano: number | null;
+      orden: number;
+    };
+    const filas: FotoGuardada[] = [];
+    const client = await pool.connect();
+    const consultar: Consultar = (sql, params) => client.query(sql, params);
+    try {
+      await client.query('BEGIN');
+      const estado = await client.query<{ completo: boolean }>(
+        `SELECT completo FROM proyecto_reportes
+          WHERE id = $1 AND activo = true
+          FOR UPDATE`,
+        [req.params.id],
+      );
+      if (estado.rows.length === 0) {
+        await client.query('ROLLBACK');
+        res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+        return;
+      }
+
+      const desde = await client.query<{ next: number }>(
+        `SELECT COALESCE(MAX(orden), 0) + 1 AS next
+           FROM proyecto_reporte_fotos WHERE reporte_id = $1`,
+        [req.params.id],
+      );
+      let orden = desde.rows[0].next;
+      for (const { file, key } of subidas) {
+        const row = await client.query<FotoGuardada>(
+          `INSERT INTO proyecto_reporte_fotos
+             (reporte_id, nombre_archivo, r2_key, tipo_mime, tamano, orden, creado_por)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           RETURNING id, nombre_archivo, r2_key, tipo_mime, tamano, orden`,
+          [
+            req.params.id,
+            file.originalname,
+            key,
+            file.mimetype,
+            file.size,
+            orden++,
+            req.user!.id,
+          ],
+        );
+        filas.push(row.rows[0]);
+      }
+
+      if (estado.rows[0].completo) {
+        await anotarCorreccion(
+          consultar, Number(req.params.id), req.user!.id, claveCorreccion(req),
+          { fotosAgregadas: filas.map((f) => ({ id: f.id, nombre: f.nombre_archivo })) },
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    const guardadas = await Promise.all(
+      filas.map(async (f) => ({ ...f, url: await getFileSignedUrl(f.r2_key, 900) })),
+    );
 
     await registrarAudit(
       req.user!.id,
@@ -1891,9 +2135,42 @@ router.delete(
     // Primero la fila y despues R2: si el borrado en R2 falla, queda un
     // archivo huerfano, que es mucho menos grave que una foto que la pantalla
     // lista pero no puede mostrar.
-    await query('DELETE FROM proyecto_reporte_fotos WHERE id = $1', [
-      req.params.fotoId,
-    ]);
+    //
+    // La fila sale en una transaccion con el reporte bloqueado, por lo mismo
+    // que la subida: ahi se decide si quitarla es una correccion.
+    const client = await pool.connect();
+    const consultar: Consultar = (sql, params) => client.query(sql, params);
+    try {
+      await client.query('BEGIN');
+      const estado = await client.query<{ completo: boolean }>(
+        'SELECT completo FROM proyecto_reportes WHERE id = $1 FOR UPDATE',
+        [req.params.id],
+      );
+      const borrada = await client.query(
+        'DELETE FROM proyecto_reporte_fotos WHERE id = $1 AND reporte_id = $2 RETURNING id',
+        [req.params.fotoId, req.params.id],
+      );
+      // Dos copias de la misma peticion pasan las dos la comprobacion de arriba;
+      // solo la primera borra algo, y solo esa puede anotar la correccion.
+      if (borrada.rows.length === 0) {
+        await client.query('ROLLBACK');
+        res.status(404).json({ success: false, message: 'Foto no encontrada' });
+        return;
+      }
+      if (estado.rows[0]?.completo) {
+        await anotarCorreccion(
+          consultar, Number(req.params.id), req.user!.id, claveCorreccion(req),
+          { fotosQuitadas: [{ id: Number(req.params.fotoId), nombre: foto.rows[0].nombre_archivo }] },
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
     await deleteFile(foto.rows[0].r2_key);
     // Y su copia reducida. Si no existe —foto de antes del cambio— no pasa
     // nada: borrar algo que no esta no es un error que deba verse.

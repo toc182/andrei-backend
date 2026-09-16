@@ -187,12 +187,384 @@ export function diffFilas(
   return salida;
 }
 
-/** Una linea legible por cambio, para el PDF y la pantalla. */
-export function describirCambios(cambios: Record<string, Cambio>): string {
-  const partes = Object.values(cambios).map((c) => {
-    if (c.antes === null) return `se agregó ${c.label}`;
-    if (c.despues === null) return `se quitó ${c.label}`;
-    return `${c.label} de ${c.antes} a ${c.despues}`;
+/** Una foto que una correccion agrego o quito. */
+export interface FotoCorregida {
+  id: number;
+  nombre: string;
+}
+
+/** Lo que guarda una fila de proyecto_reporte_correcciones. */
+export interface ContenidoCorreccion {
+  cambios: Record<string, Cambio>;
+  fotos_agregadas: FotoCorregida[];
+  fotos_quitadas: FotoCorregida[];
+}
+
+/** Lo que una sola peticion le suma a una correccion. */
+export interface ParteCorreccion {
+  cambios?: Record<string, Cambio>;
+  fotosAgregadas?: FotoCorregida[];
+  fotosQuitadas?: FotoCorregida[];
+}
+
+const mismoValor = (a: Cambio['antes'], b: Cambio['antes']) =>
+  (a === null ? null : String(a)) === (b === null ? null : String(b));
+
+/**
+ * Junta los cambios de dos guardados de la MISMA correccion.
+ *
+ * Pasa cuando se corta la senal: el ingeniero vuelve a darle a «Guardar
+ * cambios», quiza despues de corregir algo mas, y todo sigue siendo una sola
+ * correccion. De cada campo se queda el «antes» del primer guardado y el
+ * «despues» del ultimo; si al final quedo como estaba, el campo no cambio.
+ */
+export function fusionarCambios(
+  previos: Record<string, Cambio>,
+  nuevos: Record<string, Cambio>,
+): Record<string, Cambio> {
+  const salida: Record<string, Cambio> = { ...previos };
+  for (const [campo, c] of Object.entries(nuevos)) {
+    const antes = campo in previos ? previos[campo].antes : c.antes;
+    if (mismoValor(antes, c.despues)) {
+      delete salida[campo];
+    } else {
+      salida[campo] = { label: c.label, antes, despues: c.despues };
+    }
+  }
+  return salida;
+}
+
+/**
+ * Suma a una correccion lo que trae una peticion mas del mismo guardado.
+ *
+ * Una foto que se agrego y se quito dentro de la misma correccion no cambio
+ * nada: pasa en el reintento, cuando una foto alcanzo a subir antes del corte y
+ * el ingeniero la quito antes de volver a darle a Guardar.
+ */
+export function sumarACorreccion(
+  actual: ContenidoCorreccion,
+  parte: ParteCorreccion,
+): ContenidoCorreccion {
+  let agregadas = [...actual.fotos_agregadas, ...(parte.fotosAgregadas ?? [])];
+  const quitadas = [...actual.fotos_quitadas];
+  for (const f of parte.fotosQuitadas ?? []) {
+    if (agregadas.some((a) => a.id === f.id)) {
+      agregadas = agregadas.filter((a) => a.id !== f.id);
+    } else {
+      quitadas.push(f);
+    }
+  }
+  return {
+    cambios: fusionarCambios(actual.cambios, parte.cambios ?? {}),
+    fotos_agregadas: agregadas,
+    fotos_quitadas: quitadas,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Como se lee una correccion
+// ---------------------------------------------------------------------------
+//
+// Solo se muestra lo que cambio: lo quitado va tachado y lo agregado subrayado.
+// Antes se imprimia «Trabajo ejecutado de <todo el texto> a <todo el texto>», y
+// en el reporte RD-PBR-260915 eso fueron once renglones para decir que Cesar
+// agrego uno al final. El diseno lo aprobo Ivan sobre una maqueta el 2026-09-16.
+//
+// Aqui se arma la UNICA version de cada linea. La pantalla y el PDF la reciben
+// hecha y solo le ponen estilo, para que no puedan decir cosas distintas.
+
+/**
+ * Un pedazo de un renglon. Quien lo dibuja los junta con un espacio.
+ *
+ * - igual: texto que no cambio, o una frase como «se agregaron 2».
+ * - quitado / agregado: tachado / subrayado.
+ * - corte: el «…» donde se omite texto que no cambio.
+ * - nota: la aclaracion en gris, «y 4 cambios más en este texto».
+ */
+export interface Trozo {
+  tipo: 'igual' | 'quitado' | 'agregado' | 'corte' | 'nota';
+  texto: string;
+}
+
+/** Lo que cambio en un campo, listo para dibujar: su nombre y sus renglones. */
+export interface CambioLegible {
+  etiqueta: string;
+  renglones: Trozo[][];
+}
+
+/** Los campos de texto largo: se comparan renglon por renglon y palabra por palabra. */
+const CAMPOS_DE_TEXTO = new Set(['que_se_hizo', 'atrasos', 'novedades', 'motivo']);
+
+/** Cuantos cambios se muestran de un mismo texto antes de decir «y N más». */
+const MAX_CAMBIOS = 3;
+
+/** Palabras que no cambiaron que se dejan a cada lado de un cambio. */
+const CONTEXTO = 6;
+
+/**
+ * Por encima de esto no se compara palabra por palabra: la cuenta crece con el
+ * producto de las dos longitudes, y un parrafo enorme reescrito se muestra
+ * entero de todos modos.
+ */
+const MAX_CELDAS = 250_000;
+
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+const trozo = (tipo: Trozo['tipo'], texto: string): Trozo => ({ tipo, texto });
+
+type Paso<T> = { tipo: 'igual' | 'quitado' | 'agregado'; valor: T };
+
+/**
+ * Alinea dos listas por su subsecuencia comun mas larga. Donde hay que quitar
+ * y agregar a la vez, lo quitado va primero, que es como se lee.
+ */
+function alinear<T>(a: T[], b: T[]): Paso<T>[] {
+  const n = a.length;
+  const m = b.length;
+  const largo = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      largo[i][j] = a[i] === b[j]
+        ? largo[i + 1][j + 1] + 1
+        : Math.max(largo[i + 1][j], largo[i][j + 1]);
+    }
+  }
+  const pasos: Paso<T>[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      pasos.push({ tipo: 'igual', valor: a[i] });
+      i += 1;
+      j += 1;
+    } else if (largo[i + 1][j] >= largo[i][j + 1]) {
+      pasos.push({ tipo: 'quitado', valor: a[i++] });
+    } else {
+      pasos.push({ tipo: 'agregado', valor: b[j++] });
+    }
+  }
+  while (i < n) pasos.push({ tipo: 'quitado', valor: a[i++] });
+  while (j < m) pasos.push({ tipo: 'agregado', valor: b[j++] });
+  return pasos;
+}
+
+const palabras = (s: string) => s.split(/\s+/).filter((p) => p !== '');
+
+/**
+ * Los renglones con algo escrito, con los espacios normalizados. Ni un renglon
+ * en blanco de mas ni un espacio doble son un cambio que valga la pena mostrar.
+ */
+const renglones = (s: string) =>
+  s.split(/\r?\n/).map((r) => palabras(r).join(' ')).filter((r) => r !== '');
+
+/**
+ * Un renglon que se edito, con cada cambio marcado dentro.
+ *
+ * Devuelve null si los dos renglones se parecen tan poco que marcar palabra por
+ * palabra confundiria mas que ayudar: entonces se muestran enteros, el viejo
+ * tachado y el nuevo subrayado.
+ */
+function renglonEditado(antes: string, despues: string): Trozo[] | null {
+  const a = palabras(antes);
+  const b = palabras(despues);
+  if (a.length * b.length > MAX_CELDAS) return null;
+
+  const pasos = alinear(a, b);
+  const comunes = pasos.filter((p) => p.tipo === 'igual').length;
+  if (comunes / Math.max(a.length, b.length) < 0.5) return null;
+
+  // Tramos: lo que no cambio, y cada cambio con lo que se quito y lo que entro.
+  type Igual = { igual: true; palabras: string[] };
+  type Distinto = { igual: false; quitadas: string[]; agregadas: string[] };
+  const tramos: (Igual | Distinto)[] = [];
+  for (const p of pasos) {
+    const ultimo = tramos[tramos.length - 1];
+    if (p.tipo === 'igual') {
+      if (ultimo?.igual) {
+        ultimo.palabras.push(p.valor);
+      } else {
+        tramos.push({ igual: true, palabras: [p.valor] });
+      }
+      continue;
+    }
+    let cambio = ultimo && !ultimo.igual ? ultimo : null;
+    if (!cambio) {
+      cambio = { igual: false, quitadas: [], agregadas: [] };
+      tramos.push(cambio);
+    }
+    (p.tipo === 'quitado' ? cambio.quitadas : cambio.agregadas).push(p.valor);
+  }
+
+  // Lo que no cambio se recorta a unas palabras de cada lado del cambio, pero
+  // solo si lo omitido vale la pena: esconder una o dos palabras no ahorra nada.
+  const salida: Trozo[] = [];
+  tramos.forEach((t, k) => {
+    if (!t.igual) {
+      if (t.quitadas.length) salida.push(trozo('quitado', t.quitadas.join(' ')));
+      if (t.agregadas.length) salida.push(trozo('agregado', t.agregadas.join(' ')));
+      return;
+    }
+    const p = t.palabras;
+    const primero = k === 0;
+    const ultimo = k === tramos.length - 1;
+    const guardar = primero || ultimo ? CONTEXTO : 2 * CONTEXTO;
+    if (p.length <= guardar + 3) {
+      salida.push(trozo('igual', p.join(' ')));
+    } else if (primero) {
+      salida.push(trozo('corte', '…'), trozo('igual', p.slice(-CONTEXTO).join(' ')));
+    } else if (ultimo) {
+      salida.push(trozo('igual', p.slice(0, CONTEXTO).join(' ')), trozo('corte', '…'));
+    } else {
+      salida.push(
+        trozo('igual', p.slice(0, CONTEXTO).join(' ')),
+        trozo('corte', '…'),
+        trozo('igual', p.slice(-CONTEXTO).join(' ')),
+      );
+    }
   });
-  return partes.join(' · ');
+  return salida;
+}
+
+/**
+ * Lo que cambio en un texto largo, como grupos de renglones. Cada grupo es un
+ * «cambio» para el tope de MAX_CAMBIOS.
+ *
+ * Primero se alinean los renglones: los ingenieros escriben el trabajo del dia
+ * como una lista, un renglon por actividad, y lo que no se toco no se muestra.
+ * Un renglon quitado sale tachado; uno agregado, subrayado; uno editado, con el
+ * cambio marcado dentro.
+ */
+function cambiosDeTexto(antes: string | null, despues: string | null): Trozo[][][] {
+  const pasos = alinear(renglones(antes ?? ''), renglones(despues ?? ''));
+
+  // Cada tanda de renglones distintos entre dos iguales.
+  const tandas: { quitados: string[]; agregados: string[] }[] = [];
+  let abierta: { quitados: string[]; agregados: string[] } | null = null;
+  for (const p of pasos) {
+    if (p.tipo === 'igual') {
+      abierta = null;
+      continue;
+    }
+    if (!abierta) {
+      abierta = { quitados: [], agregados: [] };
+      tandas.push(abierta);
+    }
+    (p.tipo === 'quitado' ? abierta.quitados : abierta.agregados).push(p.valor);
+  }
+
+  const grupos: Trozo[][][] = [];
+  for (const { quitados, agregados } of tandas) {
+    // Cada renglon quitado se empareja, en orden, con el primer renglon nuevo
+    // que se le parezca: es quien corrigio unas palabras. En la misma tanda
+    // puede haber ademas renglones nuevos de verdad —corregir un numero del
+    // parrafo y agregar una actividad debajo, en el mismo guardado—, y sin
+    // emparejar asi el parrafo entero salia tachado y reescrito.
+    const editados = new Map<number, Trozo[]>();
+    const sueltos: string[] = [];
+    let desde = 0;
+    for (const q of quitados) {
+      let hallado = -1;
+      for (let i = desde; i < agregados.length && hallado < 0; i += 1) {
+        const editado = renglonEditado(q, agregados[i]);
+        if (editado) {
+          editados.set(i, editado);
+          hallado = i;
+        }
+      }
+      if (hallado < 0) sueltos.push(q);
+      else desde = hallado + 1;
+    }
+
+    // Un renglon cambiado por otro muy distinto: el viejo y el nuevo, enteros,
+    // cuentan como un solo cambio.
+    if (quitados.length === 1 && agregados.length === 1 && editados.size === 0) {
+      grupos.push([[trozo('quitado', quitados[0])], [trozo('agregado', agregados[0])]]);
+      continue;
+    }
+    for (const q of sueltos) grupos.push([[trozo('quitado', q)]]);
+    agregados.forEach((a, i) => grupos.push([editados.get(i) ?? [trozo('agregado', a)]]));
+  }
+  return grupos;
+}
+
+/** Un valor corto —el clima, un numero, una fila de equipo— como se lee. */
+function valorCorto(campo: string, v: string | number): string {
+  const s = String(v);
+  if (campo === 'fecha' && /^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split('-').map(Number);
+    return `${d} ${MESES[m - 1]} ${y}`;
+  }
+  return s;
+}
+
+/** El orden en que se leen los campos: el del formulario, y despues las filas. */
+function orden(campo: string): number {
+  const i = Object.keys(CAMPO_LABELS).indexOf(campo);
+  if (i >= 0) return i;
+  if (campo.startsWith('puesto:')) return 100;
+  if (campo.startsWith('equipo:')) return 200;
+  return 300;
+}
+
+/** Un campo cambiado, listo para dibujar; null si al final no se ve ningun cambio. */
+function cambioLegible(campo: string, c: Cambio): CambioLegible | null {
+  if (CAMPOS_DE_TEXTO.has(campo)) {
+    const grupos = cambiosDeTexto(
+      c.antes === null ? null : String(c.antes),
+      c.despues === null ? null : String(c.despues),
+    );
+    if (grupos.length === 0) return null;
+    const ocultos = grupos.length - MAX_CAMBIOS;
+    const renglonesVisibles = grupos.slice(0, MAX_CAMBIOS).flat();
+    if (ocultos > 0) {
+      renglonesVisibles.push([
+        trozo('nota', `y ${ocultos} ${ocultos === 1 ? 'cambio más' : 'cambios más'} en este texto`),
+      ]);
+    }
+    return { etiqueta: c.label, renglones: renglonesVisibles };
+  }
+
+  // Una entrega se nombra dentro del renglon: sin cantidad no habria que marcar.
+  if (campo.startsWith('entrega:')) {
+    const con = (v: string | number) => (v === '—' ? c.label : `${c.label} · ${v}`);
+    const renglon = c.antes === null
+      ? [trozo('agregado', con(c.despues!))]
+      : c.despues === null
+        ? [trozo('quitado', con(c.antes))]
+        : [trozo('igual', c.label), trozo('quitado', String(c.antes)), trozo('agregado', String(c.despues))];
+    return { etiqueta: 'Entregas', renglones: [renglon] };
+  }
+
+  const renglon: Trozo[] = [];
+  if (c.antes !== null) renglon.push(trozo('quitado', valorCorto(campo, c.antes)));
+  if (c.despues !== null) renglon.push(trozo('agregado', valorCorto(campo, c.despues)));
+  return { etiqueta: c.label, renglones: [renglon] };
+}
+
+/**
+ * Una correccion entera, lista para dibujar: los campos en el orden del
+ * formulario y las fotos al final. Vacia quiere decir que el guardado no movio
+ * nada que se vea, y esa correccion no se muestra.
+ *
+ * Las fotos se cuentan y no se nombran: desde un iPhone casi todas se llaman
+ * «image.jpg», y el nombre no le dice nada a nadie.
+ */
+export function legibleCorreccion(c: ContenidoCorreccion): CambioLegible[] {
+  const salida = Object.entries(c.cambios)
+    .sort(([a], [b]) => orden(a) - orden(b))
+    .map(([campo, cambio]) => cambioLegible(campo, cambio))
+    .filter((x): x is CambioLegible => x !== null);
+
+  const fotos: Trozo[][] = [];
+  const agregadas = c.fotos_agregadas.length;
+  const quitadas = c.fotos_quitadas.length;
+  if (agregadas > 0) {
+    fotos.push([trozo('igual', agregadas === 1 ? 'se agregó 1' : `se agregaron ${agregadas}`)]);
+  }
+  if (quitadas > 0) {
+    fotos.push([trozo('igual', quitadas === 1 ? 'se quitó 1' : `se quitaron ${quitadas}`)]);
+  }
+  if (fotos.length > 0) salida.push({ etiqueta: 'Fotos', renglones: fotos });
+
+  return salida;
 }

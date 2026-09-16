@@ -37,6 +37,7 @@ const PRUEBAS: Record<string, string> = {
   'reporte-cola': 'reporte-cola-humo.ts',
   'reporte-consorcio': 'reporte-consorcio-humo.ts',
   'reporte-continuar': 'reporte-continuar-humo.ts',
+  'reporte-correcciones': 'reporte-correcciones-humo.ts',
   'reporte-fotos': 'reporte-fotos-humo.ts',
   'reporte-guardado-doble': 'reporte-guardado-doble-humo.ts',
 };
