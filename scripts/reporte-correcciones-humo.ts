@@ -261,9 +261,10 @@ const main = async () => {
     `UPDATE proyecto_reporte_correcciones SET created_at = '2026-09-16T02:04:55Z'
       WHERE reporte_id = $1 AND clave = $2`,
     [id, K1]);
-  const cuando = (await buildReportePdfInput(id))?.correcciones[0]?.cuando ?? '';
-  c(/^15 sept?\.? 2026, 9:04\s?p\.\s?m\.$/u.test(cuando.replace(/\s/g, ' ')),
-    `el PDF dice el 15 a las 9:04 p. m., no el 16 (dice «${cuando}»)`);
+  const primera = (await buildReportePdfInput(id))?.correcciones[0];
+  const cuando = `${primera?.fecha} | ${primera?.hora}`.replace(/\s/g, ' ');
+  c(/^15 sept?\.? 2026 \| 9:04 ?p\. ?m\.$/u.test(cuando),
+    `el PDF dice el 15, y a las 9:04 p. m. en su propio renglon, no el 16 (dice «${cuando}»)`);
 
   // ---- 8. la migracion 166 copia las correcciones de antes, y solo esas ----
   // Un reporte como los dejaba el codigo viejo: todo en audit_log, lo de antes

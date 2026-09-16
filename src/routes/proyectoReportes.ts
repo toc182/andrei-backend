@@ -1423,11 +1423,14 @@ export async function buildReportePdfInput(
     novedades: row.novedades,
     fotos: fotos.rows,
     correcciones: corr.map((c) => ({
-      cuando: new Date(c.created_at).toLocaleString('es-PA', {
+      fecha: new Date(c.created_at).toLocaleDateString('es-PA', {
         ...HORA_PANAMA,
         day: 'numeric',
         month: 'short',
         year: 'numeric',
+      }),
+      hora: new Date(c.created_at).toLocaleTimeString('es-PA', {
+        ...HORA_PANAMA,
         hour: 'numeric',
         minute: '2-digit',
       }),

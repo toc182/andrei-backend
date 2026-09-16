@@ -26,6 +26,11 @@ const GRAY = '#718096';
 const LIGHT_BG = '#f7fafc';
 const RULE = '#e2e8f0';
 const WARN = '#d97706';
+// Las marcas de Correcciones, en rojo y verde apagados.
+const QUITADO = '#9a8686';
+const QUITADO_LINEA = '#d3c2c2';
+const AGREGADO = '#71887a';
+const AGREGADO_LINEA = '#c2d1c6';
 
 export interface ReportePdfInput {
   numero: string;
@@ -58,7 +63,8 @@ export interface ReportePdfInput {
   atrasos: string | null;
   novedades: string | null;
   fotos: { r2_key: string; nombre_archivo: string; tipo_mime: string | null }[];
-  correcciones: { cuando: string; quien: string; cambios: CambioLegible[] }[];
+  /** fecha y hora ya escritas en la hora de Panamá. */
+  correcciones: { fecha: string; hora: string; quien: string; cambios: CambioLegible[] }[];
 }
 
 /**
@@ -260,8 +266,7 @@ function armarHtml(
     : '';
 
   // Solo lo que cambio, con las mismas marcas que la pantalla: lo quitado
-  // tachado, lo agregado subrayado. La leyenda va porque este papel lo lee
-  // gente de fuera que no conoce la pantalla.
+  // tachado, lo agregado subrayado. Sin leyenda: Ivan la quito el 2026-09-16.
   const trozoHtml = (t: Trozo): string => {
     switch (t.tipo) {
       case 'quitado': return `<del>${esc(t.texto)}</del>`;
@@ -277,12 +282,12 @@ function armarHtml(
       .join('<br>')}</span></div>`;
   const bloqueCorrecciones = d.correcciones.length
     ? `<div class="sect"><div class="sect-h">Correcciones</div>
-         <div class="fixes-legend">Solo se muestra lo que cambió. Tachado: se quitó · Subrayado: se agregó.
-           El texto completo, ya corregido, está arriba en este documento.</div>
          <table class="fixes">${d.correcciones
            .map(
              (c) =>
-               `<tr><td class="when">${esc(c.cuando)}</td>
+               // La fecha arriba y la hora debajo: en un solo renglon la
+               // columna le quitaba ancho a los cambios.
+               `<tr><td class="when">${esc(c.fecha)}<br>${esc(c.hora)}</td>
                     <td class="who">${esc(c.quien)}</td>
                     <td>${c.cambios.map(cambioHtml).join('')}</td></tr>`,
            )
@@ -472,17 +477,19 @@ function armarHtml(
     .suma { display:flex; justify-content:space-between; border-top:1px solid ${RULE};
             margin-top:4px; padding-top:8px; font-size:12.5px; line-height:16px; }
     .suma b { font-size:14px; }
-    .fixes-legend { color:${GRAY}; font-size:10.5px; margin-top:7px; }
-    .fixes { width:100%; border-collapse:collapse; font-size:11.5px; line-height:15px; margin-top:8px; }
+    .fixes { width:100%; border-collapse:collapse; font-size:11.5px; line-height:15px; margin-top:10px; }
     .fixes td { padding:5px 9px; border:1px solid ${RULE}; vertical-align:top; }
-    .fixes .when { width:118px; color:${GRAY}; white-space:nowrap; }
-    .fixes .who { width:96px; font-weight:700; }
+    /* width:1% y sin cortes: la columna mide lo que mide la fecha. */
+    .fixes .when { width:1%; color:${GRAY}; white-space:nowrap; }
+    .fixes .who { width:96px; }
     .fixes .chg { display:grid; grid-template-columns:132px 1fr; gap:8px; }
     .fixes .chg + .chg { margin-top:4px; }
     .fixes .campo, .fixes .gap, .fixes .more { color:${GRAY}; }
     .fixes .more { font-size:11px; }
-    .fixes del { color:#b91c1c; text-decoration-thickness:1.5px; }
-    .fixes ins { color:#0f7b3a; text-decoration:underline; text-decoration-thickness:1.5px;
+    /* Tonos apagados a pedido de Ivan: el tachado y el subrayado son los que
+       dicen que paso; el color solo acompana, y en blanco y negro no hace falta. */
+    .fixes del { color:${QUITADO}; text-decoration-color:${QUITADO_LINEA}; }
+    .fixes ins { color:${AGREGADO}; text-decoration:underline; text-decoration-color:${AGREGADO_LINEA};
                  text-underline-offset:2px; }
   </style></head><body>
     <div class="head">
