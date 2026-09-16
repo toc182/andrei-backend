@@ -9,6 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "migrate": "tsx src/database/migrate.ts",
+    "pruebas": "tsx scripts/pruebas.ts",
     "postdeploy": "tsx src/scripts/post-deploy.ts",
     "lint": "eslint src/",
     "format": "prettier --write src/"

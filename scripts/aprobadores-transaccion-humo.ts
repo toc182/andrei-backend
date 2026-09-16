@@ -17,11 +17,11 @@
 //
 // Usa el proyecto 2, que no tiene solicitudes ni aprobadores, y lo deja como
 // estaba en un finally.
+import { API } from './pruebas/contexto.js';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { query, pool } from '../src/database/config.js';
 
-const API = 'http://localhost:5000/api';
 const P = 2;
 const RONDAS = 8;
 const RUIDO = 16;
@@ -95,66 +95,57 @@ const main = async () => {
       WHERE datname = current_database() AND state LIKE 'idle in transaction%'
         AND pid <> pg_backend_pid()`)).rows[0].n);
 
-  try {
-    solicitud = (await query<{ id: number }>(
-      `INSERT INTO solicitudes_pago
-         (proyecto_id, numero, proveedor, preparado_por, solicitado_por, estado, codigo_verificacion)
-       VALUES ($1, $2, 'Proveedor de prueba', $3, $3, 'aprobada', $4)
-       RETURNING id`,
-      [P, `PRUEBA-APROB-${Date.now()}`, admin.id, crypto.randomBytes(5).toString('hex').toUpperCase()])).rows[0].id;
+  solicitud = (await query<{ id: number }>(
+    `INSERT INTO solicitudes_pago
+       (proyecto_id, numero, proveedor, preparado_por, solicitado_por, estado, codigo_verificacion)
+     VALUES ($1, $2, 'Proveedor de prueba', $3, $3, 'aprobada', $4)
+     RETURNING id`,
+    [P, `PRUEBA-APROB-${Date.now()}`, admin.id, crypto.randomBytes(5).toString('hex').toUpperCase()])).rows[0].id;
 
-    for (let ronda = 1; ronda <= RONDAS; ronda += 1) {
-      await sembrar();
-
-      // Otras peticiones ocupando conexiones mientras corre el guardado.
-      let seguir = true;
-      const ruido = Array.from({ length: RUIDO }, async () => {
-        while (seguir) await pedir('GET', `/approval-settings/project/${P}`);
-      });
-
-      // El segundo aprobador no existe: el INSERT del ultimo paso revienta
-      // contra la clave foranea de users, DESPUES de los dos primeros pasos.
-      const r = await pedir('PUT', `/approval-settings/project/${P}`, {
-        approvers: [{ user_id: otros[2], orden: 1 }, { user_id: 999999999, orden: 2 }],
-      });
-      seguir = false;
-      await Promise.all(ruido);
-
-      c(r.estado >= 400, `ronda ${ronda}: el guardado con un aprobador inexistente falla (dio ${r.estado})`);
-      const e = await estado();
-      c(e.estado === 'aprobada',
-        `ronda ${ronda}: la solicitud sigue aprobada, no se devolvio a pendiente (esta ${e.estado})`);
-      c(e.apr === '1', `ronda ${ronda}: conserva su aprobacion (tiene ${e.apr})`);
-      c(e.rev === '1', `ronda ${ronda}: conserva su revision (tiene ${e.rev})`);
-      c(JSON.stringify(e.aprobadores) === JSON.stringify([otros[0], otros[1]]),
-        `ronda ${ronda}: los aprobadores siguen siendo los de antes (son ${JSON.stringify(e.aprobadores)})`);
-
-      await new Promise((ok2) => setTimeout(ok2, 300));
-      const colgadas = await transaccionesColgadas();
-      c(colgadas === 0, `ronda ${ronda}: no queda ninguna conexion con una transaccion abierta (hay ${colgadas})`);
-    }
-
-    // Y el guardado bueno hace lo mismo que hacia: devuelve a pendiente y
-    // cambia los aprobadores.
+  for (let ronda = 1; ronda <= RONDAS; ronda += 1) {
     await sembrar();
-    const bueno = await pedir('PUT', `/approval-settings/project/${P}`, {
-      approvers: [{ user_id: otros[2], orden: 1 }, { user_id: otros[3], orden: 2 }],
+
+    // Otras peticiones ocupando conexiones mientras corre el guardado.
+    let seguir = true;
+    const ruido = Array.from({ length: RUIDO }, async () => {
+      while (seguir) await pedir('GET', `/approval-settings/project/${P}`);
     });
-    c(bueno.estado === 200, `el guardado bueno responde 200 (dio ${bueno.estado})`);
-    c((bueno.cuerpo?.approvers ?? []).length === 2, 'y devuelve la lista nueva');
+
+    // El segundo aprobador no existe: el INSERT del ultimo paso revienta
+    // contra la clave foranea de users, DESPUES de los dos primeros pasos.
+    const r = await pedir('PUT', `/approval-settings/project/${P}`, {
+      approvers: [{ user_id: otros[2], orden: 1 }, { user_id: 999999999, orden: 2 }],
+    });
+    seguir = false;
+    await Promise.all(ruido);
+
+    c(r.estado >= 400, `ronda ${ronda}: el guardado con un aprobador inexistente falla (dio ${r.estado})`);
     const e = await estado();
-    c(e.estado === 'pendiente', `la solicitud sin terminar vuelve a pendiente (esta ${e.estado})`);
-    c(e.apr === '0' && e.rev === '0', 'sin sus aprobaciones ni revisiones');
-    c(JSON.stringify(e.aprobadores) === JSON.stringify([otros[2], otros[3]]),
-      `con los aprobadores nuevos (son ${JSON.stringify(e.aprobadores)})`);
-  } finally {
-    if (solicitud) await query('DELETE FROM solicitudes_pago WHERE id = $1', [solicitud]);
-    await query('DELETE FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1', [P]);
-    const quedan = await query<{ sp: string; ap: string }>(
-      `SELECT (SELECT count(*) FROM solicitudes_pago WHERE proyecto_id = $1) sp,
-              (SELECT count(*) FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1) ap`, [P]);
-    console.log(`limpiado: el proyecto ${P} queda con ${quedan.rows[0].sp} solicitudes y ${quedan.rows[0].ap} aprobadores`);
+    c(e.estado === 'aprobada',
+      `ronda ${ronda}: la solicitud sigue aprobada, no se devolvio a pendiente (esta ${e.estado})`);
+    c(e.apr === '1', `ronda ${ronda}: conserva su aprobacion (tiene ${e.apr})`);
+    c(e.rev === '1', `ronda ${ronda}: conserva su revision (tiene ${e.rev})`);
+    c(JSON.stringify(e.aprobadores) === JSON.stringify([otros[0], otros[1]]),
+      `ronda ${ronda}: los aprobadores siguen siendo los de antes (son ${JSON.stringify(e.aprobadores)})`);
+
+    await new Promise((ok2) => setTimeout(ok2, 300));
+    const colgadas = await transaccionesColgadas();
+    c(colgadas === 0, `ronda ${ronda}: no queda ninguna conexion con una transaccion abierta (hay ${colgadas})`);
   }
+
+  // Y el guardado bueno hace lo mismo que hacia: devuelve a pendiente y
+  // cambia los aprobadores.
+  await sembrar();
+  const bueno = await pedir('PUT', `/approval-settings/project/${P}`, {
+    approvers: [{ user_id: otros[2], orden: 1 }, { user_id: otros[3], orden: 2 }],
+  });
+  c(bueno.estado === 200, `el guardado bueno responde 200 (dio ${bueno.estado})`);
+  c((bueno.cuerpo?.approvers ?? []).length === 2, 'y devuelve la lista nueva');
+  const e = await estado();
+  c(e.estado === 'pendiente', `la solicitud sin terminar vuelve a pendiente (esta ${e.estado})`);
+  c(e.apr === '0' && e.rev === '0', 'sin sus aprobaciones ni revisiones');
+  c(JSON.stringify(e.aprobadores) === JSON.stringify([otros[2], otros[3]]),
+    `con los aprobadores nuevos (son ${JSON.stringify(e.aprobadores)})`);
 
   console.log(`${ok} pasaron, ${fallo} fallaron`);
   await pool.end();

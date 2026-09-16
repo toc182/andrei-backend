@@ -6,9 +6,9 @@
 // coger dos veces, que es lo único que separa un reintento de un correo doble.
 //
 // Borra en un finally el reporte y los PDF que archiva en R2.
+import { API } from './pruebas/contexto.js';
 import jwt from 'jsonwebtoken';
 import { query, pool } from '../src/database/config.js';
-import { deleteFile } from '../src/services/storage.js';
 import { procesarEnviosPendientes } from '../src/routes/proyectoReportes.js';
 import {
   encolarEnvio,
@@ -17,7 +17,6 @@ import {
   MAX_INTENTOS,
 } from '../src/services/reporteEnvio.js';
 
-const API = 'http://localhost:5000/api';
 const P = 1;
 
 type Fila = {
@@ -62,69 +61,59 @@ const main = async () => {
 
   let id: number | null = null;
 
-  try {
-    const creado = await pedir('POST', `/proyecto-reportes/${P}`, {
-      fecha: '2026-09-11', clima: 'Soleado', que_se_hizo: 'Prueba de la cola de envio',
-    });
-    c(creado.estado === 201, `crea el reporte (dio ${creado.estado})`);
-    id = creado.cuerpo.data.id as number;
+  const creado = await pedir('POST', `/proyecto-reportes/${P}`, {
+    fecha: '2026-09-11', clima: 'Soleado', que_se_hizo: 'Prueba de la cola de envio',
+  });
+  c(creado.estado === 201, `crea el reporte (dio ${creado.estado})`);
+  id = creado.cuerpo.data.id as number;
 
-    const recien = await fila(id);
-    c(recien.envio_proximo_intento === null, 'un reporte recien creado NO esta en cola');
+  const recien = await fila(id);
+  c(recien.envio_proximo_intento === null, 'un reporte recien creado NO esta en cola');
 
-    // ---- /emitir encola y contesta enseguida, sin mandar nada ----
-    const t = Date.now();
-    const emitido = await pedir('POST', `/proyecto-reportes/${P}/${id}/emitir`);
-    const ms = Date.now() - t;
-    c(emitido.estado === 200, `emitir responde bien (dio ${emitido.estado})`);
-    c(emitido.cuerpo?.data?.encolado === true, 'emitir dice que lo encolo');
-    c(ms < 2000, `emitir contesta sin esperar al correo (tardo ${ms} ms)`);
+  // ---- /emitir encola y contesta enseguida, sin mandar nada ----
+  const t = Date.now();
+  const emitido = await pedir('POST', `/proyecto-reportes/${P}/${id}/emitir`);
+  const ms = Date.now() - t;
+  c(emitido.estado === 200, `emitir responde bien (dio ${emitido.estado})`);
+  c(emitido.cuerpo?.data?.encolado === true, 'emitir dice que lo encolo');
+  c(ms < 2000, `emitir contesta sin esperar al correo (tardo ${ms} ms)`);
 
-    const enCola = await fila(id);
-    c(enCola.envio_proximo_intento !== null, 'quedo en cola');
-    c(enCola.enviado_at === null, 'y todavia NO figura como enviado');
-    c(enCola.envio_intentos === 0, 'con la cuenta de intentos a cero');
+  const enCola = await fila(id);
+  c(enCola.envio_proximo_intento !== null, 'quedo en cola');
+  c(enCola.enviado_at === null, 'y todavia NO figura como enviado');
+  c(enCola.envio_intentos === 0, 'con la cuenta de intentos a cero');
 
-    // ---- reservar es lo que impide el correo doble ----
-    const primera = await reservarPendientes();
-    c(primera.some((r) => r.id === id), 'la primera pasada del cron lo coge');
-    const segunda = await reservarPendientes();
-    c(!segunda.some((r) => r.id === id),
-      'una segunda pasada a la vez NO lo vuelve a coger (esto evita el correo doble)');
+  // ---- reservar es lo que impide el correo doble ----
+  const primera = await reservarPendientes();
+  c(primera.some((r) => r.id === id), 'la primera pasada del cron lo coge');
+  const segunda = await reservarPendientes();
+  c(!segunda.some((r) => r.id === id),
+    'una segunda pasada a la vez NO lo vuelve a coger (esto evita el correo doble)');
 
-    // ---- el trabajador lo manda de verdad ----
-    await encolarEnvio(id);
-    await procesarEnviosPendientes();
-    const tras = await fila(id);
-    c(tras.enviado_at !== null, 'el trabajador lo deja enviado');
-    c(tras.envio_proximo_intento === null, 'y lo saca de la cola');
-    c(tras.envio_ultimo_error === null, 'sin error anotado');
+  // ---- el trabajador lo manda de verdad ----
+  await encolarEnvio(id);
+  await procesarEnviosPendientes();
+  const tras = await fila(id);
+  c(tras.enviado_at !== null, 'el trabajador lo deja enviado');
+  c(tras.envio_proximo_intento === null, 'y lo saca de la cola');
+  c(tras.envio_ultimo_error === null, 'sin error anotado');
 
-    // ---- ya enviado, emitir no lo reencola ----
-    const otra = await pedir('POST', `/proyecto-reportes/${P}/${id}/emitir`);
-    c(otra.cuerpo?.data?.reenviado === false, 'un segundo emitir no reenvia');
-    c((await fila(id)).envio_proximo_intento === null, 'y no lo vuelve a poner en cola');
+  // ---- ya enviado, emitir no lo reencola ----
+  const otra = await pedir('POST', `/proyecto-reportes/${P}/${id}/emitir`);
+  c(otra.cuerpo?.data?.reenviado === false, 'un segundo emitir no reenvia');
+  c((await fila(id)).envio_proximo_intento === null, 'y no lo vuelve a poner en cola');
 
-    // ---- cuando se acaban los intentos ----
-    await query('UPDATE proyecto_reportes SET enviado_at = NULL WHERE id = $1', [id]);
-    const agotado = await anotarFallo(id, MAX_INTENTOS - 1, 'fallo de mentira');
-    c(agotado === true, 'al ultimo intento avisa de que se agoto');
-    const final = await fila(id);
-    c(final.envio_proximo_intento === null, 'y lo saca de la cola para no insistir en bucle');
-    c(final.envio_ultimo_error === 'fallo de mentira', 'guarda el motivo real del fallo');
+  // ---- cuando se acaban los intentos ----
+  await query('UPDATE proyecto_reportes SET enviado_at = NULL WHERE id = $1', [id]);
+  const agotado = await anotarFallo(id, MAX_INTENTOS - 1, 'fallo de mentira');
+  c(agotado === true, 'al ultimo intento avisa de que se agoto');
+  const final = await fila(id);
+  c(final.envio_proximo_intento === null, 'y lo saca de la cola para no insistir en bucle');
+  c(final.envio_ultimo_error === 'fallo de mentira', 'guarda el motivo real del fallo');
 
-    const medias = await anotarFallo(id, 0, 'otro fallo');
-    c(medias === false, 'un fallo temprano NO se da por agotado');
-    c((await fila(id)).envio_proximo_intento !== null, 'y lo deja en cola para reintentar');
-  } finally {
-    if (id) {
-      const pdfs = await query<{ r2_key: string }>(
-        'SELECT r2_key FROM proyecto_reporte_pdfs WHERE reporte_id = $1', [id]);
-      for (const p of pdfs.rows) await deleteFile(p.r2_key).catch(() => {});
-      await query('DELETE FROM proyecto_reportes WHERE id = $1', [id]);
-      console.log(`limpiado: ${pdfs.rows.length} PDF(s) de R2 y el reporte`);
-    }
-  }
+  const medias = await anotarFallo(id, 0, 'otro fallo');
+  c(medias === false, 'un fallo temprano NO se da por agotado');
+  c((await fila(id)).envio_proximo_intento !== null, 'y lo deja en cola para reintentar');
 
   console.log(`${ok} pasaron, ${fallo} fallaron`);
   await pool.end();

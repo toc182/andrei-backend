@@ -1,9 +1,16 @@
-// Prueba de humo de las filas del reporte (personal, equipo, entregas) contra
-// el servidor local. Borra el reporte que ella misma crea.
+// Prueba de humo de las filas del reporte (personal, equipo, entregas).
+//
+// Corre contra la base desechable y su servidor propio: npm run pruebas -- filas
+// No limpia nada a propósito. Lo que cree se va con la base al terminar, que es
+// lo que sustituyó a la limpieza a mano del 2026-09-11 (aquella se saltaba si la
+// prueba reventaba a mitad, y dejaba reportes de mentira en la copia local).
+//
+// El import de la guardia va primero: si esto no apunta a una base de pruebas,
+// el proceso se muere antes de la primera consulta.
+import { API } from './pruebas/contexto.js';
 import jwt from 'jsonwebtoken';
 import { query, pool } from '../src/database/config.js';
 
-const API = 'http://localhost:5000/api';
 const P = 1;
 
 const main = async () => {
@@ -26,12 +33,6 @@ const main = async () => {
     if (cond) ok += 1; else { fallo += 1; console.log('FALLA ', etq); }
   };
 
-  // Todo va dentro de try/finally. Antes la limpieza estaba solo al final del
-  // camino feliz, y el 2026-09-11 la prueba revento a mitad y dejo dos
-  // reportes en la base. Una prueba que se cae tiene que limpiar igual que
-  // una que pasa.
-  let id: number | undefined;
-  try {
   const listas = (await pedir('GET', `/proyecto-listas/${P}`)).cuerpo.data;
   const puestos = listas.puestos as { id: number; nombre: string }[];
   const equipos = listas.equipos as { id: number; nombre: string }[];
@@ -53,8 +54,8 @@ const main = async () => {
       { categoria_id: cats[2].id, descripcion: '', cantidad: 1 },  // sin texto: se salta
     ],
   });
-  c(creado.estado === 201, 'crea el reporte');
-  id = creado.cuerpo.data.id;
+  c(creado.estado === 201, `crea el reporte (dio ${creado.estado}: ${JSON.stringify(creado.cuerpo)})`);
+  const id = creado.cuerpo.data.id as number;
 
   // Desde el estado borrador, un reporte recien creado NO existe para nadie
   // hasta que /emitir lo completa. Sin esta llamada, todo lo que venga despues
@@ -107,12 +108,6 @@ const main = async () => {
   c(!!cambios[clave], 'la correccion de una fila SI deja rastro');
   c(cambios[clave]?.label === puestos[0].nombre, 'el rastro dice de que puesto habla');
   c(Number(cambios[clave]?.despues) === 7, 'el rastro guarda el valor nuevo');
-
-  } finally {
-    if (id) await query('DELETE FROM proyecto_reportes WHERE id = $1', [id]);
-  const quedan = await query('SELECT count(*) n FROM proyecto_reportes WHERE proyecto_id = $1', [P]);
-  console.log('\nreportes del proyecto tras limpiar:', quedan.rows[0]);
-  }
 
   console.log(`${ok} pasaron, ${fallo} fallaron`);
   await pool.end();

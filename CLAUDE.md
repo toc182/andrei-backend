@@ -15,13 +15,27 @@ src/
 └── utils/ # fileEncoding.ts
 
 database/migrations/ # the REAL migrations — 158 .sql files, at the repo root, NOT under src/
-scripts/ # hand-rolled *.spec.ts verification scripts, run with npx tsx
+scripts/ # *-humo.ts smoke tests (npm run pruebas) + *.spec.ts pure-calculation ones (npx tsx)
+scripts/pruebas/ # the throwaway test database: entorno.ts, semilla.sql, contexto.ts
 
 ## Commands
 
 npm run dev # tsx watch src/server.ts
 npm run build # tsc → dist/
 npm run lint # eslint
+npm run pruebas # all smoke tests, each on a throwaway database
+npm run pruebas -- filas listas # just those
+
+## Tests
+
+Smoke tests (`scripts/*-humo.ts`) NEVER touch the local database. Each one gets a
+database created from the migrations, seeded by `scripts/pruebas/semilla.sql`, with its
+own server on a free port; both are thrown away when it finishes, so no test carries
+cleanup code. `scripts/pruebas/contexto.ts` refuses to run against any database whose
+name does not start with `andrei_pruebas_`, so running one by hand cannot dirty local
+data. A test that needs more starting data adds it to `semilla.sql`, never to another
+test. Files land in the `andrei-pruebas` R2 bucket under the seeded projects' short
+names and get swept at the end of the run.
 
 ## Middleware pattern
 
