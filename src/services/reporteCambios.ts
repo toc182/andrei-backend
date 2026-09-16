@@ -187,6 +187,72 @@ export function diffFilas(
   return salida;
 }
 
+/** El tope de una leyenda de foto. Igual que la columna (167) y que la pantalla. */
+export const LEYENDA_MAX = 150;
+
+/**
+ * Una leyenda como se guarda y se compara: en un solo renglon, sin espacios de
+ * mas, y en blanco es null. Un Enter del teclado del telefono no es un cambio, y
+ * debajo de la foto no se veria de todos modos.
+ */
+export function normLeyenda(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.replace(/\s+/g, ' ').trim();
+  return s === '' ? null : s;
+}
+
+/** Una foto del reporte con su leyenda, en el orden en que se ve. */
+export interface LeyendaDeFoto {
+  id: number;
+  leyenda: string | null;
+}
+
+/** Una leyenda que un guardado cambio. `numero` es el de la foto, desde 1. */
+export interface LeyendaCambiada {
+  id: number;
+  numero: number;
+  antes: string | null;
+  despues: string | null;
+}
+
+/**
+ * Las leyendas que cambian en un guardado, ya normalizadas.
+ *
+ * `antes` son TODAS las fotos del reporte en su orden, porque de ahi sale el
+ * numero con que la gente las conoce («la foto 3»), el mismo de la pantalla y
+ * del PDF. `despues` es lo que mando la pantalla: una foto que no es de este
+ * reporte no cuenta, y una que no trae leyenda no se esta tocando —ausente es
+ * no tocar; null o en blanco es quitarla—.
+ */
+export function leyendasCambiadas(
+  antes: LeyendaDeFoto[],
+  despues: { id: number; leyenda?: string | null }[],
+): LeyendaCambiada[] {
+  const pedidas = new Map(
+    despues
+      .filter((f) => f.leyenda !== undefined)
+      .map((f) => [Number(f.id), normLeyenda(f.leyenda)]),
+  );
+  const salida: LeyendaCambiada[] = [];
+  antes.forEach((f, i) => {
+    if (!pedidas.has(f.id)) return;
+    const a = normLeyenda(f.leyenda);
+    const b = pedidas.get(f.id)!;
+    if (a !== b) salida.push({ id: f.id, numero: i + 1, antes: a, despues: b });
+  });
+  return salida;
+}
+
+/** Las leyendas cambiadas, como cambios de Correcciones. */
+export function cambiosDeLeyendas(lista: LeyendaCambiada[]): Record<string, Cambio> {
+  return Object.fromEntries(
+    lista.map((l) => [
+      `leyenda:${l.id}`,
+      { label: `Leyenda de la foto ${l.numero}`, antes: l.antes, despues: l.despues },
+    ]),
+  );
+}
+
 /** Una foto que una correccion agrego o quito. */
 export interface FotoCorregida {
   id: number;
@@ -240,6 +306,11 @@ export function fusionarCambios(
  * Una foto que se agrego y se quito dentro de la misma correccion no cambio
  * nada: pasa en el reintento, cuando una foto alcanzo a subir antes del corte y
  * el ingeniero la quito antes de volver a darle a Guardar.
+ *
+ * Tampoco cuenta la leyenda de una foto que esta misma correccion agrego o
+ * quito: la foto nueva ya sale como «se agregó 1», y su leyenda es parte de
+ * ella. Pasa en el reintento: la foto subio con su leyenda antes del corte, el
+ * ingeniero le retoco el texto y el guardado siguiente lo manda como cambio.
  */
 export function sumarACorreccion(
   actual: ContenidoCorreccion,
@@ -254,8 +325,16 @@ export function sumarACorreccion(
       quitadas.push(f);
     }
   }
+  const cambios = fusionarCambios(actual.cambios, parte.cambios ?? {});
+  // Tambien las que se agregaron y se quitaron dentro de la correccion, que ya
+  // no estan en ninguna de las dos listas.
+  const tocadas = [
+    ...actual.fotos_agregadas, ...(parte.fotosAgregadas ?? []), ...quitadas,
+    ...(parte.fotosQuitadas ?? []),
+  ];
+  for (const f of tocadas) delete cambios[`leyenda:${f.id}`];
   return {
-    cambios: fusionarCambios(actual.cambios, parte.cambios ?? {}),
+    cambios,
     fotos_agregadas: agregadas,
     fotos_quitadas: quitadas,
   };
@@ -497,18 +576,25 @@ function valorCorto(campo: string, v: string | number): string {
   return s;
 }
 
-/** El orden en que se leen los campos: el del formulario, y despues las filas. */
+/**
+ * El orden en que se leen los campos: el del formulario, despues las filas, y
+ * las leyendas al final, junto a las fotos.
+ */
 function orden(campo: string): number {
   const i = Object.keys(CAMPO_LABELS).indexOf(campo);
   if (i >= 0) return i;
   if (campo.startsWith('puesto:')) return 100;
   if (campo.startsWith('equipo:')) return 200;
+  if (campo.startsWith('leyenda:')) return 400;
   return 300;
 }
 
 /** Un campo cambiado, listo para dibujar; null si al final no se ve ningun cambio. */
 function cambioLegible(campo: string, c: Cambio): CambioLegible | null {
-  if (CAMPOS_DE_TEXTO.has(campo)) {
+  // Una leyenda es un texto corto: se marca palabra por palabra, como un
+  // renglon de Trabajo ejecutado. «Acero de columna C-4» a «… C-5» sale con
+  // solo el numero tachado y el nuevo subrayado.
+  if (CAMPOS_DE_TEXTO.has(campo) || campo.startsWith('leyenda:')) {
     const grupos = cambiosDeTexto(
       c.antes === null ? null : String(c.antes),
       c.despues === null ? null : String(c.despues),

@@ -7,7 +7,7 @@
 // leerse.
 import {
   diffCampos, diffFilas, parseHoras, fusionarCambios, sumarACorreccion,
-  legibleCorreccion,
+  legibleCorreccion, cambiosDeLeyendas, leyendasCambiadas, normLeyenda,
   type Cambio, type CambioLegible, type FilaComparable, type FotoCorregida,
 } from '../src/services/reporteCambios.js';
 
@@ -382,6 +382,71 @@ const trabajo = (antes: string | null, despues: string | null) =>
   const nada = sumarACorreccion(sumarACorreccion(vacia, { fotosAgregadas: [foto(5)] }),
     { fotosQuitadas: [foto(5)] });
   ok(legibleCorreccion(nada).length === 0, 'agregar y quitar la misma foto no deja nada que mostrar');
+}
+
+// ---- leyendas de las fotos ----
+{
+  const C4 = 'Acero de columna C-4 listo para vaciado';
+  const C5 = 'Acero de columna C-5 listo para vaciado';
+  // Tres fotos, en el orden del reporte: de ahi sale «la foto 3».
+  const fotos = [
+    { id: 11, leyenda: 'Encofrado de vigas del eje B' },
+    { id: 12, leyenda: null },
+    { id: 13, leyenda: C4 },
+  ];
+  const leyendas = (despues: { id: number; leyenda?: string | null }[]) =>
+    cambiosDeLeyendas(leyendasCambiadas(fotos, despues));
+
+  ok(normLeyenda('  Acero\nde   columna  ') === 'Acero de columna',
+     'una leyenda se guarda en un renglon y sin espacios de mas');
+  ok(normLeyenda('   ') === null && normLeyenda(null) === null && normLeyenda(undefined) === null,
+     'en blanco es sin leyenda');
+
+  const c5 = leyendas([{ id: 13, leyenda: C5 }]);
+  ok(campos(c5) === 'leyenda:13' && c5['leyenda:13'].label === 'Leyenda de la foto 3',
+     'se nombra por su numero en el reporte, no por su id');
+  ok(leer(c5) === 'Leyenda de la foto 3: Acero de columna [-C-4] [+C-5] listo para vaciado',
+     `se marca solo la palabra que cambio (salio «${leer(c5)}»)`);
+
+  ok(leer(leyendas([{ id: 12, leyenda: 'Losa' }])) === 'Leyenda de la foto 2: [+Losa]',
+     'escribir una donde no habia');
+  ok(leer(leyendas([{ id: 11, leyenda: '' }])) === 'Leyenda de la foto 1: [-Encofrado de vigas del eje B]',
+     'borrarla');
+  ok(campos(leyendas([
+    { id: 11, leyenda: ' Encofrado  de vigas del eje B ' },
+    { id: 12, leyenda: '' },
+    { id: 13, leyenda: C4 },
+  ])) === '', 'mandar las mismas, con espacios de mas o en blanco donde no habia, no es un cambio');
+  ok(campos(leyendas([{ id: 12 }, { id: 13, leyenda: undefined }])) === '',
+     'una foto que viene sin leyenda no se esta tocando');
+  ok(campos(leyendas([{ id: 99, leyenda: 'Ajena' }])) === '',
+     'una foto que no es de este reporte no cuenta');
+
+  const conCampos = leer({
+    ...leyendas([{ id: 13, leyenda: C5 }]),
+    ...diffCampos({ clima: 'Soleado' }, { clima: 'Nublado' }),
+  }, { agregadas: [{ id: 20, nombre: 'image.jpg' }] });
+  ok(conCampos === 'Clima: [-Soleado] [+Nublado] | Leyenda de la foto 3: Acero de columna [-C-4] [+C-5] listo para vaciado | Fotos: se agregó 1',
+     `las leyendas van despues de los campos y antes de las fotos (salio «${conCampos}»)`);
+
+  // El reintento: la foto 4 subio con su leyenda en esta misma correccion, el
+  // ingeniero la retoco y el siguiente guardado la manda como cambio.
+  const vacia = { cambios: {}, fotos_agregadas: [], fotos_quitadas: [] };
+  const conNueva = sumarACorreccion(
+    sumarACorreccion(vacia, { fotosAgregadas: [{ id: 14, nombre: 'image.jpg' }] }),
+    { cambios: {
+      'leyenda:14': { label: 'Leyenda de la foto 4', antes: 'Losa', despues: 'Losa nivel 2' },
+      ...leyendas([{ id: 13, leyenda: C5 }]),
+    } },
+  );
+  ok(campos(conNueva.cambios) === 'leyenda:13',
+     'la leyenda de una foto que agrego esta misma correccion no se anota aparte; la de una vieja si');
+  const yQuitada = sumarACorreccion(conNueva, {
+    cambios: { 'leyenda:14': { label: 'Leyenda de la foto 4', antes: 'Losa nivel 2', despues: 'Losa' } },
+    fotosQuitadas: [{ id: 14, nombre: 'image.jpg' }],
+  });
+  ok(campos(yQuitada.cambios) === 'leyenda:13' && yQuitada.fotos_agregadas.length === 0,
+     'ni la de una foto que se agrego y se quito dentro de la misma correccion');
 }
 
 console.log(`\n${passed} pasaron, ${failed} fallaron`);

@@ -62,7 +62,13 @@ export interface ReportePdfInput {
   queSeHizo: string;
   atrasos: string | null;
   novedades: string | null;
-  fotos: { r2_key: string; nombre_archivo: string; tipo_mime: string | null }[];
+  /** En el orden del reporte. Sin leyenda, la foto sale solo con su numero. */
+  fotos: {
+    r2_key: string;
+    nombre_archivo: string;
+    tipo_mime: string | null;
+    leyenda?: string | null;
+  }[];
   /** fecha y hora ya escritas en la hora de Panamá. */
   correcciones: { fecha: string; hora: string; quien: string; cambios: CambioLegible[] }[];
 }
@@ -118,6 +124,52 @@ export async function reducirFoto(bytes: Buffer): Promise<Buffer> {
 }
 
 /**
+ * Cuanto puede medir de alto una foto en el papel, segun como venga. Por que
+ * estos numeros: ver .shot en armarHtml. Las horizontales llevan tope propio
+ * desde que las fotos tienen leyenda: sin el, una leyenda de dos renglones ya
+ * dejaba la primera hoja de fotos con cuatro en vez de seis.
+ */
+const ALTO_VERTICAL = '4.0in';
+const ALTO_HORIZONTAL = '2.5in';
+
+/**
+ * Si la foto es mas ancha que alta, como se ve.
+ *
+ * La copia reducida ya viene derecha; un original sin reducir (el camino de
+ * rescate) puede traer el giro solo en su EXIF, y el navegador lo respeta al
+ * dibujarla, asi que aqui tambien. Si no se puede leer, se trata como vertical,
+ * que es el tope que nunca parte una fila.
+ */
+async function esHorizontal(bytes: Buffer): Promise<boolean> {
+  try {
+    const m = await sharp(bytes).metadata();
+    const girada = (m.orientation ?? 1) >= 5;
+    const ancho = (girada ? m.height : m.width) ?? 0;
+    const alto = (girada ? m.width : m.height) ?? 0;
+    return ancho > alto;
+  } catch {
+    return false;
+  }
+}
+
+/** El pie de una foto en el papel: «3. Acero de columna C-4», o «3.» sin leyenda. */
+export function pieDeFoto(numero: number, leyenda: string | null): string {
+  return leyenda ? `${numero}. ${leyenda}` : `${numero}.`;
+}
+
+/**
+ * Una foto lista para el papel. `numero` es el suyo en el reporte, no su
+ * puesto en esta lista: si una no se pudo incluir, las demas conservan el
+ * numero con que se las nombra en la pantalla y en Correcciones.
+ */
+interface FotoIncrustada {
+  src: string;
+  numero: number;
+  leyenda: string | null;
+  horizontal: boolean;
+}
+
+/**
  * Las fotos van incrustadas como datos, no como direcciones.
  *
  * El PDF se arma desde una cadena de texto con setContent: una direccion
@@ -133,8 +185,8 @@ export async function reducirFoto(bytes: Buffer): Promise<Buffer> {
  */
 async function incrustarFotos(
   fotos: ReportePdfInput['fotos'],
-): Promise<{ lista: { src: string; pie: string }[]; omitidas: number }> {
-  const lista: { src: string; pie: string }[] = [];
+): Promise<{ lista: FotoIncrustada[]; omitidas: number }> {
+  const lista: FotoIncrustada[] = [];
   let peso = 0;
   let omitidas = 0;
   let msBajar = 0;
@@ -213,7 +265,14 @@ async function incrustarFotos(
       continue;
     }
     peso += src.length;
-    lista.push({ src, pie: f.nombre_archivo });
+    // El pie es la leyenda, no el nombre del archivo: desde un iPhone casi
+    // todas se llaman «image.jpg», y eso no le dice nada a quien lee.
+    lista.push({
+      src,
+      numero: indice + 1,
+      leyenda: f.leyenda ?? null,
+      horizontal: await esHorizontal(bytes),
+    });
   }
 
   if (omitidas > 0) {
@@ -231,7 +290,7 @@ async function incrustarFotos(
 
 function armarHtml(
   d: ReportePdfInput,
-  fotos: { src: string; pie: string }[],
+  fotos: FotoIncrustada[],
   logo: string,
   omitidas: number,
 ): string {
@@ -258,9 +317,9 @@ function armarHtml(
     ? `<div class="sect"><div class="sect-h">Fotos del día · ${fotos.length}${aviso}</div>
          <div class="shots">${fotos
            .map(
-             (f, i) =>
-               `<figure class="shot"><img src="${f.src}" alt="">
-                  <figcaption>${i + 1}. ${esc(f.pie)}</figcaption></figure>`,
+             (f) =>
+               `<figure class="shot${f.horizontal ? ' horizontal' : ''}"><img src="${f.src}" alt="">
+                  <figcaption>${esc(pieDeFoto(f.numero, f.leyenda))}</figcaption></figure>`,
            )
            .join('')}</div></div>`
     : '';
@@ -439,18 +498,25 @@ function armarHtml(
      * Una foto de celular llega en vertical u horizontal, y a la misma anchura
      * de columna la vertical mide casi el doble de alto: cuatro verticales
      * ocupaban dos paginas enteras mientras cuatro horizontales cabian en una.
-     * Con el tope, la vertical se reduce —sale mas estrecha y centrada, pero
-     * COMPLETA— y la horizontal ni se entera porque ya es mas baja que el tope.
+     * Con el tope, la foto se reduce —sale mas estrecha y centrada, pero
+     * COMPLETA—.
      *
-     * 4.2in sale de la hoja carta: 9.9in de alto util menos el titulo de la
-     * seccion, partido en dos filas con su pie y su separacion. Da 4 verticales
-     * por pagina, o 6 horizontales. Subirlo devuelve el problema; bajarlo
-     * empequeñece las fotos sin ganar ninguna fila.
+     * Los topes salen de la hoja carta, 9.9in de alto util, con el titulo de la
+     * seccion arriba y la leyenda mas larga debajo de cada foto: dos filas de
+     * verticales o tres de horizontales. La leyenda mas larga son 150
+     * caracteres en mayusculas, tres renglones con la letra que tiene el
+     * servidor de Railway (DejaVu Sans, mas ancha que la Arial de un Windows).
+     * Medido el 2026-09-16 con esa letra: 4.05in y 2.5in son lo maximo que
+     * cabe; 4.2in y el ancho entero de la columna ya partian la primera hoja
+     * con una leyenda de dos renglones. scripts/reporte-leyendas-humo.ts lo
+     * vigila con la letra de la maquina donde corre. Subirlos devuelve el
+     * problema; bajarlos empequeñece las fotos sin ganar ninguna fila.
      */
     .shots { display:flex; flex-wrap:wrap; gap:12px; padding-top:10px; }
     .shot { width:calc(50% - 6px); margin:0; page-break-inside:avoid; text-align:center; }
-    .shot img { max-width:100%; max-height:4.2in; width:auto; height:auto;
+    .shot img { max-width:100%; max-height:${ALTO_VERTICAL}; width:auto; height:auto;
                 border:1px solid ${RULE}; border-radius:2px; }
+    .shot.horizontal img { max-height:${ALTO_HORIZONTAL}; }
     .shot figcaption { font-size:10px; color:${GRAY}; margin-top:3px; text-align:center; }
     /* Las tablas de filas: nombre a la izquierda y numeros a la derecha,
        alineados en columna, como en la pantalla.

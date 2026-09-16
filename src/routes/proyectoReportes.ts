@@ -25,13 +25,18 @@ import {
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { construirNumeroReporte } from '../services/reporteNumero.js';
 import {
+  cambiosDeLeyendas,
   diffCampos,
   legibleCorreccion,
+  leyendasCambiadas,
   diffFilas,
+  normLeyenda,
   parseHoras,
   sumarACorreccion,
+  LEYENDA_MAX,
   type Cambio,
   type ContenidoCorreccion,
+  type LeyendaDeFoto,
   type ParteCorreccion,
 } from '../services/reporteCambios.js';
 import {
@@ -85,6 +90,9 @@ interface ReporteBody {
     unidad?: string | null;
     notas?: string | null;
   }[];
+  // Las leyendas de las fotos que ya estan en el servidor. Las de una foto
+  // nueva viajan con la foto, en su propia subida.
+  fotos?: { id: number; leyenda?: string | null }[];
 }
 
 interface ReporteRow {
@@ -160,6 +168,23 @@ function subirFotos(req: Request, res: Response, next: (err?: unknown) => void):
     }
     res.status(400).json({ success: false, message: mensaje });
   });
+}
+
+/**
+ * Por que no sirve la leyenda que mando la pantalla, o null si sirve. `quien`
+ * nombra la foto en el mensaje: «la foto 3», o el nombre del archivo que sube.
+ *
+ * La pantalla ya no deja escribir de mas; esto es para lo que llegue por otro
+ * camino, y se dice antes de tocar nada.
+ */
+function problemaDeLeyenda(v: unknown, quien: string): string | null {
+  if (v !== undefined && v !== null && typeof v !== 'string') {
+    return `La leyenda de ${quien} no es un texto`;
+  }
+  const largo = normLeyenda(v)?.length ?? 0;
+  return largo > LEYENDA_MAX
+    ? `La leyenda de ${quien} tiene ${largo} caracteres, y el máximo es ${LEYENDA_MAX}`
+    : null;
 }
 
 function limpiarNombre(name: string): string {
@@ -873,8 +898,9 @@ async function leerPartesDelReporte(reporteId: number | string) {
     tipo_mime: string | null;
     tamano: number | null;
     orden: number;
+    leyenda: string | null;
   }>(
-    `SELECT id, nombre_archivo, r2_key, tipo_mime, tamano, orden
+    `SELECT id, nombre_archivo, r2_key, tipo_mime, tamano, orden, leyenda
        FROM proyecto_reporte_fotos
       WHERE reporte_id = $1
       ORDER BY orden, id`,
@@ -1152,6 +1178,32 @@ router.put(
         return;
       }
 
+      // Las fotos de ESTE reporte en su orden, leidas bajo el mismo bloqueo: de
+      // aqui sale el numero de cada una en Correcciones, el mismo que se ve en
+      // la pantalla y en el PDF. Las leyendas se revisan antes de escribir nada.
+      const fotosAntes = await client.query<LeyendaDeFoto>(
+        `SELECT id, leyenda FROM proyecto_reporte_fotos
+          WHERE reporte_id = $1
+          ORDER BY orden, id`,
+        [req.params.id],
+      );
+      if (body.fotos !== undefined) {
+        const pedidas = Array.isArray(body.fotos) ? body.fotos : null;
+        const problema = pedidas === null
+          ? 'La lista de fotos no es válida'
+          : fotosAntes.rows
+            .map((f, i) => {
+              const pedida = pedidas.find((p) => Number(p?.id) === f.id);
+              return pedida ? problemaDeLeyenda(pedida.leyenda, `la foto ${i + 1}`) : null;
+            })
+            .find((p) => p !== null) ?? null;
+        if (problema) {
+          await client.query('ROLLBACK');
+          res.status(400).json({ success: false, message: problema });
+          return;
+        }
+      }
+
       // Las areas se comparan por nombre, que es lo que se lee en Correcciones:
       // comparadas por id, la linea decia «Áreas: 3, 1» en vez de sus nombres.
       const nombresDeAreas = `SELECT a.nombre
@@ -1219,6 +1271,16 @@ router.put(
 
       await guardarFilas(req.params.id, proyectoId, body, consultar);
 
+      // Solo se escriben las leyendas que cambiaron, y la misma lista es la que
+      // se anota en Correcciones.
+      const leyendas = body.fotos ? leyendasCambiadas(fotosAntes.rows, body.fotos) : [];
+      for (const l of leyendas) {
+        await client.query(
+          'UPDATE proyecto_reporte_fotos SET leyenda = $1 WHERE id = $2 AND reporte_id = $3',
+          [l.despues, l.id, req.params.id],
+        );
+      }
+
       const areasAhora = await client.query<{ nombre: string }>(nombresDeAreas, [req.params.id]);
 
       const cambios: Record<string, Cambio> = diffCampos(
@@ -1252,6 +1314,7 @@ router.put(
       if (body.entregas !== undefined) {
         Object.assign(cambios, diffFilas(filasAntes.entregas, filasAhora.entregas, null));
       }
+      Object.assign(cambios, cambiosDeLeyendas(leyendas));
 
       // Un guardado que no movio nada no deja linea: si cada guardado dejara
       // rastro, el rastro se llenaria de ruido y dejaria de leerse.
@@ -1350,8 +1413,9 @@ export async function buildReportePdfInput(
     r2_key: string;
     nombre_archivo: string;
     tipo_mime: string | null;
+    leyenda: string | null;
   }>(
-    `SELECT r2_key, nombre_archivo, tipo_mime FROM proyecto_reporte_fotos
+    `SELECT r2_key, nombre_archivo, tipo_mime, leyenda FROM proyecto_reporte_fotos
       WHERE reporte_id = $1 ORDER BY orden, id`,
     [reporteId],
   );
@@ -1997,10 +2061,24 @@ router.post(
       return;
     }
 
+    // La leyenda viaja con su foto, en el campo `leyenda` del mismo envio. La
+    // pantalla manda una foto por peticion; si vinieran varias, la leyenda
+    // enesima es la de la foto enesima. Se revisa antes de subir nada a R2,
+    // para no dejar archivos sueltos por una leyenda larga.
+    const crudas = (req.body as { leyenda?: unknown }).leyenda;
+    const leyendas: unknown[] = Array.isArray(crudas) ? crudas : [crudas];
+    const problema = files
+      .map((f, i) => problemaDeLeyenda(leyendas[i], f.originalname))
+      .find((p) => p !== null);
+    if (problema) {
+      res.status(400).json({ success: false, message: problema });
+      return;
+    }
+
     // Primero R2 y despues la base: si una subida falla, no queda ninguna fila
     // apuntando a un archivo que no existe.
-    const subidas: { file: Express.Multer.File; key: string }[] = [];
-    for (const file of files) {
+    const subidas: { file: Express.Multer.File; key: string; leyenda: string | null }[] = [];
+    for (const [i, file] of files.entries()) {
       const key = claveFoto(reporte.proyecto_corto, Number(req.params.id), file.originalname);
       await uploadFile(key, file.buffer, file.mimetype);
 
@@ -2016,7 +2094,7 @@ router.post(
       } catch (err) {
         console.error(`[reportes] no se pudo guardar la copia reducida de ${key}:`, err);
       }
-      subidas.push({ file, key });
+      subidas.push({ file, key, leyenda: normLeyenda(leyendas[i]) });
     }
 
     // Las filas van en una transaccion, con el reporte bloqueado. Ahi se decide
@@ -2030,6 +2108,7 @@ router.post(
       tipo_mime: string | null;
       tamano: number | null;
       orden: number;
+      leyenda: string | null;
     };
     const filas: FotoGuardada[] = [];
     const client = await pool.connect();
@@ -2054,12 +2133,12 @@ router.post(
         [req.params.id],
       );
       let orden = desde.rows[0].next;
-      for (const { file, key } of subidas) {
+      for (const { file, key, leyenda } of subidas) {
         const row = await client.query<FotoGuardada>(
           `INSERT INTO proyecto_reporte_fotos
-             (reporte_id, nombre_archivo, r2_key, tipo_mime, tamano, orden, creado_por)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
-           RETURNING id, nombre_archivo, r2_key, tipo_mime, tamano, orden`,
+             (reporte_id, nombre_archivo, r2_key, tipo_mime, tamano, orden, creado_por, leyenda)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           RETURNING id, nombre_archivo, r2_key, tipo_mime, tamano, orden, leyenda`,
           [
             req.params.id,
             file.originalname,
@@ -2068,6 +2147,7 @@ router.post(
             file.size,
             orden++,
             req.user!.id,
+            leyenda,
           ],
         );
         filas.push(row.rows[0]);
