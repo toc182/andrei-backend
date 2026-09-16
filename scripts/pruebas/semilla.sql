@@ -12,7 +12,10 @@
 --     3 categorías de entrega, 5 equipos, y áreas activas;
 --   - un puesto de OTRO proyecto (filas-humo comprueba que no se cuele);
 --   - el proyecto 2 sin solicitudes de pago ni aprobadores
---     (aprobadores-transaccion-humo los crea y los quita él).
+--     (aprobadores-transaccion-humo los crea y los quita él);
+--   - el proyecto 3 como uno normal, sin contratista:
+--     reporte-consorcio-humo lo vuelve consorcio por la API, que es justo el
+--     camino que prueba.
 --
 -- Los nombres de los cuatro puestos y de las tres categorías tienen que ser los
 -- de PUESTOS_BASE y CATEGORIAS_BASE de src/routes/proyectoListas.ts: el GET de
@@ -25,7 +28,8 @@ INSERT INTO clientes (id, nombre) VALUES (1, 'Cliente de pruebas');
 -- (RD-PRU1-260910) y sin él la creación se rechaza con un 400.
 INSERT INTO proyectos (id, nombre, nombre_corto, sp_prefijo, cliente_id, estado, activo) VALUES
   (1, 'Proyecto de pruebas 1', 'PRUEBAS1', 'PRU1', 1, 'en_ejecucion', true),
-  (2, 'Proyecto de pruebas 2', 'PRUEBAS2', 'PRU2', 1, 'en_ejecucion', true);
+  (2, 'Proyecto de pruebas 2', 'PRUEBAS2', 'PRU2', 1, 'en_ejecucion', true),
+  (3, 'Proyecto de pruebas 3', 'PRUEBAS3', 'PRU3', 1, 'en_ejecucion', true);
 
 -- El admin NO se crea aquí: la migración 001 ya crea uno («Ivan Admin») en toda
 -- base nueva, y es el que las pruebas encuentran al pedir el primer admin

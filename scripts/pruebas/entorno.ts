@@ -39,7 +39,7 @@ const CUBO_PRUEBAS = 'andrei-pruebas';
  * reporte se guardan bajo el nombre corto de su proyecto, así que esto es
  * también el prefijo de todo lo que las pruebas dejan en R2.
  */
-const PROYECTOS_SEMILLA = ['PRUEBAS1', 'PRUEBAS2'];
+const PROYECTOS_SEMILLA = ['PRUEBAS1', 'PRUEBAS2', 'PRUEBAS3'];
 
 export interface Entorno {
   /** Nombre de la base desechable de esta corrida. */

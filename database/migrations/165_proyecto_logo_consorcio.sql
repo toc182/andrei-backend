@@ -1,0 +1,18 @@
+-- 165_proyecto_logo_consorcio.sql
+-- El logo del consorcio, para los proyectos que se ejecutan en consorcio.
+--
+-- En esos proyectos el reporte diario no sale con el logo de Pinellas sino con
+-- el del consorcio. Ivan lo sube en el formulario del proyecto, dentro del
+-- recuadro «Socios del Consorcio».
+--
+-- Va como data URL en una columna propia, como los demás logos subidos de la
+-- aplicación (cronogramas.ajustes_impresion, proyectos.ajustes_cuenta_impresion).
+-- NO va dentro de datos_adicionales: la lista de proyectos devuelve esa columna
+-- entera, y cada fila arrastraría la imagen.
+--
+-- El servidor la reduce al guardarla (services/consorcioProyecto.ts), así que pesa
+-- decenas de KB, no lo que pesara el archivo original.
+--
+-- El nombre del consorcio NO se guarda aquí: ya está en proyectos.contratista,
+-- que en un proyecto en consorcio es obligatorio.
+ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS logo_consorcio TEXT;

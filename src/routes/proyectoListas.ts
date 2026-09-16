@@ -14,7 +14,8 @@
  *   - Baja lógica, nunca borrado: los reportes ya guardados siguen apuntando.
  *
  * Los puestos son el caso especial: `empresa_id` nulo es el bloque propio
- * (Pinellas) y con valor es el de esa empresa. Cada bloque es dueño de sus
+ * (Pinellas, o el consorcio en un proyecto en consorcio) y con valor es el de
+ * esa empresa. Cada bloque es dueño de sus
  * puestos, así que quitar uno del bloque propio no toca los de una empresa.
  */
 
@@ -27,6 +28,7 @@ import {
 } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
+import { leerNombrePropio } from '../services/consorcioProyecto.js';
 
 const router = Router();
 
@@ -149,13 +151,18 @@ router.get(
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const { proyectoId } = req.params;
     await asegurarListasBase(proyectoId);
-    const [empresas, puestos, equipos, categorias] = await Promise.all([
+    const [empresas, puestos, equipos, categorias, nombre_propio] = await Promise.all([
       leerLista('proyecto_empresas', proyectoId),
       leerLista('proyecto_puestos', proyectoId),
       leerLista('proyecto_equipos', proyectoId),
       leerLista('proyecto_entrega_categorias', proyectoId),
+      // Como se llama el bloque propio: Pinellas, o el consorcio.
+      leerNombrePropio(proyectoId),
     ]);
-    res.json({ success: true, data: { empresas, puestos, equipos, categorias } });
+    res.json({
+      success: true,
+      data: { empresas, puestos, equipos, categorias, nombre_propio },
+    });
   }),
 );
 

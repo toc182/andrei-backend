@@ -37,6 +37,11 @@ import {
   reducirFoto,
   type ReportePdfInput,
 } from '../services/reportePdf.js';
+import {
+  ES_CONSORCIO_SQL,
+  consorcioDelProyecto,
+  nombrePropio,
+} from '../services/consorcioProyecto.js';
 import { sendEmail } from '../services/emailService.js';
 import {
   encolarEnvio,
@@ -831,7 +836,8 @@ router.get(
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const reporte = await query(
-      `SELECT r.*, u.nombre AS creador_nombre, p.nombre AS proyecto_nombre
+      `SELECT r.*, u.nombre AS creador_nombre, p.nombre AS proyecto_nombre,
+              ${ES_CONSORCIO_SQL} AS es_consorcio, p.contratista
          FROM proyecto_reportes r
          JOIN users u ON u.id = r.creado_por
          JOIN proyectos p ON p.id = r.proyecto_id
@@ -857,12 +863,19 @@ router.get(
       [req.params.id],
     );
 
-    const autorId = (reporte.rows[0] as { creado_por: number }).creado_por;
+    const { es_consorcio, contratista, ...fila } = reporte.rows[0] as {
+      creado_por: number;
+      es_consorcio: boolean;
+      contratista: string | null;
+    };
+    const autorId = fila.creado_por;
 
     res.json({
       success: true,
       data: {
-        ...reporte.rows[0],
+        ...fila,
+        // Como se llama la cuadrilla propia: Pinellas, o el consorcio.
+        nombre_propio: nombrePropio(consorcioDelProyecto({ es_consorcio, contratista })),
         ...(await leerPartesDelReporte(req.params.id)),
         correcciones: correcciones.rows,
         // Para que la pantalla no ofrezca "Editar" donde la API va a negarlo.
@@ -1198,13 +1211,18 @@ export async function buildReportePdfInput(
     autor_email: string | null;
     proyecto_nombre: string;
     proyecto_corto: string;
+    es_consorcio: boolean;
+    contratista: string | null;
+    logo_consorcio: string | null;
   }>(
     `SELECT r.numero, r.fecha, r.clima, r.horas_perdidas, r.motivo,
             r.personal_calificado, r.ayudantes, r.equipo, r.que_se_hizo,
             r.atrasos, r.novedades,
             u.nombre AS autor, u.email AS autor_email,
             p.nombre AS proyecto_nombre,
-            COALESCE(p.nombre_corto, p.nombre) AS proyecto_corto
+            COALESCE(p.nombre_corto, p.nombre) AS proyecto_corto,
+            ${ES_CONSORCIO_SQL} AS es_consorcio,
+            p.contratista, p.logo_consorcio
        FROM proyecto_reportes r
        JOIN users u ON u.id = r.creado_por
        JOIN proyectos p ON p.id = r.proyecto_id
@@ -1276,6 +1294,7 @@ export async function buildReportePdfInput(
     // lineas en la tirilla del PDF y no le dice nada a nadie.
     proyectoNombre: row.proyecto_corto,
     proyectoCorto: row.proyecto_corto,
+    consorcio: consorcioDelProyecto(row),
     autorNombre: row.autor,
     autorEmail: row.autor_email,
     clima: row.clima,

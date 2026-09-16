@@ -16,6 +16,7 @@ import puppeteer, { Browser } from 'puppeteer';
 import type { LaunchOptions } from 'puppeteer';
 import sharp from 'sharp';
 import { downloadFile, uploadFile } from './storage.js';
+import { nombreEmisor, nombrePropio, type Consorcio } from './consorcioProyecto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +31,12 @@ export interface ReportePdfInput {
   fechaLarga: string;
   fechaCorta: string;
   proyectoNombre: string;
+  /**
+   * En un proyecto en consorcio, el consorcio: su nombre va donde el papel
+   * decia «Pinellas» y su logo arriba. Ausente o null, el reporte es de
+   * Pinellas, como siempre.
+   */
+  consorcio?: Consorcio | null;
   autorNombre: string;
   clima: string;
   horasPerdidas: number | null;
@@ -279,7 +286,7 @@ function armarHtml(
           .join('');
         // El nombre del bloque solo aparece cuando hay con quien confundirlo.
         const titulo = grupos.length > 1
-          ? `<div class="grupo">${esc(g ?? 'Pinellas')}</div>`
+          ? `<div class="grupo">${esc(g ?? nombrePropio(r.consorcio))}</div>`
           : '';
         return `<div>${titulo}<table class="filas">${filas}</table></div>`;
       })
@@ -364,7 +371,10 @@ function armarHtml(
     * { box-sizing: border-box; }
     body { margin:0; font-family: Arial, Helvetica, sans-serif; color:#000;
            font-size:12.5px; line-height:16px; }
-    .head { display:flex; align-items:flex-start; justify-content:space-between; }
+    /* Alto fijo, el del logo: un consorcio que aun no subio el suyo sale sin
+       logo, y la hoja no puede correrse 4px por eso. */
+    .head { display:flex; align-items:flex-start; justify-content:space-between;
+            min-height:36px; }
     .logo { height:36px; }
     .doc-kind { font-size:13px; line-height:16px; font-weight:700; letter-spacing:.13em;
                 text-transform:uppercase; color:${NAVY}; text-align:right; }
@@ -440,7 +450,7 @@ function armarHtml(
     .fixes .who { width:120px; font-weight:700; white-space:nowrap; }
   </style></head><body>
     <div class="head">
-      ${logo ? `<img class="logo" src="${logo}" alt="Pinellas">` : '<span></span>'}
+      ${logo ? `<img class="logo" src="${esc(logo)}" alt="${esc(nombrePropio(d.consorcio))}">` : '<span></span>'}
       <div>
         <div class="doc-kind">Reporte diario de obra</div>
         <div class="doc-id">${esc(d.numero)} · emitido ${esc(emitido)}</div>
@@ -506,13 +516,20 @@ function configPuppeteer(): LaunchOptions {
 }
 
 export async function generateReportePDF(d: ReportePdfInput): Promise<Buffer> {
+  // En un consorcio va SU logo, y si todavia no lo subieron, ninguno: el de
+  // Pinellas en un papel del consorcio diria algo que no es.
   let logo = '';
-  try {
-    const ruta = path.resolve(__dirname, '../../templates/LogoPinellas.png');
-    logo = 'data:image/png;base64,' + fs.readFileSync(ruta).toString('base64');
-  } catch {
-    // Sin logo el documento se sigue emitiendo.
+  if (d.consorcio) {
+    logo = d.consorcio.logo ?? '';
+  } else {
+    try {
+      const ruta = path.resolve(__dirname, '../../templates/LogoPinellas.png');
+      logo = 'data:image/png;base64,' + fs.readFileSync(ruta).toString('base64');
+    } catch {
+      // Sin logo el documento se sigue emitiendo.
+    }
   }
+  const emisor = nombreEmisor(d.consorcio);
 
   const { lista: fotos, omitidas } = await incrustarFotos(d.fotos);
   const html = armarHtml(d, fotos, logo, omitidas);
@@ -531,7 +548,7 @@ export async function generateReportePDF(d: ReportePdfInput): Promise<Buffer> {
       headerTemplate: '<span></span>',
       footerTemplate: `<div style="width:100%;padding:0 0.5in;font-family:Arial,Helvetica,sans-serif;
           font-size:9.5px;color:${GRAY};display:flex;justify-content:space-between;">
-          <span>Pinellas, S.A. — Reporte diario de obra</span>
+          <span>${esc(emisor)} — Reporte diario de obra</span>
           <span>Página <span class="pageNumber"></span> de <span class="totalPages"></span></span>
         </div>`,
     });

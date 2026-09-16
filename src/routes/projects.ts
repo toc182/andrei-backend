@@ -9,6 +9,7 @@ import {
 } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
+import { normalizarLogoConsorcio } from '../services/consorcioProyecto.js';
 
 const router = Router();
 
@@ -37,6 +38,7 @@ interface ProjectRow {
   itbms?: number;
   monto_total?: number;
   datos_adicionales?: Record<string, unknown>;
+  logo_consorcio?: string | null;
   cliente_nombre?: string;
   cliente_abreviatura?: string;
   cliente_contacto?: string;
@@ -69,6 +71,57 @@ interface CreateProjectBody {
   itbms?: number;
   monto_total?: number;
   datos_adicionales?: Record<string, unknown>;
+  // Data URL. null lo quita; ausente, no se toca.
+  logo_consorcio?: string | null;
+}
+
+/**
+ * Lo que un proyecto en consorcio necesita para que el reporte diario salga
+ * con el nombre y el logo del consorcio y no con los de Pinellas.
+ *
+ * El nombre es el campo Contratista: en un proyecto en consorcio es
+ * obligatorio, porque es lo que se imprime donde antes decia «Pinellas».
+ *
+ * `actual` es la fila como esta antes de guardar (null al crear). Un PUT puede
+ * traer solo parte de los campos, y el que decide es el estado que queda: un
+ * PUT que solo cambia el estado no se revisa, y uno que marca Consorcio sin
+ * mandar Contratista se revisa contra el que ya habia.
+ *
+ * Devuelve el logo listo para guardar: undefined si no hay que tocarlo.
+ */
+async function validarConsorcio(
+  cuerpo: Partial<CreateProjectBody>,
+  actual: { contratista: string | null; datos_adicionales: Record<string, unknown> | null } | null,
+): Promise<{ ok: true; logo?: string | null } | { ok: false; mensaje: string }> {
+  const tocaConsorcio =
+    actual === null ||
+    cuerpo.contratista !== undefined ||
+    cuerpo.datos_adicionales !== undefined;
+
+  if (tocaConsorcio) {
+    const datos =
+      cuerpo.datos_adicionales !== undefined
+        ? cuerpo.datos_adicionales
+        : actual?.datos_adicionales;
+    const contratista =
+      cuerpo.contratista !== undefined ? cuerpo.contratista : actual?.contratista;
+    if (datos?.es_consorcio === true && !String(contratista ?? '').trim()) {
+      return {
+        ok: false,
+        mensaje: 'Escribe el nombre del consorcio en «Contratista».',
+      };
+    }
+  }
+
+  const logo = cuerpo.logo_consorcio;
+  if (logo === undefined || logo === null) return { ok: true, logo };
+  if (typeof logo !== 'string') {
+    return { ok: false, mensaje: 'El logo debe ser una imagen.' };
+  }
+  const normalizado = await normalizarLogoConsorcio(logo);
+  return normalizado.ok
+    ? { ok: true, logo: normalizado.dataUrl }
+    : { ok: false, mensaje: normalizado.mensaje };
 }
 
 interface QueryParams {
@@ -301,6 +354,7 @@ router.post(
       .isFloat({ gt: 0 })
       .withMessage('Monto total debe ser mayor a cero'),
     body('datos_adicionales').optional().isObject(),
+    body('logo_consorcio').optional({ nullable: true }).isString(),
     authenticateToken,
     checkPermission('proyectos_crear'),
   ],
@@ -338,6 +392,13 @@ router.post(
         datos_adicionales = {},
       } = req.body;
 
+      const consorcio = await validarConsorcio(req.body, null);
+      if (!consorcio.ok) {
+        res.status(400).json({ success: false, message: consorcio.mensaje });
+        return;
+      }
+      const logoConsorcio = consorcio.logo ?? null;
+
       const user = req.user!;
       const client = await pool.connect();
       let result;
@@ -352,8 +413,9 @@ router.post(
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
         estado, contratista, ingeniero_residente,
-        contrato, acto_publico, tipo_contrato, monto_contrato_original, presupuesto_base, itbms, monto_total, datos_adicionales
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        contrato, acto_publico, tipo_contrato, monto_contrato_original, presupuesto_base, itbms, monto_total, datos_adicionales,
+        logo_consorcio
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
     `,
             [
@@ -373,6 +435,7 @@ router.post(
               itbms,
               monto_total,
               JSON.stringify(datos_adicionales),
+              logoConsorcio,
             ],
           );
         } catch (innerError) {
@@ -385,8 +448,9 @@ router.post(
       INSERT INTO proyectos (
         nombre, nombre_corto, cliente_id, fecha_inicio, fecha_fin_estimada,
         estado, contratista, ingeniero_residente,
-        contrato, acto_publico, tipo_contrato, monto_contrato_original, datos_adicionales
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        contrato, acto_publico, tipo_contrato, monto_contrato_original, datos_adicionales,
+        logo_consorcio
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *
     `,
             [
@@ -403,6 +467,7 @@ router.post(
               tipo_contrato,
               monto_contrato_original,
               JSON.stringify(datos_adicionales),
+              logoConsorcio,
             ],
           );
         }
@@ -452,6 +517,7 @@ router.put(
         'completado',
         'cancelado',
       ]),
+    body('logo_consorcio').optional({ nullable: true }).isString(),
     authenticateToken,
     checkPermission('proyectos_editar'),
     checkProjectAccess('id'),
@@ -472,10 +538,12 @@ router.put(
       }
 
       const { id } = req.params;
-      const updateData = req.body;
 
-      const projectResult = await query<{ id: number }>(
-        'SELECT * FROM proyectos WHERE id = $1',
+      const projectResult = await query<{
+        contratista: string | null;
+        datos_adicionales: Record<string, unknown> | null;
+      }>(
+        'SELECT contratista, datos_adicionales FROM proyectos WHERE id = $1',
         [id],
       );
       if (projectResult.rows.length === 0) {
@@ -484,6 +552,17 @@ router.put(
           .json({ success: false, message: 'Proyecto no encontrado' });
         return;
       }
+
+      const consorcio = await validarConsorcio(req.body, projectResult.rows[0]);
+      if (!consorcio.ok) {
+        res.status(400).json({ success: false, message: consorcio.mensaje });
+        return;
+      }
+      // El logo se guarda ya reducido, no como llego.
+      const updateData: Partial<CreateProjectBody> =
+        consorcio.logo === undefined
+          ? req.body
+          : { ...req.body, logo_consorcio: consorcio.logo };
 
       const allowedFields = [
         'nombre',
@@ -505,6 +584,7 @@ router.put(
         'itbms',
         'monto_total',
         'datos_adicionales',
+        'logo_consorcio',
       ];
 
       const updateFields: string[] = [];
