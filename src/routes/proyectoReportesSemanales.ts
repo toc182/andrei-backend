@@ -36,6 +36,9 @@ import {
 } from '../services/reporteSemana.js';
 import { datosDeLaSemana, type DatosSemana } from '../services/reporteSemanalDatos.js';
 import { encolarEnvio } from '../services/reporteEnvio.js';
+import {
+  IaNoConfiguradaError, SinDiariosError, iaConfigurada, redactarSemana,
+} from '../services/reporteSemanalIA.js';
 import { archivarSemanalPdf, buildSemanalPdfInput } from '../services/reporteSemanalEnvio.js';
 import { generateReporteSemanalPDF } from '../services/reporteSemanalPdf.js';
 import { downloadFile } from '../services/storage.js';
@@ -439,6 +442,8 @@ router.get(
         completo: reporte.completo,
         enviado_at: reporte.enviado_at,
         creado_por: reporte.creado_por,
+        // Sin llave de la IA, la pantalla no ofrece el botón de redactar.
+        ia_configurada: iaConfigurada(),
         datos,
         metas: metas.evaluadas,
         metas_plan: metas.plan,
@@ -750,6 +755,104 @@ router.post(
     });
 
     res.json({ success: true, data: { numero, reenviado: false } });
+  }),
+);
+
+// POST /api/proyecto-reportes-semanales/:proyectoId/:id/redactar
+//
+// «Redactar con IA»: escribe el resumen y los problemas a partir de los
+// reportes diarios de la semana, y los deja guardados en el borrador.
+//
+// Es un BOTÓN y no algo automático: lo decidió Ivan el 2026-09-17 —«si es
+// automático puede ser confuso»—. Reemplaza lo que haya en esas dos secciones,
+// y la pantalla avisa antes de pedirlo por segunda vez. Todo lo demás del
+// reporte —metas, plan, decisiones, fotos— no se toca.
+router.post(
+  '/:proyectoId/:id/redactar',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const proyectoId = Number(req.params.proyectoId);
+    const reporte = await leerSemanal(proyectoId, req.params.id);
+    if (!reporte) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+    if (!puedeTocar(req, reporte.creado_por)) {
+      res.status(403).json({
+        success: false,
+        message: 'Solo quien escribió el reporte puede cambiarlo',
+      });
+      return;
+    }
+    if (reporte.completo) {
+      res.status(409).json({
+        success: false,
+        message: 'Este reporte ya se envió; la IA solo escribe borradores',
+      });
+      return;
+    }
+
+    let borrador;
+    try {
+      borrador = await redactarSemana(proyectoId, ymd(reporte.semana_inicio));
+    } catch (err) {
+      if (err instanceof IaNoConfiguradaError) {
+        res.status(503).json({
+          success: false,
+          message: 'La redacción con IA no está configurada en este servidor',
+        });
+        return;
+      }
+      if (err instanceof SinDiariosError) {
+        res.status(400).json({
+          success: false,
+          message: 'Esta semana no tiene reportes diarios, así que no hay de qué escribir',
+        });
+        return;
+      }
+      // Lo que falle de la IA se cuenta como lo que es: el ingeniero puede
+      // escribirlo a mano y el reporte no se pierde.
+      console.error('[reporteSemanal] la IA no pudo redactar:', err);
+      res.status(502).json({
+        success: false,
+        message: 'La IA no pudo escribir el borrador. Inténtalo otra vez o escríbelo a mano.',
+      });
+      return;
+    }
+
+    // El resumen y los problemas se reemplazan enteros; lo demás se queda.
+    await query(
+      `UPDATE proyecto_reportes_semanales
+          SET resumen = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2`,
+      [borrador.resumen, reporte.id],
+    );
+    await query(
+      'DELETE FROM proyecto_reporte_semanal_problemas WHERE reporte_id = $1',
+      [reporte.id],
+    );
+    for (const [orden, p] of borrador.problemas.entries()) {
+      await query(
+        `INSERT INTO proyecto_reporte_semanal_problemas
+           (reporte_id, fecha, problema, accion, orden)
+         VALUES ($1, $2, $3, NULL, $4)`,
+        [reporte.id, p.fecha, p.problema, orden],
+      );
+    }
+
+    await registrarAudit(req.user!.id, 'editar', 'reporte_semanal', reporte.id, {
+      proyecto_id: proyectoId,
+      redactado_con_ia: true,
+      problemas: borrador.problemas.length,
+      tokens: borrador.uso,
+    });
+
+    res.json({
+      success: true,
+      data: { resumen: borrador.resumen, problemas: borrador.problemas },
+    });
   }),
 );
 

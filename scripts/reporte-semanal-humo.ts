@@ -186,6 +186,22 @@ const main = async () => {
   const otraVez = await pedir('GET', `/proyecto-reportes-semanales/${P}/${id2}`);
   c(otraVez.cuerpo.data.metas.length === 3, 'guardar dos veces no duplica la meta fuera del plan');
 
+  // ---- «Redactar con IA» solo escribe borradores y solo si hay de qué ----
+  //
+  // Sin llamar a la IA de verdad: los dos caminos que se comprueban cortan
+  // antes de salir a la red, a propósito. Que el borrador de verdad salga bien
+  // es cosa de mirarlo, no de una prueba que cueste dinero en cada corrida.
+  const enviadoYa = await pedir('POST', `/proyecto-reportes-semanales/${P}/${id}/redactar`);
+  c(enviadoYa.estado === 409,
+    `la IA no reescribe un reporte ya enviado (dio ${enviadoYa.estado})`);
+
+  const vacia = await pedir('POST', `/proyecto-reportes-semanales/${P}`, { fecha: '2026-11-23' });
+  const sinDiarios = await pedir(
+    'POST', `/proyecto-reportes-semanales/${P}/${vacia.cuerpo.data.id}/redactar`);
+  c(sinDiarios.estado === 400 || sinDiarios.estado === 503,
+    `una semana sin diarios no se manda a la IA (dio ${sinDiarios.estado})`);
+  await pedir('DELETE', `/proyecto-reportes-semanales/${P}/${vacia.cuerpo.data.id}/borrador`);
+
   // ---- descartar el borrador devuelve las metas heredadas ----
   const descartado = await pedir('DELETE', `/proyecto-reportes-semanales/${P}/${id2}/borrador`);
   c(descartado.estado === 200, 'el borrador se descarta');
