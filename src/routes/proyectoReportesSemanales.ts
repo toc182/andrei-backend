@@ -35,6 +35,10 @@ import {
   semanaIso,
 } from '../services/reporteSemana.js';
 import { datosDeLaSemana, type DatosSemana } from '../services/reporteSemanalDatos.js';
+import { encolarEnvio } from '../services/reporteEnvio.js';
+import { archivarSemanalPdf, buildSemanalPdfInput } from '../services/reporteSemanalEnvio.js';
+import { generateReporteSemanalPDF } from '../services/reporteSemanalPdf.js';
+import { downloadFile } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
@@ -735,6 +739,10 @@ router.post(
       return;
     }
 
+    // El correo es asunto del sistema, no del ingeniero: se encola y el cron lo
+    // manda con su PDF, reintentando si hace falta.
+    await encolarEnvio(reporte.id, 'semanal');
+
     await registrarAudit(req.user!.id, 'crear', 'reporte_semanal', reporte.id, {
       proyecto_id: proyectoId,
       numero,
@@ -742,6 +750,58 @@ router.post(
     });
 
     res.json({ success: true, data: { numero, reenviado: false } });
+  }),
+);
+
+// GET /api/proyecto-reportes-semanales/:proyectoId/:id/pdf
+//
+// El PDF. Si el reporte ya salió, se devuelve la ÚLTIMA versión archivada —la
+// misma que está en la bandeja de quien lo recibió—; de un borrador se arma al
+// vuelo, para poder mirar cómo va quedando antes de enviarlo.
+router.get(
+  '/:proyectoId/:id/pdf',
+  authenticateToken,
+  checkPermission('reportes'),
+  checkProjectAccess('proyectoId'),
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const proyectoId = Number(req.params.proyectoId);
+    const reporte = await leerSemanal(proyectoId, req.params.id);
+    if (!reporte) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+    if (!reporte.completo && !puedeTocar(req, reporte.creado_por)) {
+      res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
+    const archivado = await query<{ r2_key: string }>(
+      `SELECT r2_key FROM proyecto_reporte_semanal_pdfs
+        WHERE reporte_id = $1 ORDER BY version DESC LIMIT 1`,
+      [reporte.id],
+    );
+
+    let pdf: Buffer | null = null;
+    if (archivado.rows.length > 0) {
+      // Si la copia archivada no se puede bajar, se rearma: vale más un PDF
+      // que un error, aunque la copia de R2 sea la que hace fe.
+      pdf = await downloadFile(archivado.rows[0].r2_key).catch(() => null);
+    }
+    if (!pdf) {
+      const datos = await buildSemanalPdfInput(reporte.id);
+      if (!datos) {
+        res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+        return;
+      }
+      pdf = await generateReporteSemanalPDF(datos);
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${reporte.numero ?? 'reporte-semanal'}.pdf"`,
+    );
+    res.send(pdf);
   }),
 );
 

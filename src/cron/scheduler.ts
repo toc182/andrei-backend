@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { sendDailyNotifications } from '../services/dailyNotification.js';
+import { procesarEnviosSemanalesPendientes } from '../services/reporteSemanalEnvio.js';
 import {
   procesarEnviosPendientes,
   barrerBorradoresAbandonados,
@@ -48,6 +49,13 @@ export function startScheduler(): void {
     } catch (err) {
       // Que reviente una pasada no puede matar el programador entero.
       console.error('⏰ Error en la cola de envío de reportes:', err);
+    }
+    try {
+      // La misma pasada se lleva los semanales. Van en su propio try para que
+      // un semanal que reviente no deje sin mandar los diarios, ni al revés.
+      await procesarEnviosSemanalesPendientes();
+    } catch (err) {
+      console.error('⏰ Error en la cola de envío de reportes semanales:', err);
     }
   });
 

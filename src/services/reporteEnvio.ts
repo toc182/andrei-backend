@@ -5,6 +5,9 @@
  * reporte se encola, y el cron lo manda por su cuenta reintentando con esperas
  * cada vez más largas. Si se acaban los intentos, se avisa al admin.
  *
+ * La misma cola sirve al reporte diario y al semanal: sus columnas de envío se
+ * llaman igual, así que lo único que cambia es la tabla.
+ *
  * Aquí vive lo que se puede comprobar sin servidor ni base: el cálculo de
  * cuándo toca el siguiente intento. El resto son las cuatro consultas que
  * mueven una fila por la cola. Quien arma y manda el PDF es
@@ -14,6 +17,22 @@
  */
 
 import { query } from '../database/config.js';
+
+/**
+ * Las dos tablas que usan esta cola. El reporte semanal tiene las mismas
+ * columnas de envío que el diario (migraciones 162 y 168), así que la cola es
+ * la misma y solo cambia de dónde salen las filas.
+ *
+ * El nombre de la tabla se interpola en el SQL, que es lo único que Postgres no
+ * deja parametrizar. No es una excepción a la regla del proyecto: el valor NO
+ * viene de fuera, sale de este mapa cerrado.
+ */
+const TABLAS = {
+  diario: 'proyecto_reportes',
+  semanal: 'proyecto_reportes_semanales',
+} as const;
+
+export type TipoReporte = keyof typeof TABLAS;
 
 /**
  * Las esperas, en minutos, antes de cada reintento.
@@ -54,9 +73,12 @@ export function calcularProximoIntento(
  * dos casos la cuenta de intentos vuelve a empezar, porque quien le da al botón
  * espera que se intente de verdad, no que herede los fallos de ayer.
  */
-export async function encolarEnvio(reporteId: number): Promise<void> {
+export async function encolarEnvio(
+  reporteId: number,
+  tipo: TipoReporte = 'diario',
+): Promise<void> {
   await query(
-    `UPDATE proyecto_reportes
+    `UPDATE ${TABLAS[tipo]}
         SET envio_proximo_intento = CURRENT_TIMESTAMP,
             envio_intentos = 0,
             envio_ultimo_error = NULL,
@@ -85,12 +107,13 @@ export interface ReporteEnCola {
  */
 export async function reservarPendientes(
   limite = 10,
+  tipo: TipoReporte = 'diario',
 ): Promise<ReporteEnCola[]> {
   const r = await query<ReporteEnCola>(
-    `UPDATE proyecto_reportes
+    `UPDATE ${TABLAS[tipo]}
         SET envio_proximo_intento = CURRENT_TIMESTAMP + INTERVAL '10 minutes'
       WHERE id IN (
-        SELECT id FROM proyecto_reportes
+        SELECT id FROM ${TABLAS[tipo]}
          WHERE activo = TRUE
            AND completo = TRUE
            AND enviado_at IS NULL
@@ -107,9 +130,12 @@ export async function reservarPendientes(
 }
 
 /** Salió. Sale de la cola para siempre. */
-export async function marcarEnviado(reporteId: number): Promise<Date | null> {
+export async function marcarEnviado(
+  reporteId: number,
+  tipo: TipoReporte = 'diario',
+): Promise<Date | null> {
   const r = await query<{ enviado_at: Date }>(
-    `UPDATE proyecto_reportes
+    `UPDATE ${TABLAS[tipo]}
         SET enviado_at = CURRENT_TIMESTAMP,
             envio_proximo_intento = NULL,
             envio_ultimo_error = NULL
@@ -129,11 +155,12 @@ export async function anotarFallo(
   reporteId: number,
   intentosPrevios: number,
   motivo: string,
+  tipo: TipoReporte = 'diario',
 ): Promise<boolean> {
   const intentos = intentosPrevios + 1;
   const proximo = calcularProximoIntento(intentos);
   await query(
-    `UPDATE proyecto_reportes
+    `UPDATE ${TABLAS[tipo]}
         SET envio_intentos = $2,
             envio_ultimo_error = $3,
             envio_proximo_intento = $4
@@ -144,9 +171,12 @@ export async function anotarFallo(
 }
 
 /** Ya se avisó de este: que el cron no lo repita en cada pasada. */
-export async function marcarAvisado(reporteId: number): Promise<void> {
+export async function marcarAvisado(
+  reporteId: number,
+  tipo: TipoReporte = 'diario',
+): Promise<void> {
   await query(
-    'UPDATE proyecto_reportes SET envio_avisado = TRUE WHERE id = $1',
+    `UPDATE ${TABLAS[tipo]} SET envio_avisado = TRUE WHERE id = $1`,
     [reporteId],
   );
 }

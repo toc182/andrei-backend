@@ -2,35 +2,38 @@
  * El PDF del reporte diario.
  *
  * Se arma con Puppeteer y no con PDFKit como generateSolicitudPDF, porque este
- * documento lleva una rejilla de fotos que fluye entre páginas; dibujarla
+ * documento lleva una rejilla de fotos que fluye entre paginas; dibujarla
  * coordenada por coordenada seria mucho mas trabajo y mucho mas fragil.
  *
- * Los colores y las medidas salen de pdfGenerator.ts para que este papel se
- * vea como los que la empresa ya emite.
+ * Lo que comparte con el reporte semanal —las fotos, el navegador, la hora de
+ * Panama, los colores— vive en reportePdfComun.ts. Aqui queda solo esta hoja.
  */
 
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import puppeteer, { Browser } from 'puppeteer';
-import type { LaunchOptions } from 'puppeteer';
-import sharp from 'sharp';
-import { downloadFile, uploadFile } from './storage.js';
+import {
+  GRAY, HORA_PANAMA, LIGHT_BG, NAVY, RULE, WARN,
+  aPdf, esc, incrustarFotos, logoPinellas, pieDeFoto,
+  type FotoIncrustada,
+} from './reportePdfComun.js';
+
 import { nombreEmisor, nombrePropio, type Consorcio } from './consorcioProyecto.js';
 import type { CambioLegible, Trozo } from './reporteCambios.js';
 
+// Las piezas comunes se siguen pudiendo importar desde aqui: rutas y pruebas
+// las piden a este modulo desde antes de que existiera el reporte semanal.
+export { claveReducida, reducirFoto, pieDeFoto, HORA_PANAMA } from './reportePdfComun.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const NAVY = '#1a365d';
-const GRAY = '#718096';
-const LIGHT_BG = '#f7fafc';
-const RULE = '#e2e8f0';
-const WARN = '#d97706';
-// Las marcas de Correcciones, en rojo y verde apagados.
+// Las marcas de Correcciones, en rojo y verde apagados. Ivan los pidió así: el
+// tachado y el subrayado son los que dicen qué pasó; el color solo acompaña, y
+// en blanco y negro no hace falta.
 const QUITADO = '#9a8686';
 const QUITADO_LINEA = '#d3c2c2';
 const AGREGADO = '#71887a';
 const AGREGADO_LINEA = '#c2d1c6';
+
 
 export interface ReportePdfInput {
   numero: string;
@@ -74,219 +77,13 @@ export interface ReportePdfInput {
 }
 
 /**
- * Las horas del papel van en la de Panamá, pase lo que pase con la del servidor.
- *
- * Railway corre en UTC: sin esto, el reporte que Cesar mando el 15 de
- * septiembre a las 9:04 de la noche salio «emitido 16 sept 2026, 2:04 a. m.».
- */
-export const HORA_PANAMA = { timeZone: 'America/Panama' } as const;
-
-function esc(s: string): string {
-  return String(s).replace(
-    /[&<>"]/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!,
-  );
-}
-
-/**
- * Lado largo al que se reduce cada foto, y techo de peso del bloque ya
- * codificado.
- *
- * La rejilla imprime dos fotos por fila en papel carta: cada una ocupa unas
- * 3.6 pulgadas, asi que 1400px son casi 400 puntos por pulgada. Subir de ahi
- * no se ve en el papel, solo pesa.
- */
-const FOTO_LADO_MAX = 1400;
-const FOTOS_PESO_MAX = 12 * 1024 * 1024;
-
-/**
- * Donde vive la copia reducida de una foto, derivada de la clave del original.
- *
- * Se calcula en vez de guardarse en una columna: la copia es un derivado puro
- * del original, no un dato del negocio. Si algun dia se decide otro tamano,
- * basta cambiar el sufijo y las viejas se regeneran solas la primera vez que
- * alguien pida el PDF.
- */
-export function claveReducida(r2Key: string): string {
-  return `${r2Key}.r${FOTO_LADO_MAX}.jpg`;
-}
-
-/** Reduce una foto al tamano con el que entra al PDF. */
-export async function reducirFoto(bytes: Buffer): Promise<Buffer> {
-  return sharp(bytes)
-    .rotate() // respeta como venia girado el celular
-    .resize(FOTO_LADO_MAX, FOTO_LADO_MAX, {
-      fit: 'inside',
-      withoutEnlargement: true,
-    })
-    .jpeg({ quality: 82 })
-    .toBuffer();
-}
-
-/**
- * Cuanto puede medir de alto una foto en el papel, segun como venga. Por que
- * estos numeros: ver .shot en armarHtml. Las horizontales llevan tope propio
- * desde que las fotos tienen leyenda: sin el, una leyenda de dos renglones ya
- * dejaba la primera hoja de fotos con cuatro en vez de seis.
+ * Cuanto puede medir de alto una foto en el papel, segun como venga. Los topes
+ * salen de la hoja carta con el titulo de la seccion y la leyenda mas larga
+ * debajo de cada foto: dos filas de verticales o tres de horizontales. Medido
+ * el 2026-09-16 con la letra del servidor de Railway; subirlos parte la hoja.
  */
 const ALTO_VERTICAL = '4.0in';
 const ALTO_HORIZONTAL = '2.5in';
-
-/**
- * Si la foto es mas ancha que alta, como se ve.
- *
- * La copia reducida ya viene derecha; un original sin reducir (el camino de
- * rescate) puede traer el giro solo en su EXIF, y el navegador lo respeta al
- * dibujarla, asi que aqui tambien. Si no se puede leer, se trata como vertical,
- * que es el tope que nunca parte una fila.
- */
-async function esHorizontal(bytes: Buffer): Promise<boolean> {
-  try {
-    const m = await sharp(bytes).metadata();
-    const girada = (m.orientation ?? 1) >= 5;
-    const ancho = (girada ? m.height : m.width) ?? 0;
-    const alto = (girada ? m.width : m.height) ?? 0;
-    return ancho > alto;
-  } catch {
-    return false;
-  }
-}
-
-/** El pie de una foto en el papel: «3. Acero de columna C-4», o «3.» sin leyenda. */
-export function pieDeFoto(numero: number, leyenda: string | null): string {
-  return leyenda ? `${numero}. ${leyenda}` : `${numero}.`;
-}
-
-/**
- * Una foto lista para el papel. `numero` es el suyo en el reporte, no su
- * puesto en esta lista: si una no se pudo incluir, las demas conservan el
- * numero con que se las nombra en la pantalla y en Correcciones.
- */
-interface FotoIncrustada {
-  src: string;
-  numero: number;
-  leyenda: string | null;
-  horizontal: boolean;
-}
-
-/**
- * Las fotos van incrustadas como datos, no como direcciones.
- *
- * El PDF se arma desde una cadena de texto con setContent: una direccion
- * firmada de R2 obligaria al navegador sin ventana a salir a buscarla, y esas
- * direcciones ademas vencen. Se traen los bytes y se meten en el documento.
- *
- * Y se reducen antes de meterlos, que es lo que rompio en produccion el
- * 2026-09-10. Una foto de celular pesa unos 2 MB, y setContent no aguanta una
- * cadena enorme: pasado cierto punto no tarda mas, se cuelga y no vuelve, hasta
- * que Puppeteer se rinde a los 30 segundos. Medido: 8 fotos a tamano original
- * (20 MB) salen en 2 s, 12 fotos (31 MB) no salen ni en 180 s. Tumbaba tanto el
- * envio por correo como el boton de ver el PDF, y sin decir por que.
- */
-async function incrustarFotos(
-  fotos: ReportePdfInput['fotos'],
-): Promise<{ lista: FotoIncrustada[]; omitidas: number }> {
-  const lista: FotoIncrustada[] = [];
-  let peso = 0;
-  let omitidas = 0;
-  let msBajar = 0;
-  let msReducir = 0;
-
-  let regeneradas = 0;
-
-  // Las copias reducidas, todas de golpe y en tandas.
-  //
-  // Aqui el orden importa: mientras se bajaban los ORIGINALES esto no servia de
-  // nada, porque lo que mandaba eran los 29 MB y el ancho de banda no se
-  // reparte. Con las copias son 4 MB, y entonces lo que pesa son las idas y
-  // vueltas — doce de ellas. Medido: bajar paso de 2367 ms a la mitad larga.
-  //
-  // Tandas de seis, no todas a la vez, para que la memoria no dependa de
-  // cuantas fotos traiga el reporte.
-  const TANDA = 6;
-  const reducidas: (Buffer | null)[] = [];
-  const t0 = Date.now();
-  for (let i = 0; i < fotos.length; i += TANDA) {
-    const tanda = await Promise.all(
-      fotos.slice(i, i + TANDA).map((f) =>
-        // Que no exista es lo normal en una foto de antes de este cambio; se
-        // rescata abajo.
-        downloadFile(claveReducida(f.r2_key)).catch(() => null),
-      ),
-    );
-    reducidas.push(...tanda);
-  }
-  msBajar = Date.now() - t0;
-
-  for (const [indice, f] of fotos.entries()) {
-    let bytes: Buffer | null = reducidas[indice];
-    let mime = 'image/jpeg';
-
-    if (!bytes) {
-      // Camino de rescate para las fotos viejas: se baja el original, se
-      // reduce, y se guarda la copia para que la proxima vez ya este. Asi el
-      // sistema se pone al dia solo, sin una pasada de migracion por encima de
-      // miles de fotos.
-      const t1 = Date.now();
-      let original: Buffer;
-      try {
-        original = await downloadFile(f.r2_key);
-      } catch {
-        // Una foto que ya no esta no puede hundir el reporte entero.
-        continue;
-      }
-      msBajar += Date.now() - t1;
-
-      const t2 = Date.now();
-      try {
-        bytes = await reducirFoto(original);
-        regeneradas += 1;
-        // Guardar la copia es un extra: si falla, el PDF sale igual y la
-        // proxima vez se vuelve a intentar.
-        void uploadFile(claveReducida(f.r2_key), bytes, 'image/jpeg').catch(
-          (err: unknown) => {
-            console.error(`[reportePdf] no se pudo archivar la copia de ${f.r2_key}:`, err);
-          },
-        );
-      } catch (err) {
-        console.error(`[reportePdf] no se pudo reducir ${f.r2_key}:`, err);
-        bytes = original;
-        mime = f.tipo_mime || 'image/jpeg';
-      }
-      msReducir += Date.now() - t2;
-    }
-
-    // Techo de peso. Con la reduccion funcionando nunca se alcanza: 20 fotos
-    // pesan unos 9 MB. Es la red por si sharp falla, para no volver al cuelgue:
-    // vale mas un reporte que avisa que le faltan fotos que uno que no sale.
-    const src = `data:${mime};base64,${bytes.toString('base64')}`;
-    if (peso + src.length > FOTOS_PESO_MAX) {
-      omitidas++;
-      continue;
-    }
-    peso += src.length;
-    // El pie es la leyenda, no el nombre del archivo: desde un iPhone casi
-    // todas se llaman «image.jpg», y eso no le dice nada a quien lee.
-    lista.push({
-      src,
-      numero: indice + 1,
-      leyenda: f.leyenda ?? null,
-      horizontal: await esHorizontal(bytes),
-    });
-  }
-
-  if (omitidas > 0) {
-    console.error(
-      `[reportePdf] ${omitidas} foto(s) quedaron fuera del PDF por peso`,
-    );
-  }
-  if (fotos.length) {
-    console.log(
-      `[reportePdf] ${lista.length} foto(s): bajar ${msBajar} ms, reducir ${msReducir} ms, ${(peso / 1024 / 1024).toFixed(1)} MB al documento${regeneradas ? `, ${regeneradas} copia(s) regenerada(s)` : ''}`,
-    );
-  }
-  return { lista, omitidas };
-}
 
 function armarHtml(
   d: ReportePdfInput,
@@ -599,71 +396,11 @@ function armarHtml(
   </body></html>`;
 }
 
-/** Copiado de routes/documents.ts:42 — Railway necesita los flags sin sandbox. */
-function configPuppeteer(): LaunchOptions {
-  const enProduccion =
-    process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
-  if (!enProduccion) return { headless: true };
-
-  const config: LaunchOptions = {
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-zygote',
-    ],
-  };
-  const chrome =
-    process.env.PUPPETEER_EXECUTABLE_PATH ||
-    process.env.CHROME_BIN ||
-    '/usr/bin/google-chrome';
-  if (fs.existsSync(chrome)) config.executablePath = chrome;
-  return config;
-}
-
 export async function generateReportePDF(d: ReportePdfInput): Promise<Buffer> {
   // En un consorcio va SU logo, y si todavia no lo subieron, ninguno: el de
   // Pinellas en un papel del consorcio diria algo que no es.
-  let logo = '';
-  if (d.consorcio) {
-    logo = d.consorcio.logo ?? '';
-  } else {
-    try {
-      const ruta = path.resolve(__dirname, '../../templates/LogoPinellas.png');
-      logo = 'data:image/png;base64,' + fs.readFileSync(ruta).toString('base64');
-    } catch {
-      // Sin logo el documento se sigue emitiendo.
-    }
-  }
-  const emisor = nombreEmisor(d.consorcio);
-
+  const logo = d.consorcio ? d.consorcio.logo ?? '' : logoPinellas(__dirname);
   const { lista: fotos, omitidas } = await incrustarFotos(d.fotos);
   const html = armarHtml(d, fotos, logo, omitidas);
-
-  let browser: Browser | undefined;
-  try {
-    browser = await puppeteer.launch(configPuppeteer());
-    const page = await browser.newPage();
-    const tRender = Date.now();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdf = await page.pdf({
-      format: 'letter',
-      printBackground: true,
-      margin: { top: '0.5in', right: '0.5in', bottom: '0.6in', left: '0.5in' },
-      displayHeaderFooter: true,
-      headerTemplate: '<span></span>',
-      footerTemplate: `<div style="width:100%;padding:0 0.5in;font-family:Arial,Helvetica,sans-serif;
-          font-size:9.5px;color:${GRAY};display:flex;justify-content:space-between;">
-          <span>${esc(emisor)} — Reporte diario de obra</span>
-          <span>Página <span class="pageNumber"></span> de <span class="totalPages"></span></span>
-        </div>`,
-    });
-    console.log(`[reportePdf] navegador ${Date.now() - tRender} ms`);
-    return Buffer.from(pdf);
-  } finally {
-    if (browser) await browser.close();
-  }
+  return aPdf(html, `${nombreEmisor(d.consorcio)} — Reporte diario de obra`);
 }
