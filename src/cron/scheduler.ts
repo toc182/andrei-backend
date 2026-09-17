@@ -1,6 +1,9 @@
 import cron from 'node-cron';
 import { sendDailyNotifications } from '../services/dailyNotification.js';
-import { procesarEnviosSemanalesPendientes } from '../services/reporteSemanalEnvio.js';
+import {
+  archivarCorreccionesSemanalesPendientes,
+  procesarEnviosSemanalesPendientes,
+} from '../services/reporteSemanalEnvio.js';
 import {
   procesarEnviosPendientes,
   barrerBorradoresAbandonados,
@@ -68,6 +71,8 @@ export function startScheduler(): void {
     async () => {
       try {
         await barrerBorradoresAbandonados();
+        // Las correcciones del semanal que se quedaron sin su PDF archivado.
+        await archivarCorreccionesSemanalesPendientes();
       } catch (err) {
         console.error('⏰ Error barriendo borradores abandonados:', err);
       }

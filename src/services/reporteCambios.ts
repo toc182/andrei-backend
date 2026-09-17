@@ -512,8 +512,11 @@ function renglonEditado(antes: string, despues: string): Trozo[] | null {
  * como una lista, un renglon por actividad, y lo que no se toco no se muestra.
  * Un renglon quitado sale tachado; uno agregado, subrayado; uno editado, con el
  * cambio marcado dentro.
+ *
+ * Se exporta porque el reporte SEMANAL marca su resumen igual que el diario
+ * marca su trabajo ejecutado: es el mismo trabajo y no tiene por que haber dos.
  */
-function cambiosDeTexto(antes: string | null, despues: string | null): Trozo[][][] {
+export function cambiosDeTexto(antes: string | null, despues: string | null): Trozo[][][] {
   const pasos = alinear(renglones(antes ?? ''), renglones(despues ?? ''));
 
   // Cada tanda de renglones distintos entre dos iguales.

@@ -29,6 +29,7 @@ import {
 import { HORA_PANAMA } from './reportePdfComun.js';
 import { nombreEmisor, nombrePropio, type Consorcio } from './consorcioProyecto.js';
 import type { DatosSemana } from './reporteSemanalDatos.js';
+import type { CambioLegible, Trozo } from './reporteCambios.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,6 +71,8 @@ export interface ReporteSemanalPdfInput {
   problemas: { fecha: string | null; problema: string; accion: string | null }[];
   decisiones: string[];
   fotos: (FotoDelReporte & { fecha: string })[];
+  /** fecha y hora ya escritas en la hora de Panamá. */
+  correcciones: { fecha: string; hora: string; quien: string; cambios: CambioLegible[] }[];
 }
 
 const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -295,6 +298,35 @@ export function armarHtmlSemanal(d: ReporteSemanalPdfInput, fotos: FotoIncrustad
       .join('')}</tbody></table>`
     : '';
 
+  // ---- correcciones ----
+  //
+  // Las mismas marcas que la pantalla: lo quitado tachado, lo agregado
+  // subrayado, en tonos apagados. El tachado y el subrayado son los que dicen
+  // qué pasó; el color solo acompaña.
+  const trozoHtml = (t: Trozo): string => {
+    switch (t.tipo) {
+      case 'quitado': return `<del>${esc(t.texto)}</del>`;
+      case 'agregado': return `<ins>${esc(t.texto)}</ins>`;
+      case 'corte': return `<span class="gap">${esc(t.texto)}</span>`;
+      case 'nota': return `<span class="more">${esc(t.texto)}</span>`;
+      default: return esc(t.texto);
+    }
+  };
+  const cambioHtml = (k: CambioLegible): string =>
+    `<div class="chg"><span class="campo">${esc(k.etiqueta)}</span><span>${k.renglones
+      .map((r) => r.map(trozoHtml).join(' '))
+      .join('<br>')}</span></div>`;
+  const bloqueCorrecciones = d.correcciones.length
+    ? `<div class="sect"><div class="sect-h">Correcciones</div>
+         <table class="fixes">${d.correcciones
+      .map(
+        (c) => `<tr><td class="when">${esc(c.fecha)}<br>${esc(c.hora)}</td>
+                    <td class="who">${esc(c.quien)}</td>
+                    <td>${c.cambios.map(cambioHtml).join('')}</td></tr>`,
+      )
+      .join('')}</table></div>`
+    : '';
+
   // ---- fotos ----
   const aviso = omitidas
     ? ` · <span style="color:${WARN}">${omitidas} no se pudieron incluir</span>`
@@ -389,6 +421,20 @@ export function armarHtmlSemanal(d: ReporteSemanalPdfInput, fotos: FotoIncrustad
                 border:1px solid ${RULE}; border-radius:2px; }
     .shot.horizontal img { max-height:2.5in; }
     .shot figcaption { font-size:10px; color:${GRAY}; margin-top:3px; text-align:center; }
+
+    /* Correcciones: igual que en el diario, para que los dos papeles se lean
+       de la misma manera. */
+    .fixes { width:100%; border-collapse:collapse; font-size:11.5px; line-height:15px; margin-top:10px; }
+    .fixes td { padding:5px 9px; border:1px solid ${RULE}; vertical-align:top; }
+    .fixes .when { width:1%; color:${GRAY}; white-space:nowrap; }
+    .fixes .who { width:96px; }
+    .fixes .chg { display:grid; grid-template-columns:132px 1fr; gap:8px; }
+    .fixes .chg + .chg { margin-top:4px; }
+    .fixes .campo, .fixes .gap, .fixes .more { color:${GRAY}; }
+    .fixes .more { font-size:11px; }
+    .fixes del { color:#9a8686; text-decoration-color:#d3c2c2; }
+    .fixes ins { color:#71887a; text-decoration:underline; text-decoration-color:#c2d1c6;
+                 text-underline-offset:2px; }
   </style></head><body>
     <div class="head">
       ${logo ? `<img class="logo" src="${esc(logo)}" alt="${esc(nombreEmisor(d.consorcio))}">` : '<span></span>'}
@@ -418,6 +464,7 @@ export function armarHtmlSemanal(d: ReporteSemanalPdfInput, fotos: FotoIncrustad
     ${seccion(`Plan de la semana ${d.proximaSemanaIso} · ${d.proximaSemana}`, bloquePlan)}
     ${seccion('Decisiones que se necesitan', bloqueDecisiones)}
     ${bloqueFotos}
+    ${bloqueCorrecciones}
   </body></html>`;
 }
 

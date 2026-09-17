@@ -23,6 +23,8 @@ import { datosDeLaSemana, type DatosSemana } from './reporteSemanalDatos.js';
 import {
   generateReporteSemanalPDF, type MetaPdf, type ReporteSemanalPdfInput,
 } from './reporteSemanalPdf.js';
+import { HORA_PANAMA } from './reportePdfComun.js';
+import type { CambioLegible } from './reporteCambios.js';
 
 const CORREO_ADMINISTRACION =
   process.env.REPORTES_EMAIL_TO || 'ivan@pinellaspanama.com';
@@ -112,7 +114,7 @@ export async function buildSemanalPdfInput(
   const fin = ymd(s.semana_fin);
   const datos = s.datos ?? (await datosDeLaSemana(s.proyecto_id, inicio));
 
-  const [metas, metasPlan, problemas, decisiones, fotos] = await Promise.all([
+  const [metas, metasPlan, problemas, decisiones, fotos, correcciones] = await Promise.all([
     query<{
       texto: string; cantidad: string | null; unidad: string | null;
       estado: MetaPdf['estado']; cantidad_hecha: string | null; porcentaje: number | null;
@@ -155,6 +157,14 @@ export async function buildSemanalPdfInput(
          JOIN proyecto_reportes r ON r.id = f.reporte_id
         WHERE sf.reporte_id = $1
         ORDER BY sf.orden, sf.id`,
+      [reporteId],
+    ),
+    query<{ created_at: Date; quien: string; cambios: CambioLegible[] }>(
+      `SELECT c.created_at, u.nombre AS quien, c.cambios
+         FROM proyecto_reporte_semanal_correcciones c
+         JOIN users u ON u.id = c.creado_por
+        WHERE c.reporte_id = $1
+        ORDER BY c.created_at`,
       [reporteId],
     ),
   ]);
@@ -200,6 +210,18 @@ export async function buildSemanalPdfInput(
       fecha: p.fecha ? ymd(p.fecha) : null, problema: p.problema, accion: p.accion,
     })),
     decisiones: decisiones.rows.map((d) => d.texto),
+    // La fecha y la hora, ya escritas en la de Panamá: el papel no puede
+    // depender de en qué zona corra el servidor.
+    correcciones: correcciones.rows.map((c) => ({
+      fecha: c.created_at.toLocaleDateString('es-PA', {
+        ...HORA_PANAMA, day: 'numeric', month: 'short', year: 'numeric',
+      }),
+      hora: c.created_at.toLocaleTimeString('es-PA', {
+        ...HORA_PANAMA, hour: 'numeric', minute: '2-digit',
+      }),
+      quien: c.quien,
+      cambios: c.cambios ?? [],
+    })),
     fotos: fotos.rows.map((f) => ({
       r2_key: f.r2_key,
       nombre_archivo: f.nombre_archivo,
@@ -249,6 +271,54 @@ export async function archivarSemanalPdf(
   );
 
   return { buffer, version, key };
+}
+
+/**
+ * Archiva la versión del PDF que ya dice lo que dice esa corrección.
+ *
+ * La marca se pone solo si la corrección no se movió mientras el PDF se armaba:
+ * si alguien guardó otra cosa en medio, la fila se queda pendiente y la
+ * siguiente pasada la archiva otra vez. Mismo cuidado que en el diario.
+ */
+export async function archivarCorreccionSemanal(
+  reporteId: number,
+  correccionId: number,
+): Promise<void> {
+  const archivado = await archivarSemanalPdf(reporteId);
+  if (!archivado) return;
+  await query(
+    `UPDATE proyecto_reporte_semanal_correcciones
+        SET pdf_version = $1
+      WHERE id = $2 AND pdf_version IS NULL`,
+    [archivado.version, correccionId],
+  );
+}
+
+/**
+ * Las correcciones que se quedaron sin su PDF archivado. Las archiva el barrido
+ * de la madrugada: no hay ninguna prisa —la pantalla y la descarga arman el PDF
+ * al vuelo mientras tanto—, pero la constancia de lo que decía el papel después
+ * de cada corrección sí tiene que quedar.
+ */
+export async function archivarCorreccionesSemanalesPendientes(): Promise<number> {
+  const pendientes = await query<{ id: number; reporte_id: number }>(
+    `SELECT c.id, c.reporte_id
+       FROM proyecto_reporte_semanal_correcciones c
+       JOIN proyecto_reportes_semanales s ON s.id = c.reporte_id
+      WHERE c.pdf_version IS NULL AND s.activo = true
+      ORDER BY c.created_at
+      LIMIT 20`,
+  );
+  let hechas = 0;
+  for (const p of pendientes.rows) {
+    try {
+      await archivarCorreccionSemanal(p.reporte_id, p.id);
+      hechas += 1;
+    } catch (err) {
+      console.error(`[reporteSemanal] no se pudo archivar la correccion ${p.id}:`, err);
+    }
+  }
+  return hechas;
 }
 
 const escaparHtml = (s: string): string =>

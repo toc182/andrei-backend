@@ -139,11 +139,23 @@ function entornoWhatsapp(urlMeta: string): NodeJS.ProcessEnv {
     WHATSAPP_PHONE_NUMBER_ID: SECRETOS_PRUEBA.numeroId,
     WHATSAPP_APP_SECRET: SECRETOS_PRUEBA.appSecret,
     WHATSAPP_VERIFY_TOKEN: SECRETOS_PRUEBA.verifyToken,
+    // El asistente habla con el Claude de mentira, que vive en el mismo
+    // servidor. Con la llave de verdad una prueba gastaria dinero y ademas
+    // contestaria distinto cada vez.
+    ANTHROPIC_API_KEY: SECRETOS_PRUEBA.llaveIa,
+    ANTHROPIC_BASE_URL: urlMeta,
+    // En una obra se esperan segundos a que la persona termine de escribir; en
+    // una prueba, poco más de un segundo: lo justo para que tres mensajes
+    // seguidos de la prueba lleguen dentro de la misma espera, y no tanto como
+    // para que la prueba se arrastre.
+    WHATSAPP_ESPERA_MS: '1200',
+    WHATSAPP_TIC_MS: '300',
   };
 }
 
 /** Lo que usan el servidor de pruebas y la prueba de WhatsApp. No son secretos. */
 export const SECRETOS_PRUEBA = {
+  llaveIa: 'sk-ant-de-mentira',
   token: 'token-de-mentira',
   numeroId: '100000000000001',
   appSecret: 'secreto-de-mentira',
@@ -280,11 +292,24 @@ export async function crearPlantilla(): Promise<string> {
  * siguiente lo remate. Sin esto, «no deja nada detrás» sería mentira en cuanto
  * algo se corta a mitad.
  */
-const CUADERNO = path.join(os.tmpdir(), 'andrei-servidores-de-pruebas.json');
+// Un cuaderno POR CORRIDA, con el pid de quien lo escribe en el nombre.
+//
+// Antes había uno solo para todas, y eso se rompía en cuanto dos sesiones
+// corrían pruebas a la vez: la que arrancaba mataba los servidores anotados
+// por la otra —que estaban vivos y trabajando— y la primera se quedaba con la
+// conexión cortada a media prueba. Con un cuaderno por corrida, cada una solo
+// puede barrer los de corridas que ya terminaron.
+const CUADERNO = path.join(os.tmpdir(), `andrei-servidores-de-pruebas-${process.pid}.json`);
 
-function leerCuaderno(): number[] {
+/** El pid del corredor que escribió ese cuaderno, o null si es de los viejos. */
+function duenoDelCuaderno(archivo: string): number | null {
+  const m = /^andrei-servidores-de-pruebas-(\d+)\.json$/.exec(archivo);
+  return m ? Number(m[1]) : null;
+}
+
+function leerCuaderno(archivo = CUADERNO): number[] {
   try {
-    const x: unknown = JSON.parse(fs.readFileSync(CUADERNO, 'utf8'));
+    const x: unknown = JSON.parse(fs.readFileSync(archivo, 'utf8'));
     return Array.isArray(x) ? x.filter((n): n is number => typeof n === 'number') : [];
   } catch {
     return [];
@@ -348,15 +373,65 @@ export async function limpiarAlmacen(): Promise<number> {
   return borrados;
 }
 
-/** Lo que quedó suelto de corridas anteriores: servidores huérfanos y bases. */
+/**
+ * El proceso que creó esa base, si su nombre lo dice.
+ *
+ * Las dos formas llevan el pid: «andrei_pruebas_plantilla_<pid>» y
+ * «andrei_pruebas_<pid>_<marca>».
+ */
+function pidDeLaBase(nombre: string): number | null {
+  const resto = nombre.slice(PREFIJO_BASE.length).replace(/^plantilla_/, '');
+  const pid = parseInt(resto.split('_')[0], 10);
+  return Number.isInteger(pid) ? pid : null;
+}
+
+/** ¿Ese proceso sigue vivo? La señal 0 no mata: solo pregunta. */
+function sigueVivo(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Lo que quedó suelto de corridas anteriores: servidores huérfanos y bases.
+ *
+ * Se salta lo que es de una corrida VIVA. Ivan trabaja con varias sesiones a la
+ * vez sobre la misma copia, y sin esto la que empezaba segunda le tiraba a la
+ * primera la base modelo a media prueba: «template database
+ * andrei_pruebas_plantilla_7532 does not exist», y las dos corridas se mataban
+ * entre ellas.
+ */
 export async function barrer(): Promise<{ servidores: number[]; bases: string[] }> {
   const servidores: number[] = [];
-  for (const pid of leerCuaderno()) {
+  // Solo los cuadernos de corridas que ya no existen: si otra sesión está
+  // corriendo pruebas ahora mismo, sus servidores son suyos y no se tocan.
+  let cuadernos: string[] = [];
+  try {
+    cuadernos = fs
+      .readdirSync(os.tmpdir())
+      .filter((f) => f.startsWith('andrei-servidores-de-pruebas'));
+  } catch {
+    // Sin poder leer el temporal no hay nada que barrer.
+  }
+  for (const archivo of cuadernos) {
+    const dueno = duenoDelCuaderno(archivo);
+    if (dueno !== null && dueno !== process.pid && sigueVivo(dueno)) continue;
+    const ruta = path.join(os.tmpdir(), archivo);
+    for (const pid of leerCuaderno(ruta)) {
+      try {
+        process.kill(pid); // si ya no existe, lanza y no se cuenta
+        servidores.push(pid);
+      } catch {
+        // ya no estaba
+      }
+    }
     try {
-      process.kill(pid); // si ya no existe, lanza y no se cuenta
-      servidores.push(pid);
+      if (ruta !== CUADERNO) fs.unlinkSync(ruta);
     } catch {
-      // ya no estaba
+      // da igual: el cuaderno de una corrida muerta no estorba
     }
   }
   escribirCuaderno([]);
@@ -373,8 +448,13 @@ export async function barrer(): Promise<{ servidores: number[]; bases: string[] 
   } finally {
     await admin.end();
   }
-  for (const b of bases) await tirarBase(b);
-  return { servidores, bases };
+  const pid = pidDeLaBase;
+  const huerfanas = bases.filter((b) => {
+    const suyo = pid(b);
+    return suyo === null || suyo === process.pid || !sigueVivo(suyo);
+  });
+  for (const b of huerfanas) await tirarBase(b);
+  return { servidores, bases: huerfanas };
 }
 
 /**

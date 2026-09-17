@@ -18,6 +18,7 @@
  */
 
 import { Router, Request, Response } from 'express';
+import type { QueryResultRow } from 'pg';
 import { query, pool } from '../database/config.js';
 import { getFileSignedUrl } from '../services/storage.js';
 import {
@@ -39,7 +40,12 @@ import { encolarEnvio } from '../services/reporteEnvio.js';
 import {
   IaNoConfiguradaError, SinDiariosError, iaConfigurada, redactarSemana,
 } from '../services/reporteSemanalIA.js';
-import { archivarSemanalPdf, buildSemanalPdfInput } from '../services/reporteSemanalEnvio.js';
+import {
+  diffSemanal, type EstadoSemanal, type MetaComparable,
+} from '../services/reporteSemanalCambios.js';
+import {
+  archivarCorreccionSemanal, archivarSemanalPdf, buildSemanalPdfInput,
+} from '../services/reporteSemanalEnvio.js';
 import { generateReporteSemanalPDF } from '../services/reporteSemanalPdf.js';
 import { downloadFile } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
@@ -114,6 +120,77 @@ const textoONull = (v: unknown): string | null => {
   const s = typeof v === 'string' ? v.trim() : '';
   return s === '' ? null : s;
 };
+
+/** Una consulta que puede ir por el pool o por el cliente de una transacción. */
+type Consultar = <T extends QueryResultRow = QueryResultRow>(
+  sql: string,
+  params?: unknown[],
+) => Promise<{ rows: T[] }>;
+
+/**
+ * El reporte reducido a lo que se compara entre dos guardados.
+ *
+ * Se lee dos veces cuando se corrige un reporte ya enviado —antes y después de
+ * escribir— y la diferencia es lo que va a la sección Correcciones.
+ */
+async function leerEstado(reporteId: number, consultar: Consultar): Promise<EstadoSemanal> {
+  const [cabeza, metas, plan, problemas, decisiones, fotos] = await Promise.all([
+    consultar<{ resumen: string | null; lo_que_se_espera: string | null }>(
+      'SELECT resumen, lo_que_se_espera FROM proyecto_reportes_semanales WHERE id = $1',
+      [reporteId],
+    ),
+    consultar<MetaComparable & { cantidad: string | null; cantidad_hecha: string | null }>(
+      `SELECT id, texto, estado, cantidad, unidad, cantidad_hecha, porcentaje, motivo
+         FROM proyecto_reporte_semanal_metas
+        WHERE reporte_evaluacion_id = $1 ORDER BY orden, id`,
+      [reporteId],
+    ),
+    consultar<{ texto: string; cantidad: string | null; unidad: string | null }>(
+      `SELECT texto, cantidad, unidad FROM proyecto_reporte_semanal_metas
+        WHERE reporte_plan_id = $1 ORDER BY orden, id`,
+      [reporteId],
+    ),
+    consultar<{ fecha: Date | null; problema: string; accion: string | null }>(
+      `SELECT fecha, problema, accion FROM proyecto_reporte_semanal_problemas
+        WHERE reporte_id = $1 ORDER BY orden, id`,
+      [reporteId],
+    ),
+    consultar<{ texto: string }>(
+      `SELECT texto FROM proyecto_reporte_semanal_decisiones
+        WHERE reporte_id = $1 ORDER BY orden, id`,
+      [reporteId],
+    ),
+    consultar<{ foto_id: number }>(
+      `SELECT foto_id FROM proyecto_reporte_semanal_fotos
+        WHERE reporte_id = $1 ORDER BY orden, id`,
+      [reporteId],
+    ),
+  ]);
+
+  const num = (v: string | number | null) => (v === null ? null : Number(v));
+  return {
+    resumen: cabeza.rows[0]?.resumen ?? null,
+    lo_que_se_espera: cabeza.rows[0]?.lo_que_se_espera ?? null,
+    metas: metas.rows.map((m) => ({
+      id: m.id,
+      texto: m.texto,
+      estado: m.estado,
+      cantidad: num(m.cantidad),
+      unidad: m.unidad,
+      cantidad_hecha: num(m.cantidad_hecha),
+      porcentaje: m.porcentaje,
+      motivo: m.motivo,
+    })),
+    metas_plan: plan.rows.map((m) => ({
+      texto: m.texto, cantidad: num(m.cantidad), unidad: m.unidad,
+    })),
+    problemas: problemas.rows.map((p) => ({
+      fecha: p.fecha ? ymd(p.fecha) : null, problema: p.problema, accion: p.accion,
+    })),
+    decisiones: decisiones.rows.map((d) => d.texto),
+    fotos: fotos.rows.map((f) => f.foto_id),
+  };
+}
 
 /** Solo quien lo escribió, o un admin, lo toca. Igual que el diario. */
 function puedeTocar(req: Request, creadoPor: number): boolean {
@@ -452,6 +529,16 @@ router.get(
           fecha: p.fecha ? ymd(p.fecha as Date) : null,
         })),
         decisiones: decisiones.rows,
+        correcciones: (await query<{
+          id: number; creado_por: number; quien: string; cambios: unknown; created_at: Date;
+        }>(
+          `SELECT c.id, c.creado_por, u.nombre AS quien, c.cambios, c.created_at
+             FROM proyecto_reporte_semanal_correcciones c
+             JOIN users u ON u.id = c.creado_por
+            WHERE c.reporte_id = $1
+            ORDER BY c.created_at`,
+          [reporte.id],
+        )).rows,
         // Las elegidas, en su orden, y todas las de la semana para poder
         // cambiarlas mientras sea borrador.
         fotos_elegidas: elegidasIds,
@@ -479,6 +566,8 @@ router.put(
     const body = req.body as SemanalBody;
 
     const client = await pool.connect();
+    const consultar: Consultar = (sql, params) => client.query(sql, params);
+    let correccionId: number | null = null;
     try {
       await client.query('BEGIN');
       const actual = await client.query<SemanalRow>(
@@ -501,6 +590,12 @@ router.put(
         });
         return;
       }
+
+      // De un reporte ya enviado se guarda cómo estaba: la diferencia con lo
+      // que quede después es lo que verá la sección Correcciones.
+      const estadoAntes = reporte.completo
+        ? await leerEstado(reporte.id, consultar)
+        : null;
 
       if (body.fotos !== undefined && body.fotos.length > FOTOS_MAX) {
         await client.query('ROLLBACK');
@@ -659,12 +754,41 @@ router.put(
         }
       }
 
+      // Lo que movió este guardado sobre un reporte ya enviado. Si no movió
+      // nada que se vea, no deja línea: un guardado no es una corrección.
+      if (estadoAntes) {
+        const cambios = diffSemanal(estadoAntes, await leerEstado(reporte.id, consultar));
+        if (cambios.length > 0) {
+          const fila = await client.query<{ id: number }>(
+            `INSERT INTO proyecto_reporte_semanal_correcciones
+               (reporte_id, creado_por, cambios)
+             VALUES ($1, $2, $3) RETURNING id`,
+            [reporte.id, req.user!.id, JSON.stringify(cambios)],
+          );
+          correccionId = fila.rows[0].id;
+          await registrarAudit(req.user!.id, 'editar', 'reporte_semanal', reporte.id, {
+            proyecto_id: proyectoId,
+            correccion: correccionId,
+            secciones: cambios.map((c) => c.etiqueta),
+          });
+        }
+      }
+
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
       throw e;
     } finally {
       client.release();
+    }
+
+    // El PDF corregido se archiva sin hacer esperar a quien guardó: tarda unos
+    // segundos y no cambia nada de lo que ve en pantalla. Si falla, la fila se
+    // queda sin versión y el barrido de la madrugada la archiva.
+    if (correccionId !== null) {
+      void archivarCorreccionSemanal(Number(req.params.id), correccionId).catch((err) => {
+        console.error('[reporteSemanal] no se pudo archivar el PDF de la correccion:', err);
+      });
     }
 
     res.json({ success: true });
@@ -884,8 +1008,15 @@ router.get(
       [reporte.id],
     );
 
+    const pendiente = await query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM proyecto_reporte_semanal_correcciones
+        WHERE reporte_id = $1 AND pdf_version IS NULL`,
+      [reporte.id],
+    );
     let pdf: Buffer | null = null;
-    if (archivado.rows.length > 0) {
+    // Con una corrección sin archivar, la copia de R2 todavía no la dice: se
+    // arma al vuelo para que quien lo abra vea lo último.
+    if (archivado.rows.length > 0 && pendiente.rows[0].n === '0') {
       // Si la copia archivada no se puede bajar, se rearma: vale más un PDF
       // que un error, aunque la copia de R2 sea la que hace fe.
       pdf = await downloadFile(archivado.rows[0].r2_key).catch(() => null);
