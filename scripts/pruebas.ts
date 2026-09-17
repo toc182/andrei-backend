@@ -41,6 +41,7 @@ const PRUEBAS: Record<string, string> = {
   'reporte-fotos': 'reporte-fotos-humo.ts',
   'reporte-guardado-doble': 'reporte-guardado-doble-humo.ts',
   'reporte-leyendas': 'reporte-leyendas-humo.ts',
+  'semana-cerrada': 'semana-cerrada-humo.ts',
 };
 
 async function main(): Promise<void> {

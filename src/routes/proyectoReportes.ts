@@ -60,6 +60,10 @@ import {
   marcarAvisado,
   MAX_INTENTOS,
 } from '../services/reporteEnvio.js';
+import {
+  mensajeSemanaCerrada,
+  semanaCerrada,
+} from '../services/semanaCerrada.js';
 import { registrarAudit } from '../services/auditLog.js';
 
 const router = Router();
@@ -1054,6 +1058,17 @@ router.post(
       throw err;
     }
 
+    // La semana con reporte semanal enviado esta cerrada: ese dia ya no admite
+    // un diario nuevo. Se comprueba aqui, antes de que nadie escriba nada.
+    const cerrada = await semanaCerrada(proyectoId, body.fecha!);
+    if (cerrada) {
+      res.status(409).json({
+        success: false,
+        message: mensajeSemanaCerrada(cerrada, 'ya no admite reportes diarios de esos días'),
+      });
+      return;
+    }
+
     // Nace en borrador: sin numero y con completo = false. Hasta que /emitir
     // lo complete no se ve en ninguna parte —ni lista, ni detalle, ni PDF, ni
     // correo— asi que una subida que se corte a medias no deja nada a la vista.
@@ -1163,6 +1178,24 @@ router.put(
           message: 'Solo quien escribió el reporte puede corregirlo',
         });
         return;
+      }
+
+      // Semana cerrada: ni se corrige lo de esos dias ni se mueve un reporte
+      // hacia ellos. Se miran las dos semanas, la que tiene y la que pediria,
+      // porque cambiar la fecha es tambien meter o sacar un dia de una semana
+      // que ya salio por correo.
+      const semanas = [actual.rows[0].fecha as Date | string];
+      if (body.fecha !== undefined) semanas.push(body.fecha);
+      for (const cuando of semanas) {
+        const cerrada = await semanaCerrada(proyectoId, cuando);
+        if (cerrada) {
+          await client.query('ROLLBACK');
+          res.status(409).json({
+            success: false,
+            message: mensajeSemanaCerrada(cerrada, 'sus reportes diarios ya no se corrigen'),
+          });
+          return;
+        }
       }
 
       if (body.clima !== undefined && !CLIMAS.includes(body.clima)) {
@@ -1665,8 +1698,10 @@ router.post(
   checkPermission('reportes'),
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
-    const reporte = await query<{ creado_por: number; enviado_at: Date | null }>(
-      `SELECT creado_por, enviado_at FROM proyecto_reportes
+    const reporte = await query<{
+      creado_por: number; enviado_at: Date | null; fecha: Date;
+    }>(
+      `SELECT creado_por, enviado_at, fecha FROM proyecto_reportes
         WHERE id = $1 AND proyecto_id = $2 AND activo = true`,
       [req.params.id, req.params.proyectoId],
     );
@@ -1678,6 +1713,20 @@ router.post(
       res.status(403).json({
         success: false,
         message: 'Solo quien escribió el reporte puede enviarlo',
+      });
+      return;
+    }
+
+    // Un borrador de una semana que se cerro mientras tanto no se completa: el
+    // reporte semanal de esa semana ya salio por correo sin el.
+    const cerrada = await semanaCerrada(
+      Number(req.params.proyectoId),
+      reporte.rows[0].fecha,
+    );
+    if (cerrada) {
+      res.status(409).json({
+        success: false,
+        message: mensajeSemanaCerrada(cerrada, 'este reporte diario ya no se puede enviar'),
       });
       return;
     }
@@ -1801,6 +1850,20 @@ router.delete(
     );
     if (reporte.rows.length === 0) {
       res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+      return;
+    }
+
+    // Ni el admin borra un diario de una semana que ya salio en el semanal: el
+    // semanal se guarda como se envio y quedaria nombrando un dia inexistente.
+    const cerrada = await semanaCerrada(
+      Number(req.params.proyectoId),
+      reporte.rows[0].fecha,
+    );
+    if (cerrada) {
+      res.status(409).json({
+        success: false,
+        message: mensajeSemanaCerrada(cerrada, 'sus reportes diarios ya no se eliminan'),
+      });
       return;
     }
 
@@ -2018,13 +2081,16 @@ async function avisarEnvioAgotado(
 async function reporteParaFotos(
   reporteId: string,
   proyectoId: string,
-): Promise<{ creado_por: number; numero: string; proyecto_corto: string } | null> {
+): Promise<{
+  creado_por: number; numero: string; proyecto_corto: string; fecha: Date;
+} | null> {
   const r = await query<{
     creado_por: number;
     numero: string;
     proyecto_corto: string;
+    fecha: Date;
   }>(
-    `SELECT r.creado_por, r.numero,
+    `SELECT r.creado_por, r.numero, r.fecha,
             COALESCE(p.nombre_corto, p.nombre) AS proyecto_corto
        FROM proyecto_reportes r
        JOIN proyectos p ON p.id = r.proyecto_id
@@ -2057,6 +2123,15 @@ router.post(
       res.status(403).json({
         success: false,
         message: 'Solo quien escribió el reporte puede agregarle fotos',
+      });
+      return;
+    }
+
+    const cerrada = await semanaCerrada(Number(req.params.proyectoId), reporte.fecha);
+    if (cerrada) {
+      res.status(409).json({
+        success: false,
+        message: mensajeSemanaCerrada(cerrada, 'a sus reportes diarios ya no se les agregan fotos'),
       });
       return;
     }
@@ -2195,8 +2270,9 @@ router.delete(
       r2_key: string;
       nombre_archivo: string;
       creado_por: number;
+      fecha: Date;
     }>(
-      `SELECT f.r2_key, f.nombre_archivo, r.creado_por
+      `SELECT f.r2_key, f.nombre_archivo, r.creado_por, r.fecha
          FROM proyecto_reporte_fotos f
          JOIN proyecto_reportes r ON r.id = f.reporte_id
         WHERE f.id = $1 AND f.reporte_id = $2 AND r.proyecto_id = $3
@@ -2211,6 +2287,18 @@ router.delete(
       res.status(403).json({
         success: false,
         message: 'Solo quien escribió el reporte puede quitarle fotos',
+      });
+      return;
+    }
+
+    const cerrada = await semanaCerrada(
+      Number(req.params.proyectoId),
+      foto.rows[0].fecha,
+    );
+    if (cerrada) {
+      res.status(409).json({
+        success: false,
+        message: mensajeSemanaCerrada(cerrada, 'a sus reportes diarios ya no se les quitan fotos'),
       });
       return;
     }
