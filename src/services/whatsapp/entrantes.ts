@@ -1,10 +1,10 @@
 // Lo que llega del WhatsApp de la empresa: leerlo, guardarlo y quedarse con las
 // fotos antes de que Meta las borre.
 //
-// Aqui todavia no hay asistente. Un mensaje de alguien registrado se guarda y
-// no se contesta; el que conteste es el trabajo de la siguiente pieza. A un
-// numero desconocido si se le contesta, una sola vez por mensaje, para que no
-// se quede hablandole al vacio.
+// Aqui NO se contesta a quien esta registrado: su mensaje se guarda pendiente y
+// lo atiende el trabajador unos segundos despues, cuando la persona deja de
+// escribir (trabajador.ts). A un numero desconocido si se le contesta aqui
+// mismo, una sola vez, porque con el no hay nada que esperar.
 
 import { query } from '../../database/config.js';
 import { uploadFile } from '../storage.js';
@@ -226,7 +226,11 @@ const NO_REGISTRADO =
   'oficina que registre tu WhatsApp en el sistema.';
 
 /** Manda un mensaje y lo deja anotado, salga o no salga. */
-export async function responder(telefono: string, texto: string): Promise<void> {
+export async function responder(
+  telefono: string,
+  texto: string,
+  conversacionId?: number,
+): Promise<void> {
   let waId: string | null = null;
   let error: string | null = null;
   try {
@@ -236,9 +240,10 @@ export async function responder(telefono: string, texto: string): Promise<void> 
     console.error(`[whatsapp] no se le pudo contestar a ${telefono}: ${error}`);
   }
   await query(
-    `INSERT INTO whatsapp_mensajes (direccion, wa_id, telefono, tipo, texto, error)
-     VALUES ('saliente', $1, $2, 'text', $3, $4)`,
-    [waId, telefono, texto, error],
+    `INSERT INTO whatsapp_mensajes
+       (direccion, wa_id, telefono, tipo, texto, error, conversacion_id, procesado_at)
+     VALUES ('saliente', $1, $2, 'text', $3, $4, $5, CURRENT_TIMESTAMP)`,
+    [waId, telefono, texto, error, conversacionId ?? null],
   );
 }
 
@@ -267,8 +272,14 @@ export async function procesarPayload(cuerpo: unknown): Promise<void> {
 
     if (m.mediaId) await traerMedia(fila.id, m.mediaId);
 
-    if (userId === null && estaConfigurado()) {
-      await responder(m.telefono, NO_REGISTRADO);
+    if (userId === null) {
+      // No hay nada mas que hacer con el: se le contesta —si se puede— y se da
+      // por atendido, para que no se quede pendiente para siempre.
+      if (estaConfigurado()) await responder(m.telefono, NO_REGISTRADO);
+      await query(
+        'UPDATE whatsapp_mensajes SET procesado_at = CURRENT_TIMESTAMP WHERE id = $1',
+        [fila.id],
+      );
     }
   }
 }

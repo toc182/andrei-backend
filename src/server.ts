@@ -74,6 +74,8 @@ import desglosesRoutes from './routes/desgloses.js';
 import presupuestosRoutes from './routes/presupuestos.js';
 import whatsappRoutes from './routes/whatsapp.js';
 import { startScheduler } from './cron/scheduler.js';
+import { arrancarTrabajador } from './services/whatsapp/trabajador.js';
+import { estaConfigurado } from './services/whatsapp/cliente.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -205,6 +207,10 @@ async function startServer(): Promise<void> {
 
     // Start cron scheduler
     startScheduler();
+
+    // El que atiende lo que entra por WhatsApp. Sin llaves de WhatsApp no
+    // arranca: un servidor sin WhatsApp no tiene por que despertarse solo.
+    if (estaConfigurado()) arrancarTrabajador();
 
     console.log('🚀 Starting HTTP server...');
     app.listen(PORT, () => {

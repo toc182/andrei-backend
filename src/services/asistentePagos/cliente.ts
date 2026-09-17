@@ -15,9 +15,20 @@ export function estaConfigurado(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 
-/** El cliente, creado la primera vez que hace falta. null si no hay llave. */
+/** El cliente, creado la primera vez que hace falta. null si no hay llave.
+ *
+ *  ANTHROPIC_BASE_URL solo lo usan las pruebas, que levantan un Anthropic de
+ *  mentira: asi la conversacion entera se puede probar sin gastar ni depender
+ *  de que el modelo conteste hoy lo mismo que ayer. En produccion no se pone y
+ *  el cliente va al sitio de siempre. */
 export function obtenerCliente(): Anthropic | null {
   if (!estaConfigurado()) return null;
-  if (!cliente) cliente = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  if (!cliente) {
+    const base = process.env.ANTHROPIC_BASE_URL;
+    cliente = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      ...(base ? { baseURL: base } : {}),
+    });
+  }
   return cliente;
 }

@@ -1,5 +1,5 @@
 /**
- * El Meta de mentira.
+ * El Meta de mentira -y, de paso, el Claude de mentira.
  *
  * Una prueba de WhatsApp no puede hablar con Meta: mandaría mensajes a personas
  * de verdad y dependería de internet y de una cuenta. Así que el entorno de
@@ -13,6 +13,12 @@
  *
  * Y dos que el de verdad no hace, para que la prueba pueda mirar: guardar una
  * foto de antemano y contar lo que se mandó.
+ *
+ * También hace de Anthropic (POST /v1/messages). La prueba deja guionizadas las
+ * respuestas del modelo, una por turno, y así la conversación entera es
+ * repetible: lo que se comprueba es que las herramientas se ejecutan de verdad
+ * y que lo que dicen acaba en la base, no que el modelo acierte. Lo que el
+ * modelo dice de verdad se prueba aparte, a mano y con el modelo de verdad.
  */
 
 import http from 'http';
@@ -69,6 +75,10 @@ export async function arrancarMetaFalso(puertoPedido?: number): Promise<MetaFals
 
   const enviados: Enviado[] = [];
   const archivos = new Map<string, { datos: Buffer; tipoMime: string }>();
+  /** Las respuestas del modelo que la prueba dejó preparadas, en orden. */
+  const guion: unknown[] = [];
+  /** Lo que se le pidió al modelo, para que la prueba pueda mirarlo. */
+  const peticionesIa: unknown[] = [];
 
   const servidor = http.createServer((req, res) => {
     void (async () => {
@@ -84,6 +94,48 @@ export async function arrancarMetaFalso(puertoPedido?: number): Promise<MetaFals
       // --- lo que solo existe para la prueba ---
       if (ruta === '/_prueba/enviados' && req.method === 'GET') {
         return json(200, enviados);
+      }
+      if (ruta === '/_prueba/ia' && req.method === 'POST') {
+        const cuerpo: unknown = JSON.parse((await leerCuerpo(req)).toString('utf8'));
+        for (const r of Array.isArray(cuerpo) ? cuerpo : [cuerpo]) guion.push(r);
+        return json(200, { guionizadas: guion.length });
+      }
+      if (ruta === '/_prueba/ia/peticiones' && req.method === 'GET') {
+        return json(200, peticionesIa);
+      }
+
+      // --- el Claude de mentira ---
+      if (ruta === '/v1/messages' && req.method === 'POST') {
+        const cuerpo: unknown = JSON.parse((await leerCuerpo(req)).toString('utf8'));
+        peticionesIa.push(cuerpo);
+        const siguiente = guion.shift();
+        if (siguiente === undefined) {
+          // Que se note: una prueba que llama al modelo más veces de las que
+          // guionizó está probando otra cosa de la que cree.
+          //
+          // 400 y no 500 a propósito: el SDK reintenta solo los 5xx, y esos
+          // reintentos —con su espera entre medias— harían que una prueba del
+          // camino de fallo tardara veinte segundos y saliera flaca unas veces
+          // sí y otras no.
+          return json(400, {
+            type: 'error',
+            error: {
+              type: 'invalid_request_error',
+              message: 'el guion del modelo se quedó sin respuestas',
+            },
+          });
+        }
+        const r = esObjeto(siguiente) ? siguiente : {};
+        return json(200, {
+          id: `msg_prueba_${peticionesIa.length}`,
+          type: 'message',
+          role: 'assistant',
+          model: esObjeto(cuerpo) && typeof cuerpo.model === 'string' ? cuerpo.model : 'falso',
+          content: Array.isArray(r.content) ? r.content : [],
+          stop_reason: typeof r.stop_reason === 'string' ? r.stop_reason : 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 5 },
+        });
       }
       if (ruta === '/_prueba/media' && req.method === 'POST') {
         const cuerpo: unknown = JSON.parse((await leerCuerpo(req)).toString('utf8'));

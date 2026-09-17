@@ -461,7 +461,21 @@ export async function barrer(): Promise<{ servidores: number[]; bases: string[] 
  * Deja listo: base nueva + migraciones + semilla + servidor propio.
  * Si algo revienta a medio montar, deshace lo que llevaba hecho.
  */
-export async function crearEntorno(plantilla?: string): Promise<Entorno> {
+export interface OpcionesEntorno {
+  /**
+   * Con el modelo de VERDAD, no con el guionizado.
+   *
+   * Solo para las pruebas que se corren a mano y que gastan dinero: la del
+   * asistente de WhatsApp con Claude de verdad. Las pruebas automaticas nunca
+   * lo ponen.
+   */
+  iaDeVerdad?: boolean;
+}
+
+export async function crearEntorno(
+  plantilla?: string,
+  opciones: OpcionesEntorno = {},
+): Promise<Entorno> {
   const base = `${PREFIJO_BASE}${process.pid}_${Date.now()}`;
   const puerto = await puertoLibre();
 
@@ -469,7 +483,15 @@ export async function crearEntorno(plantilla?: string): Promise<Entorno> {
   // variable de entorno del servidor, así que tiene que existir ya cuando el
   // servidor arranca.
   const meta = await lanzarMetaFalso();
-  const env = { ...entornoHijo(base, puerto), ...entornoWhatsapp(meta.url) };
+  const whatsapp = entornoWhatsapp(meta.url);
+  if (opciones.iaDeVerdad) {
+    // Se le devuelven las llaves de verdad del .env, que entornoHijo dejo pasar.
+    whatsapp.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+    delete whatsapp.ANTHROPIC_BASE_URL;
+    // Y se espera de verdad a que la persona termine de escribir.
+    whatsapp.WHATSAPP_ESPERA_MS = process.env.WHATSAPP_ESPERA_MS ?? '3000';
+  }
+  const env = { ...entornoHijo(base, puerto), ...whatsapp };
 
   await crearBase(base, plantilla);
   let servidor: { proceso: ChildProcess; registro: () => string } | null = null;
