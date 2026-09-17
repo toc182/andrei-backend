@@ -57,6 +57,7 @@ import asistentePagosRoutes from './routes/asistentePagos.js';
 import proyectoAreasRoutes from './routes/proyectoAreas.js';
 import proyectoListasRoutes from './routes/proyectoListas.js';
 import proyectoReportesRoutes from './routes/proyectoReportes.js';
+import proyectoReportesSemanalesRoutes from './routes/proyectoReportesSemanales.js';
 import usersRoutes from './routes/users.js';
 import solicitudesPagoRoutes from './routes/solicitudesPago.js';
 import solicitudesPagoAdjuntosRoutes from './routes/solicitudesPagoAdjuntos.js';
@@ -126,6 +127,7 @@ app.use('/api/costs', asistentePagosRoutes);
 app.use('/api/proyecto-areas', proyectoAreasRoutes);
 app.use('/api/proyecto-listas', proyectoListasRoutes);
 app.use('/api/proyecto-reportes', proyectoReportesRoutes);
+app.use('/api/proyecto-reportes-semanales', proyectoReportesSemanalesRoutes);
 app.use('/api/users', usersRoutes);
 // Inyectar token de query param para el endpoint PDF (window.open no envía headers)
 app.use('/api/solicitudes-pago/:id/pdf', (req, res, next) => {
