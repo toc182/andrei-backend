@@ -73,6 +73,96 @@ export async function enviarTexto(telefono: string, texto: string): Promise<stri
   return cuerpo?.messages?.[0]?.id ?? null;
 }
 
+/**
+ * Manda hasta tres botones para que la persona toque en vez de escribir.
+ *
+ * Los titulos no pueden pasar de 20 caracteres: Meta rechaza el mensaje entero
+ * si se pasan, asi que se cortan aqui y no en quien llama.
+ */
+export async function enviarBotones(
+  telefono: string,
+  texto: string,
+  botones: { id: string; titulo: string }[],
+): Promise<string | null> {
+  if (!estaConfigurado()) {
+    throw new Error('WhatsApp no esta configurado en este servidor');
+  }
+  const res = await fetch(`${api()}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: telefono,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: texto },
+        action: {
+          buttons: botones.slice(0, 3).map((b) => ({
+            type: 'reply',
+            reply: { id: b.id, title: b.titulo.slice(0, 20) },
+          })),
+        },
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(await leerError(res));
+  const cuerpo = (await res.json().catch(() => null)) as Enviado | null;
+  return cuerpo?.messages?.[0]?.id ?? null;
+}
+
+/**
+ * Sube un archivo a Meta y manda el mensaje que lo lleva.
+ *
+ * Son dos pasos porque Meta no acepta el archivo dentro del mensaje: primero
+ * se sube y da un id, y despues el mensaje lo nombra. El id vale 30 dias, pero
+ * aqui se usa al momento.
+ */
+export async function enviarDocumento(
+  telefono: string,
+  archivo: { nombre: string; datos: Buffer; tipoMime?: string },
+  pie?: string,
+): Promise<string | null> {
+  if (!estaConfigurado()) {
+    throw new Error('WhatsApp no esta configurado en este servidor');
+  }
+  const tipoMime = archivo.tipoMime ?? 'application/pdf';
+
+  const formulario = new FormData();
+  formulario.append('messaging_product', 'whatsapp');
+  formulario.append('type', tipoMime);
+  formulario.append(
+    'file',
+    new Blob([new Uint8Array(archivo.datos)], { type: tipoMime }),
+    archivo.nombre,
+  );
+
+  const subida = await fetch(`${api()}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/media`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token()}` },
+    body: formulario,
+  });
+  if (!subida.ok) throw new Error(await leerError(subida));
+  const subido = (await subida.json().catch(() => null)) as { id?: string } | null;
+  if (!subido?.id) throw new Error('Meta no devolvio el id del archivo subido');
+
+  const res = await fetch(`${api()}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: telefono,
+      type: 'document',
+      document: { id: subido.id, filename: archivo.nombre, ...(pie ? { caption: pie } : {}) },
+    }),
+  });
+  if (!res.ok) throw new Error(await leerError(res));
+  const cuerpo = (await res.json().catch(() => null)) as Enviado | null;
+  return cuerpo?.messages?.[0]?.id ?? null;
+}
+
 /** Lo que Meta cuenta de un archivo antes de dejarlo bajar. */
 interface FichaMedia {
   url?: string;

@@ -32,6 +32,8 @@ export interface Enviado {
   texto: string | null;
   waId: string;
   cuerpo: unknown;
+  /** Si fue un archivo: cuánto pesaba y cómo se llamaba. */
+  archivo?: { nombre: string; bytes: number };
 }
 
 export interface MetaFalso {
@@ -74,7 +76,7 @@ export async function arrancarMetaFalso(puertoPedido?: number): Promise<MetaFals
   const url = `http://127.0.0.1:${puerto}`;
 
   const enviados: Enviado[] = [];
-  const archivos = new Map<string, { datos: Buffer; tipoMime: string }>();
+  const archivos = new Map<string, { datos: Buffer; tipoMime: string; nombre?: string }>();
   /** Las respuestas del modelo que la prueba dejó preparadas, en orden. */
   const guion: unknown[] = [];
   /** Lo que se le pidió al modelo, para que la prueba pueda mirarlo. */
@@ -160,18 +162,51 @@ export async function arrancarMetaFalso(puertoPedido?: number): Promise<MetaFals
         return res.end(archivo.datos);
       }
 
+      // Subir un archivo: Meta lo guarda y devuelve un id que el mensaje nombra.
+      const subirMedia = /^\/([^/]+)\/media$/.exec(ruta);
+      if (subirMedia && req.method === 'POST') {
+        if (!conToken) return json(401, { error: { message: 'falta el token' } });
+        const crudo = await leerCuerpo(req);
+        const id = `media_subido_${archivos.size + 1}`;
+        // No se desarma el multipart: para la prueba basta con guardarlo entero
+        // y saber cuánto pesa y cómo se llama.
+        const nombre = /filename="([^"]+)"/.exec(crudo.toString('latin1'))?.[1] ?? 'sin-nombre';
+        archivos.set(id, { datos: crudo, tipoMime: 'application/pdf', nombre });
+        return json(200, { id });
+      }
+
       const mensajes = /^\/([^/]+)\/messages$/.exec(ruta);
       if (mensajes && req.method === 'POST') {
         if (!conToken) return json(401, { error: { message: 'falta el token' } });
         const cuerpo: unknown = JSON.parse((await leerCuerpo(req)).toString('utf8'));
         const waId = `wamid.prueba.${enviados.length + 1}`;
         const c = esObjeto(cuerpo) ? cuerpo : {};
+        // El texto está en un sitio distinto según el tipo de mensaje; la
+        // prueba quiere leerlo sin saber de cuál se trata.
+        let texto: string | null = null;
+        if (esObjeto(c.text) && typeof c.text.body === 'string') texto = c.text.body;
+        else if (esObjeto(c.interactive) && esObjeto(c.interactive.body)) {
+          const cuerpoInteractivo = c.interactive.body as Record<string, unknown>;
+          if (typeof cuerpoInteractivo.text === 'string') texto = cuerpoInteractivo.text;
+        } else if (esObjeto(c.document) && typeof c.document.caption === 'string') {
+          texto = c.document.caption;
+        }
+        let archivo: { nombre: string; bytes: number } | undefined;
+        if (esObjeto(c.document) && typeof c.document.id === 'string') {
+          const guardado = archivos.get(c.document.id);
+          archivo = {
+            nombre:
+              typeof c.document.filename === 'string' ? c.document.filename : (guardado?.nombre ?? ''),
+            bytes: guardado?.datos.length ?? 0,
+          };
+        }
         enviados.push({
           telefono: typeof c.to === 'string' ? c.to : '',
           tipo: typeof c.type === 'string' ? c.type : '',
-          texto: esObjeto(c.text) && typeof c.text.body === 'string' ? c.text.body : null,
+          texto,
           waId,
           cuerpo,
+          ...(archivo ? { archivo } : {}),
         });
         return json(200, {
           messaging_product: 'whatsapp',

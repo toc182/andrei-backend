@@ -8,7 +8,13 @@
 
 import { query } from '../../database/config.js';
 import { uploadFile } from '../storage.js';
-import { descargarMedia, enviarTexto, estaConfigurado } from './cliente.js';
+import {
+  descargarMedia,
+  enviarBotones,
+  enviarDocumento,
+  enviarTexto,
+  estaConfigurado,
+} from './cliente.js';
 
 /** Un mensaje ya leido del sobre de Meta, sin el archivo todavia. */
 export interface MensajeEntrante {
@@ -225,25 +231,74 @@ const NO_REGISTRADO =
   'así que no puedo ayudarte por aquí. Si trabajas con nosotros, pídele a la ' +
   'oficina que registre tu WhatsApp en el sistema.';
 
-/** Manda un mensaje y lo deja anotado, salga o no salga. */
+/**
+ * Manda algo y lo deja anotado, salga o no salga.
+ *
+ * Todo lo que sale pasa por aqui —texto, botones, un PDF— para que la
+ * conversacion se pueda leer entera despues, incluido lo que no llego a salir.
+ */
+async function mandar(
+  telefono: string,
+  tipo: string,
+  texto: string,
+  hacer: () => Promise<string | null>,
+  conversacionId?: number,
+): Promise<boolean> {
+  let waId: string | null = null;
+  let error: string | null = null;
+  try {
+    waId = await hacer();
+  } catch (e) {
+    error = (e as Error).message;
+    console.error(`[whatsapp] no se le pudo mandar ${tipo} a ${telefono}: ${error}`);
+  }
+  await query(
+    `INSERT INTO whatsapp_mensajes
+       (direccion, wa_id, telefono, tipo, texto, error, conversacion_id, procesado_at)
+     VALUES ('saliente', $1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)`,
+    [waId, telefono, tipo, texto, error, conversacionId ?? null],
+  );
+  return error === null;
+}
+
+/** Un mensaje de texto. */
 export async function responder(
   telefono: string,
   texto: string,
   conversacionId?: number,
 ): Promise<void> {
-  let waId: string | null = null;
-  let error: string | null = null;
-  try {
-    waId = await enviarTexto(telefono, texto);
-  } catch (e) {
-    error = (e as Error).message;
-    console.error(`[whatsapp] no se le pudo contestar a ${telefono}: ${error}`);
-  }
-  await query(
-    `INSERT INTO whatsapp_mensajes
-       (direccion, wa_id, telefono, tipo, texto, error, conversacion_id, procesado_at)
-     VALUES ('saliente', $1, $2, 'text', $3, $4, $5, CURRENT_TIMESTAMP)`,
-    [waId, telefono, texto, error, conversacionId ?? null],
+  await mandar(telefono, 'text', texto, () => enviarTexto(telefono, texto), conversacionId);
+}
+
+/** Una pregunta con botones para tocar. Devuelve si salio. */
+export async function responderBotones(
+  telefono: string,
+  texto: string,
+  botones: { id: string; titulo: string }[],
+  conversacionId?: number,
+): Promise<boolean> {
+  return mandar(
+    telefono,
+    'interactive',
+    texto,
+    () => enviarBotones(telefono, texto, botones),
+    conversacionId,
+  );
+}
+
+/** Un archivo —el PDF del reporte—. Devuelve si salio. */
+export async function responderDocumento(
+  telefono: string,
+  archivo: { nombre: string; datos: Buffer },
+  pie: string,
+  conversacionId?: number,
+): Promise<boolean> {
+  return mandar(
+    telefono,
+    'document',
+    `${archivo.nombre}${pie ? ` — ${pie}` : ''}`,
+    () => enviarDocumento(telefono, archivo, pie),
+    conversacionId,
   );
 }
 

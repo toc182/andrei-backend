@@ -20,6 +20,8 @@ export interface Conversacion {
   proyectoId: number | null;
   datos: DatosReporte;
   reporteId: number | null;
+  /** Cuando se le mando el PDF del borrador, si se le mando. */
+  borradorEnviadoAt: Date | null;
 }
 
 interface FilaConversacion {
@@ -30,6 +32,7 @@ interface FilaConversacion {
   proyecto_id: number | null;
   datos: DatosReporte;
   reporte_id: number | null;
+  borrador_enviado_at: Date | null;
 }
 
 const desdeFila = (f: FilaConversacion): Conversacion => ({
@@ -40,6 +43,7 @@ const desdeFila = (f: FilaConversacion): Conversacion => ({
   proyectoId: f.proyecto_id,
   datos: f.datos ?? {},
   reporteId: f.reporte_id,
+  borradorEnviadoAt: f.borrador_enviado_at,
 });
 
 /**
@@ -62,7 +66,7 @@ export async function conversacionViva(
   );
 
   const viva = await query<FilaConversacion>(
-    `SELECT id, user_id, telefono, modo, proyecto_id, datos, reporte_id
+    `SELECT id, user_id, telefono, modo, proyecto_id, datos, reporte_id, borrador_enviado_at
        FROM whatsapp_conversaciones
       WHERE telefono = $1 AND activa`,
     [telefono],
@@ -73,14 +77,14 @@ export async function conversacionViva(
     `INSERT INTO whatsapp_conversaciones (user_id, telefono)
      VALUES ($1, $2)
      ON CONFLICT (telefono) WHERE activa DO NOTHING
-     RETURNING id, user_id, telefono, modo, proyecto_id, datos, reporte_id`,
+     RETURNING id, user_id, telefono, modo, proyecto_id, datos, reporte_id, borrador_enviado_at`,
     [userId, telefono],
   );
   if (nueva.rows[0]) return desdeFila(nueva.rows[0]);
 
   // La abrio otra entrega entre medias: la de esa vale igual.
   const otra = await query<FilaConversacion>(
-    `SELECT id, user_id, telefono, modo, proyecto_id, datos, reporte_id
+    `SELECT id, user_id, telefono, modo, proyecto_id, datos, reporte_id, borrador_enviado_at
        FROM whatsapp_conversaciones
       WHERE telefono = $1 AND activa`,
     [telefono],
@@ -96,6 +100,8 @@ export async function guardarConversacion(
     proyectoId?: number | null;
     datos?: DatosReporte;
     reporteId?: number | null;
+    /** true = ahora mismo. */
+    borradorEnviado?: boolean;
   },
 ): Promise<void> {
   const campos: string[] = ['ultima_actividad = CURRENT_TIMESTAMP'];
@@ -117,6 +123,13 @@ export async function guardarConversacion(
   if (cambios.reporteId !== undefined) {
     campos.push(`reporte_id = $${i++}`);
     valores.push(cambios.reporteId);
+  }
+  if (cambios.borradorEnviado !== undefined) {
+    campos.push(
+      cambios.borradorEnviado
+        ? 'borrador_enviado_at = CURRENT_TIMESTAMP'
+        : 'borrador_enviado_at = NULL',
+    );
   }
 
   valores.push(id);

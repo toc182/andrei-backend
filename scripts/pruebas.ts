@@ -47,6 +47,7 @@ const PRUEBAS: Record<string, string> = {
   'semana-cerrada': 'semana-cerrada-humo.ts',
   'whatsapp-entrada': 'whatsapp-entrada-humo.ts',
   'whatsapp-asistente': 'whatsapp-asistente-humo.ts',
+  'whatsapp-borrador': 'whatsapp-borrador-humo.ts',
 };
 
 async function main(): Promise<void> {

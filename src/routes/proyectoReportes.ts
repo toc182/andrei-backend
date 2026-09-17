@@ -1020,6 +1020,107 @@ router.get(
 // Escritura
 // ---------------------------------------------------------------------------
 
+/**
+ * Crea el borrador de un reporte: lo mismo que hace POST /:proyectoId.
+ *
+ * Esta aparte de la ruta porque hay otra puerta que crea reportes —el asistente
+ * de WhatsApp— y dos maneras de crear el mismo reporte serian dos maneras de
+ * equivocarse. La ruta valida permisos y contesta al navegador; esto arma la
+ * fila.
+ *
+ * Devuelve el error en palabras cuando no se puede, en vez de lanzar: quien
+ * llama decide si eso es un 400 o un mensaje de WhatsApp.
+ */
+export async function crearBorradorDeReporte(
+  proyectoId: number,
+  body: ReporteBody,
+  usuarioId: number,
+): Promise<
+  { ok: true; id: number } | { ok: false; motivo: string; semanaCerrada?: boolean }
+> {
+  const problema = validarAlta(body);
+  if (problema) return { ok: false, motivo: problema };
+
+  // El numero se asigna al COMPLETAR, no aqui: un borrador abandonado no gasta
+  // numero. Pero los dos motivos por los que podria no poder numerarse se
+  // comprueban ya, porque decirselo despues de subir doce fotos seria cruel.
+  try {
+    await validarNumerable(proyectoId, body.fecha!);
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg === 'PREFIJO_NO_CONFIGURADO') {
+      return {
+        ok: false,
+        motivo: 'El proyecto no tiene código configurado, y sin él no se puede numerar el reporte',
+      };
+    }
+    if (msg.startsWith('Fecha')) return { ok: false, motivo: msg };
+    throw err;
+  }
+
+  // La semana con reporte semanal enviado esta cerrada: ese dia ya no admite un
+  // diario nuevo, venga de la pantalla o de WhatsApp. Se comprueba aqui, antes
+  // de que nadie escriba nada.
+  const cerrada = await semanaCerrada(proyectoId, body.fecha!);
+  if (cerrada) {
+    return {
+      ok: false,
+      motivo: mensajeSemanaCerrada(cerrada, 'ya no admite reportes diarios de esos días'),
+      semanaCerrada: true,
+    };
+  }
+
+  // Nace en borrador: sin numero y con completo = false. Hasta que /emitir lo
+  // complete no se ve en ninguna parte —ni lista, ni detalle, ni PDF, ni
+  // correo— asi que una subida que se corte a medias no deja nada a la vista.
+  const inserted = await query<ReporteRow>(
+    `INSERT INTO proyecto_reportes
+       (proyecto_id, numero, completo, fecha, clima, horas_perdidas, motivo,
+        personal_calificado, ayudantes, equipo, que_se_hizo, atrasos, novedades,
+        creado_por)
+     VALUES ($1,NULL,false,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     RETURNING *`,
+    [
+      proyectoId,
+      body.fecha,
+      body.clima,
+      parseHoras(body.horas_perdidas),
+      body.motivo?.trim() || null,
+      Number(body.personal_calificado ?? 0),
+      Number(body.ayudantes ?? 0),
+      body.equipo ?? [],
+      body.que_se_hizo!.trim(),
+      body.atrasos?.trim() || null,
+      body.novedades?.trim() || null,
+      usuarioId,
+    ],
+  );
+
+  const reporte = inserted.rows[0];
+
+  if (body.areas?.length) {
+    // Solo areas activas de ESTE proyecto: sin el filtro, un id de otra obra
+    // colaria una area ajena en el reporte.
+    await query(
+      `INSERT INTO proyecto_reporte_areas (reporte_id, area_id)
+       SELECT $1, a.id
+         FROM proyecto_areas a
+        WHERE a.id = ANY($2::int[]) AND a.proyecto_id = $3 AND a.activo = true`,
+      [reporte.id, body.areas, proyectoId],
+    );
+  }
+
+  await guardarFilas(reporte.id, proyectoId, body);
+
+  await registrarAudit(usuarioId, 'crear', 'reporte_diario', reporte.id, {
+    proyecto_id: proyectoId,
+    fecha: body.fecha,
+    borrador: true,
+  });
+
+  return { ok: true, id: reporte.id };
+}
+
 // POST /api/proyecto-reportes/:proyectoId
 router.post(
   '/:proyectoId',
@@ -1027,97 +1128,24 @@ router.post(
   checkPermission('reportes'),
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
-    const body = req.body as ReporteBody;
     const proyectoId = Number(req.params.proyectoId);
-
-    const problema = validarAlta(body);
-    if (problema) {
-      res.status(400).json({ success: false, message: problema });
-      return;
-    }
-
-    // El numero se asigna al COMPLETAR, no aqui: un borrador abandonado no
-    // gasta numero. Pero los dos motivos por los que podria no poder numerarse
-    // se comprueban ya, porque decirselo despues de subir doce fotos seria
-    // cruel.
-    try {
-      await validarNumerable(proyectoId, body.fecha!);
-    } catch (err) {
-      const msg = (err as Error).message;
-      if (msg === 'PREFIJO_NO_CONFIGURADO') {
-        res.status(400).json({
-          success: false,
-          message: 'El proyecto no tiene código configurado, y sin él no se puede numerar el reporte',
-        });
-        return;
-      }
-      if (msg.startsWith('Fecha')) {
-        res.status(400).json({ success: false, message: msg });
-        return;
-      }
-      throw err;
-    }
-
-    // La semana con reporte semanal enviado esta cerrada: ese dia ya no admite
-    // un diario nuevo. Se comprueba aqui, antes de que nadie escriba nada.
-    const cerrada = await semanaCerrada(proyectoId, body.fecha!);
-    if (cerrada) {
-      res.status(409).json({
-        success: false,
-        message: mensajeSemanaCerrada(cerrada, 'ya no admite reportes diarios de esos días'),
-      });
-      return;
-    }
-
-    // Nace en borrador: sin numero y con completo = false. Hasta que /emitir
-    // lo complete no se ve en ninguna parte —ni lista, ni detalle, ni PDF, ni
-    // correo— asi que una subida que se corte a medias no deja nada a la vista.
-    const inserted = await query<ReporteRow>(
-      `INSERT INTO proyecto_reportes
-         (proyecto_id, numero, completo, fecha, clima, horas_perdidas, motivo,
-          personal_calificado, ayudantes, equipo, que_se_hizo, atrasos, novedades,
-          creado_por)
-       VALUES ($1,NULL,false,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       RETURNING *`,
-      [
-        proyectoId,
-        body.fecha,
-        body.clima,
-        parseHoras(body.horas_perdidas),
-        body.motivo?.trim() || null,
-        Number(body.personal_calificado ?? 0),
-        Number(body.ayudantes ?? 0),
-        body.equipo ?? [],
-        body.que_se_hizo!.trim(),
-        body.atrasos?.trim() || null,
-        body.novedades?.trim() || null,
-        req.user!.id,
-      ],
+    const creado = await crearBorradorDeReporte(
+      proyectoId,
+      req.body as ReporteBody,
+      req.user!.id,
     );
-
-    const reporte = inserted.rows[0];
-
-    if (body.areas?.length) {
-      // Solo areas activas de ESTE proyecto: sin el filtro, un id de otra obra
-      // colaria una area ajena en el reporte.
-      await query(
-        `INSERT INTO proyecto_reporte_areas (reporte_id, area_id)
-         SELECT $1, a.id
-           FROM proyecto_areas a
-          WHERE a.id = ANY($2::int[]) AND a.proyecto_id = $3 AND a.activo = true`,
-        [reporte.id, body.areas, proyectoId],
-      );
+    if (!creado.ok) {
+      // La semana cerrada es un 409, no un 400: no es que el reporte este mal
+      // escrito, es que ese dia ya no se puede tocar.
+      res
+        .status(creado.semanaCerrada ? 409 : 400)
+        .json({ success: false, message: creado.motivo });
+      return;
     }
-
-    await guardarFilas(reporte.id, proyectoId, body);
-
-    await registrarAudit(req.user!.id, 'crear', 'reporte_diario', reporte.id, {
-      proyecto_id: proyectoId,
-      fecha: body.fecha,
-      borrador: true,
-    });
-
-    res.status(201).json({ success: true, data: reporte });
+    const fila = await query<ReporteRow>('SELECT * FROM proyecto_reportes WHERE id = $1', [
+      creado.id,
+    ]);
+    res.status(201).json({ success: true, data: fila.rows[0] });
   }),
 );
 
@@ -1397,6 +1425,15 @@ router.put(
  */
 export async function buildReportePdfInput(
   reporteId: number,
+  /**
+   * Tambien si es un borrador.
+   *
+   * Por defecto NO: un borrador no existe para nadie, y sacarle un PDF por
+   * descuido —en la lista, en el correo— seria ensenar un reporte que su autor
+   * no ha enviado. La unica que lo pide a proposito es la pieza de WhatsApp,
+   * que le manda el borrador a su propio autor para que lo revise.
+   */
+  incluirBorrador = false,
 ): Promise<(ReportePdfInput & { proyectoCorto: string; autorEmail: string | null }) | null> {
   const r = await query<{
     numero: string;
@@ -1429,8 +1466,9 @@ export async function buildReportePdfInput(
        FROM proyecto_reportes r
        JOIN users u ON u.id = r.creado_por
        JOIN proyectos p ON p.id = r.proyecto_id
-      WHERE r.id = $1 AND r.activo = true AND r.completo = true`,
-    [reporteId],
+      WHERE r.id = $1 AND r.activo = true
+        AND (r.completo = true OR $2 = true)`,
+    [reporteId, incluirBorrador],
   );
   if (r.rows.length === 0) return null;
   const row = r.rows[0];

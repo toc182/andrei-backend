@@ -74,6 +74,14 @@ export interface ReportePdfInput {
   }[];
   /** fecha y hora ya escritas en la hora de Panamá. */
   correcciones: { fecha: string; hora: string; quien: string; cambios: CambioLegible[] }[];
+  /**
+   * Es un borrador: todavia no se ha enviado.
+   *
+   * Sale con «BORRADOR» cruzado en cada hoja y sin numero, porque el numero se
+   * asigna al enviarlo. Lo usa el asistente de WhatsApp, que le manda al
+   * ingeniero el papel exacto que va a salir para que lo revise antes.
+   */
+  borrador?: boolean;
 }
 
 /**
@@ -85,7 +93,14 @@ export interface ReportePdfInput {
 const ALTO_VERTICAL = '4.0in';
 const ALTO_HORIZONTAL = '2.5in';
 
-function armarHtml(
+/**
+ * El HTML del reporte, tal cual se imprime.
+ *
+ * Se exporta para poder MIRARLO sin imprimir: una foto de esta pagina dice en
+ * un vistazo si el sello del borrador salio, y eso en un PDF ya impreso no se
+ * puede comprobar —el texto va dentro del archivo como dibujo de letras.
+ */
+export function armarHtml(
   d: ReportePdfInput,
   fotos: FotoIncrustada[],
   logo: string,
@@ -268,6 +283,12 @@ function armarHtml(
     .doc-kind { font-size:13px; line-height:16px; font-weight:700; letter-spacing:.13em;
                 text-transform:uppercase; color:${NAVY}; text-align:right; }
     .doc-id { font-size:11px; line-height:16px; color:${GRAY}; text-align:right; }
+    /* El sello del borrador. position:fixed lo repite en TODAS las hojas al
+       imprimir, que es justamente lo que tiene que pasar: una hoja suelta sin
+       sello pasaria por definitiva. */
+    .sello { position:fixed; top:45%; left:0; right:0; text-align:center;
+             font-size:96px; font-weight:800; letter-spacing:12px;
+             color:rgba(185,28,28,0.14); transform:rotate(-24deg); z-index:0; }
     .rule { height:2px; background:${NAVY}; margin-top:12px; }
     h1 { font-size:17px; line-height:24px; color:${NAVY}; margin:16px 0 0; }
     /* Tabla, no flex: con border-collapse las celdas vecinas comparten la
@@ -355,11 +376,14 @@ function armarHtml(
     .fixes ins { color:${AGREGADO}; text-decoration:underline; text-decoration-color:${AGREGADO_LINEA};
                  text-underline-offset:2px; }
   </style></head><body>
+    ${d.borrador ? '<div class="sello">BORRADOR</div>' : ''}
     <div class="head">
       ${logo ? `<img class="logo" src="${esc(logo)}" alt="${esc(nombrePropio(d.consorcio))}">` : '<span></span>'}
       <div>
         <div class="doc-kind">Reporte diario de obra</div>
-        <div class="doc-id">${esc(d.numero)} · emitido ${esc(emitido)}</div>
+        <div class="doc-id">${
+          d.borrador ? 'BORRADOR · sin número todavía' : `${esc(d.numero)} · emitido ${esc(emitido)}`
+        }</div>
       </div>
     </div>
     <div class="rule"></div>

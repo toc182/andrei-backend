@@ -111,11 +111,22 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
 - pdfGenerator.ts — generateSolicitudPDF() via Puppeteer + templates/
 - auditLog.ts — registrarAudit() — call on every create/edit/delete/approve/pay
 - scheduler.ts — cron: Mon-Fri 3:30pm, Sat 11:30am Panama time
-- whatsapp/ — cliente.ts (send + media download via Meta Cloud API),
-  firma.ts (X-Hub-Signature-256), entrantes.ts (store every message, copy media
-  to R2), numero.ts (phone numbers are stored digits-only with country code,
-  exactly as Meta sends them). Keys are optional: without them WhatsApp simply
-  does not exist for this server.
+- whatsapp/ — the daily-report assistant on WhatsApp. cliente.ts (send text,
+  buttons and documents; download media), firma.ts (X-Hub-Signature-256),
+  entrantes.ts (store every message in and out, copy media to R2),
+  numero.ts (phone numbers are stored digits-only with country code, exactly as
+  Meta sends them), conversacion.ts (one live conversation per phone, dies after
+  12 h of silence), datosReporte.ts (the ONLY list of report sections the
+  assistant knows — add a field to the daily report, add a line here),
+  herramientas.ts (everything the model can actually do; validates against the
+  project's lists and the person's permissions), asistente.ts (instructions +
+  tool loop, ANTHROPIC_MODELO_WHATSAPP), trabajador.ts (answers a few seconds
+  after the person stops writing, never per message), borrador.ts (builds the
+  draft with the SAME function the screen uses, its PDF with the BORRADOR stamp,
+  and the send).
+  Keys are optional: without them WhatsApp simply does not exist for this
+  server. Nothing is ever sent without the person having seen the draft first —
+  that rule lives in code (herramientas.ts), not in the model's instructions.
 
 ## Critical rules
 

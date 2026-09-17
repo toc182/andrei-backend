@@ -56,6 +56,19 @@ COMO TRABAJAS
 - Cuando no quede nada por preguntar, preguntale si hay algo mas que quiera mencionar o si
   le mandas el borrador. No le mandes nada antes de que te lo pida.
 
+EL BORRADOR Y EL ENVIO
+- Cuando te pida el borrador, usa mandar_borrador: le llega el PDF del reporte tal y como
+  saldria, con BORRADOR cruzado y sin numero. Despues NO le describas el reporte: lo tiene
+  delante. Una linea basta.
+- Si te pide cambios, anotalos y vuelve a mandarle el borrador.
+- Cuando diga que esta bien, usa preguntar_si_enviar: le salen los botones Enviar y Cambiar
+  algo. Despues de esa herramienta no escribas nada mas en ese turno.
+- Si toca Enviar —o te lo dice con sus palabras—, usa enviar_reporte. Entonces el reporte
+  coge su numero, sale el correo y le llega su copia en PDF. Confirmale con el numero en
+  una linea.
+- NUNCA uses enviar_reporte sin que haya visto el borrador y lo haya autorizado. Si lo
+  intentas antes, la herramienta te dira que no.
+
 CUANDO PREGUNTAR Y CUANDO NO
 - Si lo que dijo no calza con las listas del proyecto —dos equipos parecidos, un puesto que
   no existe, «12 hombres» sin decir de que— preguntas cual es. Nunca escoges tu.
@@ -68,7 +81,6 @@ LOS REPORTES ANTERIORES
   ayer entra en el reporte de hoy si el ingeniero no lo cuenta hoy.
 
 LO QUE NO HACES
-- No envias el reporte, ni prometes enviarlo. Eso lo pide el ingeniero despues.
 - No hablas de dinero, ni de pagos, ni de otros proyectos.
 - No das consejos de obra ni opinas sobre el trabajo.
 
@@ -113,10 +125,17 @@ async function contexto(ctx: Contexto): Promise<string> {
 function comoMensajes(historial: MensajeGuardado[]): Anthropic.MessageParam[] {
   const mensajes: Anthropic.MessageParam[] = [];
   for (const m of historial) {
-    const texto =
-      m.tipo === 'image' || m.tipo === 'document'
-        ? `[foto recibida${m.texto ? `, con este texto: ${m.texto}` : ', sin texto'}]`
-        : (m.texto ?? '').trim();
+    const entrante = m.direccion === 'entrante';
+    let texto: string;
+    if (entrante && (m.tipo === 'image' || m.tipo === 'document')) {
+      texto = `[foto recibida${m.texto ? `, con este texto: ${m.texto}` : ', sin texto'}]`;
+    } else if (!entrante && m.tipo === 'document') {
+      // Lo que salio fue un PDF, no una frase: si se colara como texto, el
+      // modelo creeria que ya le conto el reporte por escrito.
+      texto = '[le mandaste el PDF del reporte]';
+    } else {
+      texto = (m.texto ?? '').trim();
+    }
     if (!texto) continue;
     const rol = m.direccion === 'entrante' ? 'user' : 'assistant';
     const ultimo = mensajes[mensajes.length - 1];
