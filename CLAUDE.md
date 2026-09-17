@@ -111,10 +111,19 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
 - pdfGenerator.ts — generateSolicitudPDF() via Puppeteer + templates/
 - auditLog.ts — registrarAudit() — call on every create/edit/delete/approve/pay
 - scheduler.ts — cron: Mon-Fri 3:30pm, Sat 11:30am Panama time
+- whatsapp/ — cliente.ts (send + media download via Meta Cloud API),
+  firma.ts (X-Hub-Signature-256), entrantes.ts (store every message, copy media
+  to R2), numero.ts (phone numbers are stored digits-only with country code,
+  exactly as Meta sends them). Keys are optional: without them WhatsApp simply
+  does not exist for this server.
 
 ## Critical rules
 
-- NEVER skip authenticateToken on any route
+- NEVER skip authenticateToken on any route. The one exception is
+  `/api/whatsapp/webhook`: the caller is Meta, which has no session. It is
+  guarded by Meta's signature instead, which is why that router is mounted with
+  `express.raw` BEFORE the global `express.json` — re-serializing the body
+  changes the bytes and the signature stops matching.
 - NEVER use string concatenation in SQL queries
 - NEVER assume table structure — verify with MCP postgres before writing queries
 - ALWAYS call registrarAudit() on create, edit, delete, approve, pay operations

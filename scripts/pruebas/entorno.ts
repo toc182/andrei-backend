@@ -76,16 +76,79 @@ const puertoLibre = (): Promise<number> =>
 const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Levanta el Meta de mentira en su propio proceso y espera a que conteste.
+ *
+ * En proceso aparte a propósito: este corredor lanza cada prueba con spawnSync
+ * y se queda bloqueado mientras corre, así que un servidor suyo no podría
+ * contestarle ni a la prueba ni al servidor de pruebas.
+ */
+async function lanzarMetaFalso(): Promise<{ url: string; cerrar: () => void }> {
+  const puerto = await puertoLibre();
+  const url = `http://127.0.0.1:${puerto}`;
+  const proceso = spawn(
+    process.execPath,
+    ['--import', 'tsx', path.join('scripts', 'pruebas', 'metaFalsoProceso.ts'), String(puerto)],
+    { cwd: RAIZ, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  const hasta = Date.now() + 30_000;
+  for (;;) {
+    if (proceso.exitCode !== null) throw new Error('el Meta de mentira se cayó al arrancar');
+    try {
+      const r = await fetch(`${url}/_prueba/enviados`);
+      if (r.ok) break;
+    } catch {
+      // todavía no escucha
+    }
+    if (Date.now() > hasta) {
+      proceso.kill();
+      throw new Error('el Meta de mentira no respondió en 30 s');
+    }
+    await esperar(150);
+  }
+  return { url, cerrar: () => proceso.kill() };
+}
+
+/**
  * El entorno de las pruebas no hereda lo que pueda hacer daño:
  * - DATABASE_URL apuntaría a producción y se impondría sobre DB_NAME;
- * - RESEND_API_KEY mandaría correos de verdad desde una prueba.
+ * - RESEND_API_KEY mandaría correos de verdad desde una prueba;
+ * - WHATSAPP_TOKEN le escribiría por WhatsApp a gente de verdad. La prueba de
+ *   WhatsApp levanta su propio Meta de mentira y pone las suyas.
  */
 function entornoHijo(base: string, puerto: number): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, DB_NAME: base, PORT: String(puerto) };
   delete env.DATABASE_URL;
   delete env.RESEND_API_KEY;
+  delete env.WHATSAPP_TOKEN;
+  delete env.WHATSAPP_PHONE_NUMBER_ID;
+  delete env.WHATSAPP_APP_SECRET;
+  delete env.WHATSAPP_VERIFY_TOKEN;
+  delete env.WHATSAPP_API_URL;
   return env;
 }
+
+/**
+ * Las llaves de WhatsApp de una prueba: todas de mentira y apuntando al Meta de
+ * mentira. Son fijas a propósito, para que la prueba pueda firmar sus entregas
+ * con el mismo secreto que va a comprobar el servidor.
+ */
+function entornoWhatsapp(urlMeta: string): NodeJS.ProcessEnv {
+  return {
+    WHATSAPP_API_URL: urlMeta,
+    WHATSAPP_TOKEN: SECRETOS_PRUEBA.token,
+    WHATSAPP_PHONE_NUMBER_ID: SECRETOS_PRUEBA.numeroId,
+    WHATSAPP_APP_SECRET: SECRETOS_PRUEBA.appSecret,
+    WHATSAPP_VERIFY_TOKEN: SECRETOS_PRUEBA.verifyToken,
+  };
+}
+
+/** Lo que usan el servidor de pruebas y la prueba de WhatsApp. No son secretos. */
+export const SECRETOS_PRUEBA = {
+  token: 'token-de-mentira',
+  numeroId: '100000000000001',
+  appSecret: 'secreto-de-mentira',
+  verifyToken: 'palabra-de-mentira',
+};
 
 async function crearBase(base: string, plantilla?: string): Promise<void> {
   const admin = conexionAdmin();
@@ -266,7 +329,9 @@ export async function limpiarAlmacen(): Promise<number> {
     },
   });
   let borrados = 0;
-  for (const prefijo of PROYECTOS_SEMILLA) {
+  // Los proyectos de la semilla, y además lo que entra por WhatsApp, que no
+  // vive bajo ningún proyecto porque al llegar todavía no se sabe de cuál es.
+  for (const prefijo of [...PROYECTOS_SEMILLA, 'whatsapp']) {
     let token: string | undefined;
     do {
       const r = await s3.send(
@@ -319,7 +384,12 @@ export async function barrer(): Promise<{ servidores: number[]; bases: string[] 
 export async function crearEntorno(plantilla?: string): Promise<Entorno> {
   const base = `${PREFIJO_BASE}${process.pid}_${Date.now()}`;
   const puerto = await puertoLibre();
-  const env = entornoHijo(base, puerto);
+
+  // El Meta de mentira se levanta ANTES que el servidor: su dirección es una
+  // variable de entorno del servidor, así que tiene que existir ya cuando el
+  // servidor arranca.
+  const meta = await lanzarMetaFalso();
+  const env = { ...entornoHijo(base, puerto), ...entornoWhatsapp(meta.url) };
 
   await crearBase(base, plantilla);
   let servidor: { proceso: ChildProcess; registro: () => string } | null = null;
@@ -331,6 +401,7 @@ export async function crearEntorno(plantilla?: string): Promise<Entorno> {
     servidor = await arrancarServidor(env, puerto);
   } catch (e) {
     servidor?.proceso.kill();
+    meta.cerrar();
     await tirarBase(base).catch(() => undefined);
     throw e;
   }
@@ -339,13 +410,14 @@ export async function crearEntorno(plantilla?: string): Promise<Entorno> {
   return {
     base,
     api,
-    env: { ...env, PRUEBAS_API: api },
+    env: { ...env, PRUEBAS_API: api, PRUEBAS_META: meta.url },
     registro: servidor.registro,
     cerrar: async () => {
       servidor.proceso.kill();
       if (servidor.proceso.pid) olvidarServidor(servidor.proceso.pid);
       // Esperar a que suelte la base; si no, el DROP se queda esperando.
       for (let i = 0; i < 40 && servidor.proceso.exitCode === null; i += 1) await esperar(100);
+      meta.cerrar();
       await tirarBase(base);
     },
   };

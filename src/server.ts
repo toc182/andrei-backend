@@ -72,6 +72,7 @@ import cotizacionesRoutes from './routes/cotizaciones.js';
 import cronogramasRoutes from './routes/cronogramas.js';
 import desglosesRoutes from './routes/desgloses.js';
 import presupuestosRoutes from './routes/presupuestos.js';
+import whatsappRoutes from './routes/whatsapp.js';
 import { startScheduler } from './cron/scheduler.js';
 
 const app = express();
@@ -94,6 +95,16 @@ app.use(
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   }),
+);
+
+// WhatsApp va ANTES del express.json general y con el cuerpo en crudo: su
+// firma se calcula sobre los bytes exactos que mando Meta, y volver a armar el
+// JSON cambiaria un espacio y ya no cuadraria. Meta no manda entregas de mas de
+// 3 MB.
+app.use(
+  '/api/whatsapp',
+  express.raw({ type: 'application/json', limit: '5mb' }),
+  whatsappRoutes,
 );
 
 app.use(express.json({ limit: '10mb' }));

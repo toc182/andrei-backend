@@ -5,6 +5,7 @@ import { query } from '../database/config.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
+import { normalizarWhatsapp } from '../services/whatsapp/numero.js';
 import type { UserRole, UserType } from '../types/auth.js';
 
 const router = Router();
@@ -16,9 +17,14 @@ interface UserRow {
   rol: UserRole;
   tipo_usuario: UserType;
   activo: boolean;
+  whatsapp?: string | null;
   created_at: Date;
   updated_at: Date;
 }
+
+/** Las columnas que devuelve cualquier respuesta de usuarios. */
+const CAMPOS =
+  'id, nombre, email, rol, tipo_usuario, activo, whatsapp, created_at, updated_at';
 
 interface CreateUserBody {
   nombre: string;
@@ -32,6 +38,8 @@ interface UpdateUserBody {
   nombre?: string;
   email?: string;
   rol?: UserRole;
+  /** Vacio o nulo borra el numero: esa persona deja de poder usar el WhatsApp. */
+  whatsapp?: string | null;
 }
 
 interface SeleccionableRow {
@@ -77,8 +85,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const tipo = req.query.tipo as string | undefined;
 
-    let sql =
-      'SELECT id, nombre, email, rol, tipo_usuario, activo, created_at, updated_at FROM users';
+    let sql = `SELECT ${CAMPOS} FROM users`;
     const params: string[] = [];
 
     if (tipo === 'interno' || tipo === 'externo') {
@@ -242,7 +249,19 @@ router.put(
       }
 
       const { id } = req.params;
-      const { nombre, email, rol } = req.body;
+      const { nombre, email, rol, whatsapp } = req.body;
+
+      // El numero se guarda como lo manda Meta o no se guarda: un «6619-9092»
+      // en la ficha no coincidiria nunca con lo que llega del telefono.
+      let whatsappGuardar: string | null = null;
+      if (whatsapp !== undefined) {
+        const normalizado = normalizarWhatsapp(whatsapp);
+        if (!normalizado.ok) {
+          res.status(400).json({ success: false, message: normalizado.motivo });
+          return;
+        }
+        whatsappGuardar = normalizado.numero;
+      }
 
       // Verificar que el usuario existe
       const existing = await query<UserRow>(
@@ -299,6 +318,23 @@ router.put(
         }
       }
 
+      // Dos personas con el mismo WhatsApp dejarian al sistema sin saber de
+      // quien es cada reporte. Se avisa con nombre y apellido en vez de dejar
+      // que reviente el índice único con un error de base de datos.
+      if (whatsappGuardar !== null) {
+        const enUso = await query<{ nombre: string }>(
+          'SELECT nombre FROM users WHERE whatsapp = $1 AND id != $2',
+          [whatsappGuardar, id],
+        );
+        if (enUso.rows.length > 0) {
+          res.status(400).json({
+            success: false,
+            message: `Ese WhatsApp ya es el de ${enUso.rows[0].nombre}`,
+          });
+          return;
+        }
+      }
+
       // Construir query dinámico
       const fields: string[] = [];
       const values: unknown[] = [];
@@ -316,6 +352,10 @@ router.put(
         fields.push(`rol = $${paramIndex++}`);
         values.push(rol);
       }
+      if (whatsapp !== undefined) {
+        fields.push(`whatsapp = $${paramIndex++}`);
+        values.push(whatsappGuardar);
+      }
 
       if (fields.length === 0) {
         res.status(400).json({
@@ -329,14 +369,14 @@ router.put(
       values.push(id);
 
       const result = await query<UserRow>(
-        `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramIndex} RETURNING id, nombre, email, rol, tipo_usuario, activo, created_at, updated_at`,
+        `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramIndex} RETURNING ${CAMPOS}`,
         values,
       );
 
       await registrarAudit(req.user!.id, 'editar', 'usuario', parseInt(id), {
         nombre: result.rows[0].nombre,
         campos_modificados: Object.keys(req.body).filter((k) =>
-          ['nombre', 'email', 'rol'].includes(k),
+          ['nombre', 'email', 'rol', 'whatsapp'].includes(k),
         ),
       });
 
