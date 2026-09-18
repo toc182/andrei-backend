@@ -19,6 +19,7 @@ import {
   type DatosReporte,
   type ListasProyecto,
 } from './datosReporte.js';
+import { mensajeSemanaCerrada, semanaCerrada } from '../semanaCerrada.js';
 import { cerrarConversacion, guardarConversacion, type Conversacion } from './conversacion.js';
 import { responderBotones, responderDocumento } from './entrantes.js';
 import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal } from './borrador.js';
@@ -253,9 +254,29 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
 /** El estado que se le devuelve al modelo despues de cada herramienta. */
 async function estado(ctx: Contexto, listas: ListasProyecto | null): Promise<unknown> {
   const datos = ctx.conversacion.datos;
+
+  // Una semana que ya tiene su reporte semanal enviado no admite diarios. El
+  // modelo tiene que saberlo AQUI y no cuando intente armar el borrador: la
+  // primera vez que paso de verdad (2026-09-18) se puso a ofrecer otras fechas
+  // —de la misma semana— que tampoco se podian, y se contradijo a si mismo.
+  let cerrada: string | null = null;
+  if (ctx.conversacion.proyectoId !== null) {
+    const semana = await semanaCerrada(
+      ctx.conversacion.proyectoId,
+      datos.fecha ?? hoyEnPanama(),
+    );
+    if (semana) {
+      cerrada =
+        mensajeSemanaCerrada(semana, 'ese día ya no admite reporte diario') +
+        ' Las demás fechas de esa misma semana tampoco: no ofrezcas otra fecha, dile que ' +
+        'esa semana ya se cerró y que lo hable con la oficina.';
+    }
+  }
+
   return {
     proyecto_id: ctx.conversacion.proyectoId,
     fecha_de_hoy: hoyEnPanama(),
+    ...(cerrada ? { no_se_puede_reportar_esa_fecha: cerrada } : {}),
     anotado: listas ? resumen(datos, listas, ctx.fotos) : null,
     datos,
     fotos: ctx.fotos,
