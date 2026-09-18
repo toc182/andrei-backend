@@ -21,8 +21,15 @@ import type { MensajeGuardado } from './conversacion.js';
 /** Cuantas vueltas de herramientas se le permiten a un turno. */
 const MAX_VUELTAS = 8;
 
-/** El modelo. Se cambia sin tocar codigo, con ANTHROPIC_MODELO_WHATSAPP. */
-const MODELO = process.env.ANTHROPIC_MODELO_WHATSAPP ?? 'claude-opus-5';
+/** El modelo. Se cambia sin tocar codigo, con ANTHROPIC_MODELO_WHATSAPP.
+ *
+ *  Sonnet, decidido por Ivan el 2026-09-17 despues de medirlo: con dos reportes
+ *  DE VERDAD (Playa Blanca y Santa Isabel, ensayo con scripts/whatsapp-ensayo.ts)
+ *  hizo el mismo trabajo que Opus —los puestos bien, la entrega con su numero de
+ *  serie, el area reconocida— y cuesta unas 2,5 veces menos: ~13 centavos por
+ *  reporte en vez de ~35. Son dos reportes, no un estudio: si en la prueba con
+ *  ingenieros de verdad se queda corto, se cambia la variable y ya. */
+const MODELO = process.env.ANTHROPIC_MODELO_WHATSAPP ?? 'claude-sonnet-5';
 
 export interface RespuestaAsistente {
   /** Lo que hay que mandarle por WhatsApp. */
