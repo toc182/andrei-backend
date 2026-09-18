@@ -79,6 +79,8 @@ export async function arrancarMetaFalso(puertoPedido?: number): Promise<MetaFals
   const archivos = new Map<string, { datos: Buffer; tipoMime: string; nombre?: string }>();
   /** Las respuestas del modelo que la prueba dejó preparadas, en orden. */
   const guion: unknown[] = [];
+  /** Los avisos de «leido y escribiendo…», que no son mensajes. */
+  const escribiendo: string[] = [];
   /** Lo que se le pidió al modelo, para que la prueba pueda mirarlo. */
   const peticionesIa: unknown[] = [];
 
@@ -101,6 +103,9 @@ export async function arrancarMetaFalso(puertoPedido?: number): Promise<MetaFals
         const cuerpo: unknown = JSON.parse((await leerCuerpo(req)).toString('utf8'));
         for (const r of Array.isArray(cuerpo) ? cuerpo : [cuerpo]) guion.push(r);
         return json(200, { guionizadas: guion.length });
+      }
+      if (ruta === '/_prueba/escribiendo' && req.method === 'GET') {
+        return json(200, escribiendo);
       }
       if (ruta === '/_prueba/ia/peticiones' && req.method === 'GET') {
         return json(200, peticionesIa);
@@ -179,6 +184,12 @@ export async function arrancarMetaFalso(puertoPedido?: number): Promise<MetaFals
       if (mensajes && req.method === 'POST') {
         if (!conToken) return json(401, { error: { message: 'falta el token' } });
         const cuerpo: unknown = JSON.parse((await leerCuerpo(req)).toString('utf8'));
+        // Marcar como leído y enseñar «escribiendo…» entra por la misma puerta
+        // que un mensaje, pero no es un mensaje: ni cuenta ni cuesta.
+        if (esObjeto(cuerpo) && cuerpo.status === 'read') {
+          escribiendo.push(typeof cuerpo.message_id === 'string' ? cuerpo.message_id : '');
+          return json(200, { success: true });
+        }
         const waId = `wamid.prueba.${enviados.length + 1}`;
         const c = esObjeto(cuerpo) ? cuerpo : {};
         // El texto está en un sitio distinto según el tipo de mensaje; la

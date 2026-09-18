@@ -163,6 +163,32 @@ export async function enviarDocumento(
   return cuerpo?.messages?.[0]?.id ?? null;
 }
 
+
+/**
+ * Marca el mensaje como leido y enseña «escribiendo…» en el telefono.
+ *
+ * Es lo que le dice a la persona que se le va a contestar. Sin esto, entre que
+ * escribe y le llega la respuesta hay un silencio en el que no sabe si el
+ * asistente la oyo —se lo dijo Ivan la primera vez que lo probo.
+ *
+ * Dura 25 segundos o hasta que sale la respuesta, lo que pase antes. Meta no
+ * lo cobra: no es un mensaje.
+ */
+export async function marcarLeidoYEscribiendo(waMessageId: string): Promise<void> {
+  if (!estaConfigurado()) return;
+  const res = await fetch(`${api()}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: waMessageId,
+      typing_indicator: { type: 'text' },
+    }),
+  });
+  if (!res.ok) throw new Error(await leerError(res));
+}
+
 /** Lo que Meta cuenta de un archivo antes de dejarlo bajar. */
 interface FichaMedia {
   url?: string;

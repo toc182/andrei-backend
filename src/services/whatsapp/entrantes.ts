@@ -14,6 +14,7 @@ import {
   enviarDocumento,
   enviarTexto,
   estaConfigurado,
+  marcarLeidoYEscribiendo,
 } from './cliente.js';
 
 /** Un mensaje ya leido del sobre de Meta, sin el archivo todavia. */
@@ -324,6 +325,14 @@ export async function procesarPayload(cuerpo: unknown): Promise<void> {
     const fila = await guardarEntrante(m, userId);
     // Repetido: ya se hizo todo la primera vez.
     if (!fila) continue;
+
+    // Que vea enseguida que se le oyo: doble check azul y «escribiendo…».
+    // Va antes de bajar la foto, que es lo que mas tarda.
+    if (userId !== null) {
+      await marcarLeidoYEscribiendo(m.waId).catch((e: Error) =>
+        console.error('[whatsapp] no se pudo marcar como leido:', e.message),
+      );
+    }
 
     if (m.mediaId) await traerMedia(fila.id, m.mediaId);
 

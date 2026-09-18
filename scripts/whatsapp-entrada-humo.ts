@@ -193,6 +193,12 @@ const main = async () => {
   );
   exigir((await enviados()).length === 0, 'a alguien registrado todavia no se le contesta nada');
 
+  const avisos = (await (await fetch(`${META}/_prueba/escribiendo`)).json()) as string[];
+  exigir(
+    avisos.includes(WA_TEXTO),
+    'al recibirlo se le marca como leido y se le ensena «escribiendo...»',
+  );
+
   // ── el repetido de Meta ─────────────────────────────────────────────────
   await entregar(
     sobreMensaje({
