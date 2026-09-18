@@ -1,20 +1,24 @@
 # Andrei Backend
 
 Express + TypeScript API. Port 5000 (dev), 8080 (Railway).
-33 route files, PostgreSQL via pg pool, auto-migrations on server start.
+36 route files, PostgreSQL via pg pool, auto-migrations on server start.
 
 ## Structure
 
 src/
-├── routes/ # 33 route files — one per domain
+├── routes/ # 36 route files — one per domain
 ├── middleware/ # auth.ts (JWT + permissions), asyncHandler.ts
-├── services/ # storage.ts, emailService.ts, pdfGenerator.ts, auditLog.ts, dailyNotification.ts, reportePdf.ts, reporteNumero.ts, reporteCambios.ts, cronogramaEngine.ts, partidasProyecto.ts, constanciaPdf.ts, asistentePagos/
+├── services/ # storage.ts, emailService.ts, pdfGenerator.ts, auditLog.ts, dailyNotification.ts, cronogramaEngine.ts, partidasProyecto.ts, constanciaPdf.ts, asistentePagos/
+│                # reporte diario: reportePdf.ts, reporteNumero.ts, reporteCambios.ts, reporteEnvio.ts
+│                # reporte semanal: reporteSemana.ts, semanaCerrada.ts, reporteSemanalDatos.ts,
+│                #   reporteSemanalPdf.ts, reporteSemanalEnvio.ts, reporteSemanalIA.ts,
+│                #   reporteSemanalCambios.ts; reportePdfComun.ts es lo que los dos papeles comparten
 ├── database/ # config.ts (pool), migrate.ts (migrations/ here is EMPTY)
 ├── types/ # api.ts, auth.ts, database.ts, index.ts, models.ts
 ├── cron/ # scheduler.ts (daily email notifications)
 └── utils/ # fileEncoding.ts
 
-database/migrations/ # the REAL migrations — 158 .sql files, at the repo root, NOT under src/
+database/migrations/ # the REAL migrations — 174 .sql files, at the repo root, NOT under src/
 scripts/ # *-humo.ts smoke tests (npm run pruebas) + *.spec.ts pure-calculation ones (npx tsx)
 scripts/pruebas/ # the throwaway test database: entorno.ts, semilla.sql, contexto.ts
 
@@ -139,6 +143,16 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
 - NEVER assume table structure — verify with MCP postgres before writing queries
 - ALWAYS call registrarAudit() on create, edit, delete, approve, pay operations
 - NEVER delete migrations — add new ones only
+- La SEMANA CERRADA: cuando el reporte semanal de una semana se envía, sus siete días
+  quedan cerrados para los reportes diarios. No se corrigen, no se eliminan, no admiten
+  ni pierden fotos, y no se puede crear uno nuevo con fecha de esos días
+  (services/semanaCerrada.ts). Decisión de Ivan del 2026-09-17: el semanal se guarda
+  como se envió, así que dejar los diarios abiertos solo conseguiría que el papel y la
+  pantalla dijeran cosas distintas del mismo día. Lo que aparezca después se anota en
+  un reporte diario posterior.
+- Lo que escribe la IA del reporte semanal es TEXTO y nada más —el resumen y los
+  problemas—. Todo número sale de la base (services/reporteSemanalDatos.ts): un modelo
+  puede equivocarse sumando y nadie lo notaría hasta que el papel ya salió por correo.
 - On PUT/PATCH, build the SET clause only from the fields present in the request. A fixed
   column list can't tell "not touching this" from "blank it", and silently wipes data.
 - Upload routes must translate multer rejections (10 MB limit, mime type) into real
