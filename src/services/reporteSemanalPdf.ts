@@ -68,7 +68,7 @@ export interface ReporteSemanalPdfInput {
   datos: DatosSemana;
   metas: MetaPdf[];
   metasPlan: { texto: string; cantidad: number | null; unidad: string | null }[];
-  problemas: { fecha: string | null; problema: string; accion: string | null }[];
+  problemas: { fecha: string | null; problema: string; accion: string | null; pendiente: boolean }[];
   decisiones: string[];
   fotos: (FotoDelReporte & { fecha: string })[];
   /** fecha y hora ya escritas en la hora de Panamá. */
@@ -259,18 +259,24 @@ export function armarHtmlSemanal(d: ReporteSemanalPdfInput, fotos: FotoIncrustad
     : '';
 
   // ---- problemas ----
-  const bloqueProblemas = d.problemas.length
+  // Lo que sigue pendiente va primero y marcado: es lo único de esta sección
+  // que hay que seguir mirando. Lo demás es el comentario de ese día.
+  const problemasOrdenados = [
+    ...d.problemas.filter((p) => p.pendiente),
+    ...d.problemas.filter((p) => !p.pendiente),
+  ];
+  const bloqueProblemas = problemasOrdenados.length
     ? `<table class="t dos">
          <thead><tr><th class="dia">Día</th><th class="mitad">Problema</th><th>Acción a tomar</th></tr></thead>
-         <tbody>${d.problemas
-           .map(
-             (p) => `<tr>
+         <tbody>${problemasOrdenados
+      .map(
+        (p) => `<tr${p.pendiente ? ' class="pendiente"' : ''}>
                <td class="dia">${esc(p.fecha ? diaYMes(p.fecha) : 'La semana')}</td>
-               <td>${esc(p.problema)}</td>
+               <td>${p.pendiente ? '<span class="marca">Pendiente</span>' : ''}${esc(p.problema)}</td>
                <td>${p.accion ? esc(p.accion) : '<span class="sin">Sin acción anotada</span>'}</td>
              </tr>`,
-           )
-           .join('')}</tbody>
+      )
+      .join('')}</tbody>
        </table>`
     : '';
 
@@ -397,6 +403,11 @@ export function armarHtmlSemanal(d: ReporteSemanalPdfInput, fotos: FotoIncrustad
     .t.dos td + td, .t.dos th + th { padding-left:16px; }
     .t.dos .e, .t.dos td.e { width:30px; padding-left:12px; }
     .t.dos td.e + td { padding-left:8px; }
+    /* Lo que sigue pendiente: fondo tenue y la palabra delante. */
+    .t tr.pendiente td { background:#fdf6ea; }
+    .marca { display:inline-block; font-size:9.5px; line-height:14px; font-weight:700; letter-spacing:.04em;
+             text-transform:uppercase; color:#fff; background:${WARN}; border-radius:2px;
+             padding:0 6px; margin-right:6px; vertical-align:1px; }
     .chip { display:inline-block; font-size:9.5px; line-height:14px; padding:0 6px; border-radius:2px;
             border:1px solid #cbd5e0; color:${GRAY}; margin-left:6px; vertical-align:1px; }
     /* El estado de una meta es SOLO el color del punto: sin palabra al lado.

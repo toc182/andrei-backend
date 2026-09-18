@@ -107,7 +107,7 @@ const main = async () => {
       { texto: 'Terminar la tuberia sanitaria' },
       { texto: '   ' },
     ],
-    problemas: [{ fecha: '2026-10-06', problema: 'Lluvia por la tarde', accion: 'Se cubrio el acero' }],
+    problemas: [{ fecha: '2026-10-06', problema: 'Lluvia por la tarde', accion: 'Se cubrio el acero', pendiente: false }],
     decisiones: [{ texto: 'Aprobar la madera adicional' }],
   });
   c(guardado.estado === 200, `guardar da 200 (dio ${guardado.estado})`);
@@ -186,6 +186,21 @@ const main = async () => {
   const otraVez = await pedir('GET', `/proyecto-reportes-semanales/${P}/${id2}`);
   c(otraVez.cuerpo.data.metas.length === 3, 'guardar dos veces no duplica la meta fuera del plan');
 
+  // ---- «sigue pendiente»: lo que hay que seguir sale primero ----
+  //
+  // No todo atraso se resuelve: la lluvia de un martes es el comentario de ese
+  // día y nada más. Solo lo que queda abierto se marca, y eso es lo que sube.
+  await pedir('PUT', `/proyecto-reportes-semanales/${P}/${id2}`, {
+    problemas: [
+      { fecha: '2026-10-13', problema: 'Lluvia por la tarde', accion: 'Se cubrio el acero', pendiente: false },
+      { fecha: '2026-10-14', problema: 'Falto material selecto', accion: null, pendiente: true },
+    ],
+  });
+  const conPendiente = await pedir('GET', `/proyecto-reportes-semanales/${P}/${id2}`);
+  const probs = conPendiente.cuerpo.data.problemas as { problema: string; pendiente: boolean }[];
+  c(probs[0]?.pendiente === true && probs[0]?.problema.includes('material'),
+    'lo que sigue pendiente sale primero');
+  c(probs[1]?.pendiente === false, 'y lo que fue solo el comentario del dia se queda como estaba');
   // ---- «Redactar con IA» solo escribe borradores y solo si hay de qué ----
   //
   // Sin llamar a la IA de verdad: los dos caminos que se comprueban cortan

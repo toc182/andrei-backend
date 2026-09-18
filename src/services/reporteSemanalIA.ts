@@ -50,7 +50,7 @@ interface DiaParaIA {
 
 export interface BorradorIA {
   resumen: string;
-  problemas: { fecha: string | null; problema: string }[];
+  problemas: { fecha: string | null; problema: string; pendiente: boolean }[];
   uso: { entrada: number; salida: number };
 }
 
@@ -65,6 +65,10 @@ QUÉ ESCRIBES
 2. problemas: lo que estorbó el trabajo esa semana, uno por línea, con el día en que pasó. Si algo
    duró varios días, es UN problema y la fecha es la del día en que empezó. Si un día no tuvo
    ningún problema, no inventes ninguno; una semana puede quedarse sin lista.
+   Cada problema lleva además «pendiente»: true SOLO si al cerrar la semana seguía sin resolverse
+   —el material que no llegó, el tramo que quedó sin hacer, el técnico que no vino—. Si un día
+   posterior dice que se resolvió, o si era algo que pasó y ya —una lluvia, una visita, un atraso
+   de una mañana—, va en false. En la duda, false: el ingeniero marca lo que falte.
 
 CÓMO ESCRIBES
 - Español de Panamá, de obra: llano, corto y concreto. Nada de «se procedió a» ni «cabe destacar».
@@ -107,8 +111,12 @@ const FORMATO = {
             type: 'string',
             description: 'Qué pasó, en una o dos frases.',
           },
+          pendiente: {
+            type: 'boolean',
+            description: 'true solo si al cerrar la semana seguía sin resolverse.',
+          },
         },
-        required: ['fecha', 'problema'],
+        required: ['fecha', 'problema', 'pendiente'],
         additionalProperties: false,
       },
     },
@@ -289,6 +297,7 @@ export async function redactarSemana(
       .map((p) => ({
         fecha: p.fecha && deLaSemana.has(p.fecha) ? p.fecha : null,
         problema: String(p.problema ?? '').trim(),
+        pendiente: p.pendiente === true,
       }))
       .filter((p) => p.problema !== ''),
     uso: {

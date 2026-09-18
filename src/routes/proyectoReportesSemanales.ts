@@ -94,7 +94,7 @@ interface SemanalBody {
   metas_evaluadas?: MetaBody[];
   /** Las metas nuevas del plan de la próxima semana. */
   metas_plan?: MetaBody[];
-  problemas?: { fecha?: string | null; problema?: string; accion?: string | null }[];
+  problemas?: { fecha?: string | null; problema?: string; accion?: string | null; pendiente?: boolean }[];
   decisiones?: { texto?: string }[];
   /** Los ids de las fotos elegidas, en el orden en que van. */
   fotos?: number[];
@@ -150,8 +150,8 @@ async function leerEstado(reporteId: number, consultar: Consultar): Promise<Esta
         WHERE reporte_plan_id = $1 ORDER BY orden, id`,
       [reporteId],
     ),
-    consultar<{ fecha: Date | null; problema: string; accion: string | null }>(
-      `SELECT fecha, problema, accion FROM proyecto_reporte_semanal_problemas
+    consultar<{ fecha: Date | null; problema: string; accion: string | null; pendiente: boolean }>(
+      `SELECT fecha, problema, accion, pendiente FROM proyecto_reporte_semanal_problemas
         WHERE reporte_id = $1 ORDER BY orden, id`,
       [reporteId],
     ),
@@ -185,7 +185,10 @@ async function leerEstado(reporteId: number, consultar: Consultar): Promise<Esta
       texto: m.texto, cantidad: num(m.cantidad), unidad: m.unidad,
     })),
     problemas: problemas.rows.map((p) => ({
-      fecha: p.fecha ? ymd(p.fecha) : null, problema: p.problema, accion: p.accion,
+      fecha: p.fecha ? ymd(p.fecha) : null,
+      problema: p.problema,
+      accion: p.accion,
+      pendiente: p.pendiente,
     })),
     decisiones: decisiones.rows.map((d) => d.texto),
     fotos: fotos.rows.map((f) => f.foto_id),
@@ -481,9 +484,10 @@ router.get(
     const [metas, problemas, decisiones, elegidas, datos] = await Promise.all([
       leerMetas(reporte.id),
       query(
-        `SELECT id, fecha, problema, accion, orden
+        // Lo pendiente primero: es lo único que hay que seguir mirando.
+        `SELECT id, fecha, problema, accion, pendiente, orden
            FROM proyecto_reporte_semanal_problemas
-          WHERE reporte_id = $1 ORDER BY orden, id`,
+          WHERE reporte_id = $1 ORDER BY pendiente DESC, orden, id`,
         [reporte.id],
       ),
       query(
@@ -705,9 +709,9 @@ router.put(
           if (!texto) continue;
           await client.query(
             `INSERT INTO proyecto_reporte_semanal_problemas
-               (reporte_id, fecha, problema, accion, orden)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [reporte.id, p.fecha || null, texto, textoONull(p.accion), orden],
+               (reporte_id, fecha, problema, accion, pendiente, orden)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [reporte.id, p.fecha || null, texto, textoONull(p.accion), p.pendiente === true, orden],
           );
           orden += 1;
         }
@@ -960,9 +964,9 @@ router.post(
     for (const [orden, p] of borrador.problemas.entries()) {
       await query(
         `INSERT INTO proyecto_reporte_semanal_problemas
-           (reporte_id, fecha, problema, accion, orden)
-         VALUES ($1, $2, $3, NULL, $4)`,
-        [reporte.id, p.fecha, p.problema, orden],
+           (reporte_id, fecha, problema, accion, pendiente, orden)
+         VALUES ($1, $2, $3, NULL, $4, $5)`,
+        [reporte.id, p.fecha, p.problema, p.pendiente, orden],
       );
     }
 

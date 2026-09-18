@@ -39,7 +39,7 @@ export interface EstadoSemanal {
   lo_que_se_espera: string | null;
   metas: MetaComparable[];
   metas_plan: { texto: string; cantidad: number | null; unidad: string | null }[];
-  problemas: { fecha: string | null; problema: string; accion: string | null }[];
+  problemas: { fecha: string | null; problema: string; accion: string | null; pendiente: boolean }[];
   decisiones: string[];
   /** Los ids de las fotos elegidas, en su orden. */
   fotos: number[];
@@ -74,11 +74,16 @@ function planComoTexto(m: { texto: string; cantidad: number | null; unidad: stri
   return `${texto(m.texto)}${cuanto}`;
 }
 
-/** Un problema, como se lee: «9 sept · la planta no despachó · pedir confirmación». */
-function problemaComoTexto(p: { fecha: string | null; problema: string; accion: string | null }): string {
+/** Un problema, como se lee: «9 sept · la planta no despachó · pendiente». */
+function problemaComoTexto(
+  p: { fecha: string | null; problema: string; accion: string | null; pendiente: boolean },
+): string {
   const dia = p.fecha ? `${p.fecha} · ` : '';
   const accion = texto(p.accion) ? ` · ${texto(p.accion)}` : '';
-  return `${dia}${texto(p.problema)}${accion}`;
+  // Marcar o desmarcar «sigue pendiente» es una corrección como cualquier otra:
+  // cambia lo que hay que seguir mirando.
+  const pendiente = p.pendiente ? ' · pendiente' : '';
+  return `${dia}${texto(p.problema)}${accion}${pendiente}`;
 }
 
 /**

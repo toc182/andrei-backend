@@ -54,7 +54,7 @@ const main = async () => {
     resumen: 'Se armo el acero de las columnas del nivel 4.',
     lo_que_se_espera: 'Colar las columnas.',
     metas_plan: [{ texto: 'Colar las columnas del nivel 4', cantidad: 9, unidad: 'm3' }],
-    problemas: [{ fecha: LUNES, problema: 'Falto madera', accion: null }],
+    problemas: [{ fecha: LUNES, problema: 'Falto madera', accion: null, pendiente: true }],
     decisiones: [{ texto: 'Aprobar la compra de madera' }],
   });
   await pedir('POST', `/proyecto-reportes-semanales/${P}/${id}/emitir`);
@@ -102,7 +102,7 @@ const main = async () => {
 
   // ---- una segunda correccion es otra linea ----
   await pedir('PUT', `/proyecto-reportes-semanales/${P}/${id}`, {
-    problemas: [{ fecha: LUNES, problema: 'Falto madera', accion: 'Se compro el martes' }],
+    problemas: [{ fecha: LUNES, problema: 'Falto madera', accion: 'Se compro el martes', pendiente: false }],
   });
   const dos = await correcciones();
   c(dos.length === 2, `otro guardado con cambios deja otra linea (van ${dos.length})`);

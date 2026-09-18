@@ -137,8 +137,8 @@ export async function buildSemanalPdfInput(
         WHERE reporte_plan_id = $1 ORDER BY orden, id`,
       [reporteId],
     ),
-    query<{ fecha: Date | null; problema: string; accion: string | null }>(
-      `SELECT fecha, problema, accion FROM proyecto_reporte_semanal_problemas
+    query<{ fecha: Date | null; problema: string; accion: string | null; pendiente: boolean }>(
+      `SELECT fecha, problema, accion, pendiente FROM proyecto_reporte_semanal_problemas
         WHERE reporte_id = $1 ORDER BY orden, id`,
       [reporteId],
     ),
@@ -207,7 +207,10 @@ export async function buildSemanalPdfInput(
       texto: m.texto, cantidad: numeroONull(m.cantidad), unidad: m.unidad,
     })),
     problemas: problemas.rows.map((p) => ({
-      fecha: p.fecha ? ymd(p.fecha) : null, problema: p.problema, accion: p.accion,
+      fecha: p.fecha ? ymd(p.fecha) : null,
+      problema: p.problema,
+      accion: p.accion,
+      pendiente: p.pendiente,
     })),
     decisiones: decisiones.rows.map((d) => d.texto),
     // La fecha y la hora, ya escritas en la de Panamá: el papel no puede
