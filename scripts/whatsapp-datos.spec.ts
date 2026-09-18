@@ -12,6 +12,7 @@ import {
   type DatosReporte,
   type ListasProyecto,
 } from '../src/services/whatsapp/datosReporte.js';
+import { comoMensajes } from '../src/services/whatsapp/asistente.js';
 
 let fallos = 0;
 const exigir = (bien: boolean, que: string): void => {
@@ -118,5 +119,63 @@ exigir(texto.includes('Torre A') && texto.includes('3 Albañil') && texto.includ
 exigir(!texto.includes('0 Ayudante'), 'y no nombra los puestos con cero personas');
 exigir(texto.includes('Fotos: 3'), 'y dice cuantas fotos hay');
 
-console.log(fallos === 0 ? '\nTodo bien' : `\n${fallos} fallo(s)`);
+
+// ── la conversacion como la ve el modelo ────────────────────────────────────
+// Lo que rompio la primera prueba de verdad (2026-09-18): Ivan escribio
+// mientras el asistente le contestaba lo anterior, la respuesta quedo despues
+// de su mensaje, y la API rechaza una conversacion que no termina en la
+// persona.
+const hist = (
+  xs: [dir: 'entrante' | 'saliente', texto: string, tipo?: string][],
+): { id: number; direccion: 'entrante' | 'saliente'; texto: string; tipo: string; r2Key: null }[] =>
+  xs.map(([direccion, texto, tipo], i) => ({
+    id: i + 1,
+    direccion,
+    texto,
+    tipo: tipo ?? 'text',
+    r2Key: null,
+  }));
+
+const normal = comoMensajes(hist([
+  ['entrante', 'hola'],
+  ['saliente', '¿qué se hizo hoy?'],
+  ['entrante', 'vaciamos la losa'],
+]));
+exigir(
+  normal.mensajes.length === 3 && normal.mensajes[2].role === 'user' && normal.colgando.length === 0,
+  'una conversacion normal pasa entera y acaba en la persona',
+);
+
+const cruzada = comoMensajes(hist([
+  ['entrante', 'hola'],
+  ['entrante', 'vaciamos la losa'],
+  ['saliente', '¿y el equipo?'],
+]));
+exigir(
+  cruzada.mensajes.at(-1)?.role === 'user',
+  'si la ultima es nuestra, la conversacion sigue acabando en la persona',
+);
+exigir(
+  cruzada.colgando.join('') === '¿y el equipo?',
+  'y lo que le mandamos sin contestar no se pierde: se cuenta aparte',
+);
+
+const fotos = comoMensajes(hist([
+  ['entrante', 'hola'],
+  ['entrante', '', 'image'],
+  ['entrante', 'la losa', 'image'],
+]));
+exigir(
+  typeof fotos.mensajes.at(-1)?.content === 'string' &&
+    String(fotos.mensajes.at(-1)?.content).includes('[foto recibida'),
+  'las fotos llegan como fotos, con o sin pie',
+);
+
+const soloNuestro = comoMensajes(hist([['saliente', 'hola, soy el asistente']]));
+exigir(
+  soloNuestro.mensajes.length === 0,
+  'si solo hay mensajes nuestros, no hay nada que contestar',
+);
+const cierre = fallos === 0 ? String.fromCharCode(10) + "Todo bien" : String.fromCharCode(10) + fallos + " fallo(s)";
+console.log(cierre);
 process.exit(fallos === 0 ? 0 : 1);

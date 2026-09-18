@@ -182,13 +182,21 @@ export async function historial(
     .map((m) => ({ id: m.id, direccion: m.direccion, texto: m.texto, tipo: m.tipo, r2Key: m.r2_key }));
 }
 
-/** Cuantas fotos lleva mandadas en esta conversacion. */
+/**
+ * Cuantas fotos lleva mandadas en esta conversacion.
+ *
+ * Se cuentan por el mensaje, no por el archivo ya copiado: la copia a R2 tarda
+ * un instante y ocurre aparte, asi que exigirla haria que una foto recien
+ * mandada no existiera todavia para el asistente —y le preguntaria a la persona
+ * por las fotos que acaba de mandar. Lo que si exige el archivo es el borrador,
+ * que solo pega las fotos que estan guardadas de verdad.
+ */
 export async function fotosDe(conversacionId: number): Promise<number> {
   const r = await query<{ n: string }>(
     `SELECT count(*)::text AS n
        FROM whatsapp_mensajes
       WHERE conversacion_id = $1 AND direccion = 'entrante'
-        AND r2_key IS NOT NULL AND tipo IN ('image', 'document')`,
+        AND tipo IN ('image', 'document')`,
     [conversacionId],
   );
   return Number(r.rows[0]?.n ?? 0);

@@ -128,8 +128,20 @@ async function contexto(ctx: Contexto): Promise<string> {
   return partes.join('\n\n');
 }
 
-/** Lo que se hablaron, como lo entiende el modelo. */
-function comoMensajes(historial: MensajeGuardado[]): Anthropic.MessageParam[] {
+/**
+ * Lo que se hablaron, como lo entiende el modelo.
+ *
+ * Devuelve tambien lo que quedo COLGANDO: si nuestra ultima respuesta salio
+ * despues del mensaje que estamos atendiendo —pasa cuando la persona escribe
+ * mientras el asistente esta contestando lo anterior—, la conversacion
+ * terminaria del lado del asistente, y la API lo rechaza: una conversacion
+ * tiene que acabar con la persona. Esas respuestas se sacan de la lista y se le
+ * cuentan aparte, en el contexto, para no perderlas.
+ */
+export function comoMensajes(historial: MensajeGuardado[]): {
+  mensajes: Anthropic.MessageParam[];
+  colgando: string[];
+} {
   const mensajes: Anthropic.MessageParam[] = [];
   for (const m of historial) {
     const entrante = m.direccion === 'entrante';
@@ -156,7 +168,14 @@ function comoMensajes(historial: MensajeGuardado[]): Anthropic.MessageParam[] {
   }
   // La conversacion tiene que empezar por la persona.
   while (mensajes.length > 0 && mensajes[0].role === 'assistant') mensajes.shift();
-  return mensajes;
+
+  // Y tiene que acabar con ella.
+  const colgando: string[] = [];
+  while (mensajes.length > 0 && mensajes[mensajes.length - 1].role === 'assistant') {
+    const suelto = mensajes.pop();
+    if (suelto && typeof suelto.content === 'string') colgando.unshift(suelto.content);
+  }
+  return { mensajes, colgando };
 }
 
 /**
@@ -173,13 +192,22 @@ export async function conversar(args: {
   const { ctx, historial } = args;
   const uso = { entrada: 0, salida: 0, cache: 0 };
 
+  const { mensajes, colgando } = comoMensajes(historial);
+  if (mensajes.length === 0) return { texto: '', uso };
+
   const system: Anthropic.TextBlockParam[] = [
     { type: 'text', text: INSTRUCCIONES, cache_control: { type: 'ephemeral' } },
-    { type: 'text', text: await contexto(ctx) },
+    {
+      type: 'text',
+      text:
+        (await contexto(ctx)) +
+        (colgando.length
+          ? '\n\nOJO: mientras contestabas lo anterior, la persona siguió escribiendo. ' +
+            'Esto ya se lo mandaste y todavía no te ha contestado, no lo repitas:\n' +
+            colgando.join('\n')
+          : ''),
+    },
   ];
-
-  const mensajes = comoMensajes(historial);
-  if (mensajes.length === 0) return { texto: '', uso };
 
   const cache: { listas: ListasProyecto | null } = { listas: null };
   let texto = '';
