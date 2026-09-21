@@ -166,6 +166,109 @@ router.get(
   }),
 );
 
+export type Agregado =
+  | { ok: true; fila: FilaLista }
+  | { ok: false; status: 400 | 404 | 409; message: string };
+
+/**
+ * Agrega un nombre a una de las listas del proyecto, o revive el que se había
+ * quitado.
+ *
+ * Es lo que hace el botón de agregar del formulario del reporte y lo que hace
+ * el asistente de WhatsApp cuando la persona nombra una máquina que no está:
+ * una sola manera de agregar, con sus reglas y su rastro. Quién puede hacerlo
+ * lo decide quien llama —la ruta con sus permisos, el asistente con los
+ * proyectos donde esa persona reporta—.
+ */
+export async function agregarALista(
+  proyectoId: number | string,
+  lista: string,
+  nombreCrudo: string,
+  empresaIdCrudo: number | null,
+  usuarioId: number,
+): Promise<Agregado> {
+  const conf = LISTAS[lista];
+  if (!conf) return { ok: false, status: 404, message: 'Lista desconocida' };
+
+  const nombre = nombreCrudo.trim();
+  if (!nombre) return { ok: false, status: 400, message: 'El nombre es obligatorio' };
+
+  const esPuesto = conf.tabla === 'proyecto_puestos';
+  const empresaId = esPuesto ? empresaIdCrudo : null;
+
+  // El bloque al que pertenece: para los puestos, la empresa (o el propio);
+  // para las demás listas, el proyecto entero.
+  const filtroBloque = esPuesto
+    ? 'AND COALESCE(empresa_id, 0) = COALESCE($3::int, 0)'
+    : '';
+  const params: unknown[] = esPuesto
+    ? [proyectoId, nombre, empresaId]
+    : [proyectoId, nombre];
+
+  const yaActiva = await query(
+    `SELECT 1 FROM ${conf.tabla}
+      WHERE proyecto_id = $1 AND lower(nombre) = lower($2) AND activo = true ${filtroBloque}`,
+    params,
+  );
+  if (yaActiva.rows.length > 0) {
+    return { ok: false, status: 409, message: `${conf.singular} "${nombre}" ya está en la lista` };
+  }
+
+  // Si alguna vez existió y se quitó, se revive. Crear una fila nueva dejaría
+  // dos con el mismo nombre y los reportes viejos apuntando a la otra.
+  const dormida = await query<{ id: number }>(
+    `SELECT id FROM ${conf.tabla}
+      WHERE proyecto_id = $1 AND lower(nombre) = lower($2) AND activo = false ${filtroBloque}
+      ORDER BY id LIMIT 1`,
+    params,
+  );
+
+  let fila: FilaLista;
+  if (dormida.rows.length > 0) {
+    const r = await query<FilaLista>(
+      `UPDATE ${conf.tabla} SET activo = true WHERE id = $1 RETURNING *`,
+      [dormida.rows[0].id],
+    );
+    fila = r.rows[0];
+    await registrarAudit(usuarioId, 'crear', conf.entidad, fila.id, {
+      proyecto_id: Number(proyectoId), nombre, reactivada: true,
+    });
+  } else {
+    const orden = await query<{ next: number }>(
+      `SELECT COALESCE(MAX(orden), 0) + 1 AS next FROM ${conf.tabla} WHERE proyecto_id = $1`,
+      [proyectoId],
+    );
+    const r = esPuesto
+      ? await query<FilaLista>(
+        `INSERT INTO proyecto_puestos (proyecto_id, empresa_id, nombre, orden, fijo, creado_por)
+         VALUES ($1, $2, $3, $4, FALSE, $5) RETURNING *`,
+        [proyectoId, empresaId, nombre, orden.rows[0].next, usuarioId],
+      )
+      : await query<FilaLista>(
+        `INSERT INTO ${conf.tabla} (proyecto_id, nombre, orden, creado_por)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [proyectoId, nombre, orden.rows[0].next, usuarioId],
+      );
+    fila = r.rows[0];
+    await registrarAudit(usuarioId, 'crear', conf.entidad, fila.id, {
+      proyecto_id: Number(proyectoId), nombre,
+    });
+  }
+
+  // Una empresa nueva nace con los cuatro puestos de siempre.
+  if (conf.tabla === 'proyecto_empresas') {
+    const tiene = await query(
+      'SELECT 1 FROM proyecto_puestos WHERE empresa_id = $1 AND activo = true LIMIT 1',
+      [fila.id],
+    );
+    if (tiene.rows.length === 0) {
+      await sembrarPuestosDeEmpresa(proyectoId, fila.id, usuarioId);
+    }
+  }
+
+  return { ok: true, fila };
+}
+
 // POST /api/proyecto-listas/:proyectoId/:lista — agregar (o reactivar)
 router.post(
   '/:proyectoId/:lista',
@@ -173,94 +276,18 @@ router.post(
   checkPermission('reportes'),
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
-    const conf = LISTAS[req.params.lista];
-    if (!conf) {
-      res.status(404).json({ success: false, message: 'Lista desconocida' });
-      return;
-    }
-
-    const { proyectoId } = req.params;
-    const nombre = leerNombre(req);
-    if (!nombre) {
-      res.status(400).json({ success: false, message: 'El nombre es obligatorio' });
-      return;
-    }
-
-    const esPuesto = conf.tabla === 'proyecto_puestos';
-    const empresaId = esPuesto ? leerEmpresaId(req) : null;
-
-    // El bloque al que pertenece: para los puestos, la empresa (o el propio);
-    // para las demás listas, el proyecto entero.
-    const filtroBloque = esPuesto
-      ? 'AND COALESCE(empresa_id, 0) = COALESCE($3::int, 0)'
-      : '';
-    const params: unknown[] = esPuesto
-      ? [proyectoId, nombre, empresaId]
-      : [proyectoId, nombre];
-
-    const yaActiva = await query(
-      `SELECT 1 FROM ${conf.tabla}
-        WHERE proyecto_id = $1 AND lower(nombre) = lower($2) AND activo = true ${filtroBloque}`,
-      params,
+    const r = await agregarALista(
+      req.params.proyectoId,
+      req.params.lista,
+      leerNombre(req),
+      leerEmpresaId(req),
+      req.user!.id,
     );
-    if (yaActiva.rows.length > 0) {
-      res.status(409).json({ success: false, message: `${conf.singular} "${nombre}" ya está en la lista` });
+    if (!r.ok) {
+      res.status(r.status).json({ success: false, message: r.message });
       return;
     }
-
-    // Si alguna vez existió y se quitó, se revive. Crear una fila nueva dejaría
-    // dos con el mismo nombre y los reportes viejos apuntando a la otra.
-    const dormida = await query<{ id: number }>(
-      `SELECT id FROM ${conf.tabla}
-        WHERE proyecto_id = $1 AND lower(nombre) = lower($2) AND activo = false ${filtroBloque}
-        ORDER BY id LIMIT 1`,
-      params,
-    );
-
-    let fila: FilaLista;
-    if (dormida.rows.length > 0) {
-      const r = await query<FilaLista>(
-        `UPDATE ${conf.tabla} SET activo = true WHERE id = $1 RETURNING *`,
-        [dormida.rows[0].id],
-      );
-      fila = r.rows[0];
-      await registrarAudit(req.user!.id, 'crear', conf.entidad, fila.id, {
-        proyecto_id: Number(proyectoId), nombre, reactivada: true,
-      });
-    } else {
-      const orden = await query<{ next: number }>(
-        `SELECT COALESCE(MAX(orden), 0) + 1 AS next FROM ${conf.tabla} WHERE proyecto_id = $1`,
-        [proyectoId],
-      );
-      const r = esPuesto
-        ? await query<FilaLista>(
-          `INSERT INTO proyecto_puestos (proyecto_id, empresa_id, nombre, orden, fijo, creado_por)
-           VALUES ($1, $2, $3, $4, FALSE, $5) RETURNING *`,
-          [proyectoId, empresaId, nombre, orden.rows[0].next, req.user!.id],
-        )
-        : await query<FilaLista>(
-          `INSERT INTO ${conf.tabla} (proyecto_id, nombre, orden, creado_por)
-           VALUES ($1, $2, $3, $4) RETURNING *`,
-          [proyectoId, nombre, orden.rows[0].next, req.user!.id],
-        );
-      fila = r.rows[0];
-      await registrarAudit(req.user!.id, 'crear', conf.entidad, fila.id, {
-        proyecto_id: Number(proyectoId), nombre,
-      });
-    }
-
-    // Una empresa nueva nace con los cuatro puestos de siempre.
-    if (conf.tabla === 'proyecto_empresas') {
-      const tiene = await query(
-        'SELECT 1 FROM proyecto_puestos WHERE empresa_id = $1 AND activo = true LIMIT 1',
-        [fila.id],
-      );
-      if (tiene.rows.length === 0) {
-        await sembrarPuestosDeEmpresa(proyectoId, fila.id, req.user!.id);
-      }
-    }
-
-    res.status(201).json({ success: true, data: fila });
+    res.status(201).json({ success: true, data: r.fila });
   }),
 );
 

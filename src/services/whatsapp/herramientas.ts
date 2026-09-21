@@ -10,9 +10,12 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { query } from '../../database/config.js';
 import { loadUserPermissions } from '../../middleware/auth.js';
 import { HORA_PANAMA } from '../reportePdf.js';
+import { agregarALista } from '../../routes/proyectoListas.js';
 import {
+  equipoParecido,
   fusionar,
   faltantes,
+  preguntaDeAreas,
   resumen,
   CLIMAS,
   SECCIONES,
@@ -21,7 +24,7 @@ import {
 } from './datosReporte.js';
 import { mensajeSemanaCerrada, semanaCerrada } from '../semanaCerrada.js';
 import { cerrarConversacion, guardarConversacion, type Conversacion } from './conversacion.js';
-import { responderBotones, responderDocumento } from './entrantes.js';
+import { responder, responderBotones, responderDocumento } from './entrantes.js';
 import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal } from './borrador.js';
 
 export interface Usuario {
@@ -41,6 +44,8 @@ export interface Contexto {
 export interface Resultado {
   ok: boolean;
   contenido: unknown;
+  /** La herramienta ya le hizo la pregunta a la persona: el turno se acaba ahi. */
+  cierraTurno?: boolean;
 }
 
 /** El dia de hoy en Panama, que es donde estan las obras. */
@@ -169,7 +174,12 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
         horas_perdidas: { type: 'number' },
         motivo: { type: 'string' },
         areas: { type: 'array', items: { type: 'integer' } },
-        que_se_hizo: { type: 'string' },
+        que_se_hizo: {
+          type: 'string',
+          description:
+            'Con las palabras de la persona; si lo mando en lista numerada, su lista tal cual. ' +
+            'Solo se corrigen faltas de ortografia evidentes.',
+        },
         atrasos: { type: 'string' },
         novedades: { type: 'string' },
         personal: {
@@ -215,6 +225,48 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
         preguntadas: {
           type: 'array',
           items: { type: 'string', enum: SECCIONES.map((s) => String(s.clave)) },
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'agregar_equipo',
+    description:
+      'Agrega una maquina a la lista de equipos del proyecto cuando la persona nombra una ' +
+      'que no esta. Devuelve su equipo_id para anotarla despues con anotar. Va con el nombre ' +
+      'completo («Retroexcavadora», no «la retro»). Si se parece a una que ya esta, no la ' +
+      'agrega y te dice cual: preguntale a la persona si es esa. Si la persona ya te dijo que ' +
+      'es otra maquina, vuelve a llamarlo con es_otra.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        nombre: { type: 'string' },
+        es_otra: {
+          type: 'boolean',
+          description:
+            'Solo cuando la persona ya dijo que no es la maquina parecida que esta en la lista',
+        },
+      },
+      required: ['nombre'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'preguntar_areas',
+    description:
+      'Le pregunta a la persona en que areas se trabajo. El mensaje sale con TODAS las areas ' +
+      'del proyecto, numeradas: la lista la pone el sistema, no usted. Uselo siempre que ' +
+      'tenga que preguntar por las areas, tambien cuando lo que contesto no calza con ' +
+      'ninguna. Despues de llamarlo no escriba nada mas en ese turno: la pregunta ya salio.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pregunta: {
+          type: 'string',
+          description:
+            'La frase que va antes de la lista, sin nombrar ninguna area. Por ejemplo ' +
+            '«¿En qué áreas se trabajó hoy?», o «No encontré "pedestales". ¿Cuál de estas es?»',
         },
       },
       additionalProperties: false,
@@ -280,7 +332,7 @@ async function estado(ctx: Contexto, listas: ListasProyecto | null): Promise<unk
     anotado: listas ? resumen(datos, listas, ctx.fotos) : null,
     datos,
     fotos: ctx.fotos,
-    falta_preguntar: faltantes(datos, ctx.fotos).map((s) => ({
+    falta_preguntar: faltantes(datos, ctx.fotos, listas).map((s) => ({
       seccion: s.clave,
       nombre: s.nombre,
       obligatoria: s.obligatoria,
@@ -370,6 +422,93 @@ export async function ejecutarHerramienta(
     return { ok: true, contenido: await estado(ctx, listas) };
   }
 
+  if (nombre === 'agregar_equipo') {
+    const proyectoId = ctx.conversacion.proyectoId;
+    if (proyectoId === null) {
+      return {
+        ok: false,
+        contenido: { error: 'Primero hay que elegir el proyecto con elegir_proyecto' },
+      };
+    }
+    // Las mismas reglas que el boton de agregar del formulario: puede quien
+    // reporta en ese proyecto. Se mira otra vez porque la lista es de todos, y
+    // el permiso pudo cambiar desde que empezo la conversacion.
+    if (!(await proyectosDe(ctx.usuario)).some((p) => p.id === proyectoId)) {
+      return { ok: false, contenido: { error: 'Esa persona ya no puede reportar en este proyecto' } };
+    }
+    const maquina = typeof input.nombre === 'string' ? input.nombre.trim() : '';
+    if (!maquina || maquina.length > 160) {
+      return { ok: false, contenido: { error: 'El nombre de la maquina va de 1 a 160 letras' } };
+    }
+
+    const listas = cache.listas ?? (cache.listas = await listasDe(proyectoId));
+    const parecido = equipoParecido(maquina, listas.equipos);
+    if (parecido?.igual) {
+      return {
+        ok: false,
+        contenido: {
+          error: `Esa máquina ya está en la lista como «${parecido.equipo.nombre}»: anótala con esa`,
+          equipo: parecido.equipo,
+        },
+      };
+    }
+    if (parecido && input.es_otra !== true) {
+      return {
+        ok: false,
+        contenido: {
+          error:
+            `Se parece a «${parecido.equipo.nombre}», que ya está en la lista. Pregúntale a la ` +
+            'persona si es esa; si dice que es otra máquina, vuelve a llamarlo con es_otra.',
+          equipo: parecido.equipo,
+        },
+      };
+    }
+
+    const agregado = await agregarALista(proyectoId, 'equipos', maquina, null, ctx.usuario.id);
+    if (!agregado.ok) return { ok: false, contenido: { error: agregado.message } };
+    // La lista cambio: lo que se anote en este mismo turno se valida contra la nueva.
+    cache.listas = await listasDe(proyectoId);
+    return {
+      ok: true,
+      contenido: {
+        agregado: { equipo_id: agregado.fila.id, nombre: agregado.fila.nombre },
+        recuerde:
+          'Anótala con anotar, con sus horas, y dile a la persona en una línea que la ' +
+          'agregaste a los equipos de la obra.',
+      },
+    };
+  }
+
+  if (nombre === 'preguntar_areas') {
+    const proyectoId = ctx.conversacion.proyectoId;
+    if (proyectoId === null) {
+      return {
+        ok: false,
+        contenido: { error: 'Primero hay que elegir el proyecto con elegir_proyecto' },
+      };
+    }
+    const listas = cache.listas ?? (cache.listas = await listasDe(proyectoId));
+    if (listas.areas.length === 0) {
+      return {
+        ok: false,
+        contenido: { error: 'Este proyecto no tiene areas: no preguntes por ellas' },
+      };
+    }
+    const pregunta = typeof input.pregunta === 'string' ? input.pregunta : null;
+    const salio = await responder(
+      ctx.conversacion.telefono,
+      preguntaDeAreas(listas.areas, pregunta),
+      ctx.conversacion.id,
+    );
+    return salio
+      ? {
+          ok: true,
+          cierraTurno: true,
+          contenido: { preguntado: 'La pregunta salió con todas las áreas numeradas' },
+        }
+      : { ok: false, contenido: { error: 'No se pudo mandar la pregunta' } };
+  }
+
   if (nombre === 'mandar_borrador') {
     const armado = await armarBorrador(ctx.conversacion);
     if (!armado.ok) return { ok: false, contenido: { error: armado.motivo } };
@@ -419,7 +558,7 @@ export async function ejecutarHerramienta(
       ctx.conversacion.id,
     );
     return salio
-      ? { ok: true, contenido: { preguntado: 'La pregunta salió con sus dos botones' } }
+      ? { ok: true, cierraTurno: true, contenido: { preguntado: 'La pregunta salió con sus dos botones' } }
       : { ok: false, contenido: { error: 'No se pudo mandar la pregunta' } };
   }
 

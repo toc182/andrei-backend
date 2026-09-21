@@ -262,13 +262,13 @@ async function mandar(
   return error === null;
 }
 
-/** Un mensaje de texto. */
+/** Un mensaje de texto. Devuelve si salio. */
 export async function responder(
   telefono: string,
   texto: string,
   conversacionId?: number,
-): Promise<void> {
-  await mandar(telefono, 'text', texto, () => enviarTexto(telefono, texto), conversacionId);
+): Promise<boolean> {
+  return mandar(telefono, 'text', texto, () => enviarTexto(telefono, texto), conversacionId);
 }
 
 /** Una pregunta con botones para tocar. Devuelve si salio. */

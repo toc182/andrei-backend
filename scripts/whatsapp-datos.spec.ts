@@ -5,9 +5,11 @@
 // lo que diga, si el area o el puesto no son de ese proyecto, no entra.
 
 import {
+  equipoParecido,
   fusionar,
   faltantes,
   obligatoriasQueFaltan,
+  preguntaDeAreas,
   resumen,
   type DatosReporte,
   type ListasProyecto,
@@ -91,6 +93,51 @@ exigir(!preguntado.includes('novedades'),
 
 exigir(faltantes({}, 2).every((s) => String(s.clave) !== 'fotos'),
   'con fotos mandadas, las fotos dejan de faltar');
+
+const SIN_AREAS_NI_EQUIPOS: ListasProyecto = { ...LISTAS, areas: [], equipos: [] };
+const sinAreas = faltantes({}, 0, SIN_AREAS_NI_EQUIPOS).map((s) => String(s.clave));
+exigir(!sinAreas.includes('areas'), 'un proyecto sin areas no pregunta por ellas');
+exigir(sinAreas.includes('equipos'),
+  'pero el equipo se pregunta aunque la lista este vacia: la maquina se agrega');
+exigir(faltantes({}, 0, LISTAS).some((s) => String(s.clave) === 'areas'),
+  'un proyecto con areas si pregunta por ellas');
+
+// ── una maquina que se parece a otra de la lista ────────────────────────────
+const MAQUINAS = [
+  { id: 30, nombre: 'Retroexcavadora' },
+  { id: 31, nombre: 'Grúa' },
+  { id: 32, nombre: 'Mixer' },
+];
+exigir(equipoParecido('Retro excavadora', MAQUINAS)?.igual === true,
+  'la misma maquina escrita con otro espacio es la misma');
+exigir(equipoParecido('grua', MAQUINAS)?.equipo.id === 31,
+  'y sin tilde ni mayuscula tambien');
+const retro = equipoParecido('retro', MAQUINAS);
+exigir(retro?.equipo.id === 30 && retro.igual === false,
+  'un nombre dentro de otro se parece, pero puede ser otra maquina');
+exigir(equipoParecido('Mixer 2', MAQUINAS)?.equipo.id === 32,
+  'y al reves: la de la lista dentro del nombre nuevo');
+exigir(equipoParecido('Minicargador', MAQUINAS) === null, 'una maquina distinta no se parece a nada');
+exigir(equipoParecido('Retroexcavadora', []) === null, 'con la lista vacia no se parece a nada');
+
+// ── la pregunta de las areas ────────────────────────────────────────────────
+// En la prueba de Cesar (2026-09-18) el modelo nombro solo algunas y se dejo
+// fuera justo aquella donde se habia trabajado.
+const cincoAreas = [
+  { id: 1, nombre: 'Area Interactiva' },
+  { id: 2, nombre: 'Area de Chorros' },
+  { id: 3, nombre: 'Torre Pendulo' },
+  { id: 4, nombre: 'Torre Fast Track' },
+  { id: 5, nombre: 'Generales' },
+];
+const pregunta = preguntaDeAreas(cincoAreas, '¿En qué áreas se trabajó hoy?');
+exigir(
+  cincoAreas.every((a, i) => pregunta.includes(`${i + 1}. ${a.nombre}`)),
+  'la pregunta de las areas las nombra TODAS, numeradas y en su orden',
+);
+exigir(pregunta.startsWith('¿En qué áreas se trabajó hoy?'), 'y empieza con la frase del modelo');
+exigir(preguntaDeAreas(cincoAreas, '  ').startsWith('¿En qué áreas se trabajó?'),
+  'sin frase del modelo, lleva una de siempre');
 
 const pendientes = obligatoriasQueFaltan({ clima: 'Soleado' }).map((s) => String(s.clave));
 exigir(

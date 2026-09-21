@@ -12,6 +12,10 @@
 // - el asistente elige proyecto y queda en modo reporte diario;
 // - lo que anota queda en la conversacion, validado contra las listas del
 //   proyecto: un area de otra obra se rechaza y el modelo se entera;
+// - la pregunta de las areas sale con todas las del proyecto, numeradas;
+// - una maquina que no esta en la lista se agrega, con su rastro, y sus horas
+//   se anotan en el mismo turno; una repetida con otra escritura no entra, y
+//   una parecida solo entra cuando la persona dijo que es otra;
 // - las fotos de la conversacion se cuentan;
 // - lo que el modelo no pregunta no se da por preguntado, y lo que marca como
 //   preguntado deja de estar pendiente;
@@ -226,6 +230,123 @@ const main = async () => {
     'el equipo del proyecto si se guarda',
   );
 
+  // ── la pregunta de las areas la arma el sistema, con todas ──────────────
+  // Sin nada guionizado detras: la pregunta cierra el turno y el modelo no se
+  // vuelve a llamar. Si se llamara, el guion vacio contestaria error.
+  await guionizar([usar('preguntar_areas', { pregunta: '¿En qué áreas se trabajó hoy?' })]);
+  const antesDeAreas = (await peticionesIa()).length;
+  await decir('No sé bien cómo se llama el área');
+  const cuarta = await esperarRespuestas(4);
+  const listaAreas = cuarta[3]?.texto ?? '';
+  exigir(
+    cuarta.length === 4 &&
+      listaAreas.startsWith('¿En qué áreas se trabajó hoy?') &&
+      areas.rows.every((a, i) => listaAreas.includes(`${i + 1}. ${a.nombre}`)),
+    'la pregunta de las areas sale con todas las del proyecto, numeradas',
+  );
+  await esperar(1500);
+  exigir(
+    (await enviados()).length === 4 && (await peticionesIa()).length - antesDeAreas === 1,
+    'y sale sola: la pregunta cierra el turno y el modelo no escribe nada detras',
+  );
+
+  // ── una maquina que no esta en la lista se agrega ───────────────────────
+  // El guion tiene que saber que numero le tocara: en esta base desechable no
+  // escribe nadie mas, asi que es el siguiente de la secuencia.
+  const secuencia = await query<{ siguiente: string }>(
+    `SELECT (CASE WHEN is_called THEN last_value + 1 ELSE last_value END)::text AS siguiente
+       FROM proyecto_equipos_id_seq`,
+  );
+  const nuevoId = Number(secuencia.rows[0].siguiente);
+  await guionizar([
+    usar('agregar_equipo', { nombre: 'Minicargador' }),
+    usar('anotar', {
+      equipos: [
+        { equipo_id: equipos.rows[0].id, unidades: 1, horas: 6 },
+        { equipo_id: nuevoId, unidades: 1, horas: 5 },
+      ],
+    }),
+    texto('Agregué Minicargador a los equipos de la obra.'),
+  ]);
+  await decir('También trabajó un minicargador 5 horas');
+  const quinta = await esperarRespuestas(5);
+  exigir(
+    quinta.length === 5 && Boolean(quinta[4].texto?.includes('Agregué Minicargador')),
+    'la maquina nueva se agrega sin preguntar y se le dice a la persona',
+  );
+  const agregada = await query<{ id: number; activo: boolean; creado_por: number }>(
+    `SELECT id, activo, creado_por FROM proyecto_equipos
+      WHERE proyecto_id = 1 AND nombre = 'Minicargador'`,
+  );
+  exigir(
+    agregada.rows.length === 1 &&
+      agregada.rows[0].id === nuevoId &&
+      agregada.rows[0].activo &&
+      agregada.rows[0].creado_por === userId,
+    'queda en la lista del proyecto, a nombre de quien la nombro',
+  );
+  const rastro = await query(
+    `SELECT 1 FROM audit_log
+      WHERE entidad = 'proyecto_equipo' AND entidad_id = $1 AND accion = 'crear' AND user_id = $2`,
+    [nuevoId, userId],
+  );
+  exigir(rastro.rows.length === 1, 'y deja su rastro, como cuando se agrega desde el formulario');
+  const datosEquipo = await query<{ datos: { equipos?: { equipoId: number; horas: number }[] } }>(
+    'SELECT datos FROM whatsapp_conversaciones WHERE id = $1',
+    [conv.rows[0].id],
+  );
+  exigir(
+    (datosEquipo.rows[0].datos.equipos ?? []).some((e) => e.equipoId === nuevoId && e.horas === 5),
+    'y sus horas se anotan en el mismo turno en que se agrego',
+  );
+
+  // ── una que ya esta escrita de otra manera NO se agrega ─────────────────
+  const resultadosDeHerramientas = async (): Promise<{ content: string; is_error?: boolean }[]> => {
+    const peticiones = (await peticionesIa()) as {
+      messages?: { role: string; content: unknown }[];
+    }[];
+    const ultima = peticiones.at(-1)?.messages?.at(-1);
+    return Array.isArray(ultima?.content) ? (ultima.content as never) : [];
+  };
+  await guionizar([
+    usar('agregar_equipo', { nombre: 'Retro excavadora' }),
+    texto('Ya está la Retroexcavadora en la lista, la anoto con esa.'),
+  ]);
+  await decir('La retro excavadora trabajó 8 horas');
+  await esperarRespuestas(6);
+  const igual = await resultadosDeHerramientas();
+  exigir(
+    igual[0]?.is_error === true && igual[0].content.includes('Retroexcavadora'),
+    'la misma maquina escrita con otro espacio no se agrega: el modelo se entera de cual es',
+  );
+
+  // ── una parecida se pregunta, y si la persona dice que es otra, se agrega ─
+  await guionizar([
+    usar('agregar_equipo', { nombre: 'Mixer 2' }),
+    usar('agregar_equipo', { nombre: 'Mixer 2', es_otra: true }),
+    texto('Listo.'),
+  ]);
+  await decir('Es otro mixer, el número 2');
+  await esperarRespuestas(7);
+  const peticionesMixer = ((await peticionesIa()) as {
+    messages?: { role: string; content: unknown }[];
+  }[]).slice(-2);
+  const primeraRespuesta = peticionesMixer[0]?.messages?.at(-1)?.content as
+    | { content: string; is_error?: boolean }[]
+    | undefined;
+  exigir(
+    primeraRespuesta?.[0]?.is_error === true && primeraRespuesta[0].content.includes('Mixer'),
+    'una parecida no se agrega a la primera: el modelo tiene que preguntar si es esa',
+  );
+  const nombres = await query<{ nombre: string }>(
+    'SELECT nombre FROM proyecto_equipos WHERE proyecto_id = 1 AND activo ORDER BY id',
+  );
+  const lista = nombres.rows.map((r) => r.nombre);
+  exigir(
+    lista.includes('Mixer 2') && !lista.includes('Retro excavadora'),
+    'y con es_otra se agrega; la repetida nunca entro',
+  );
+
   // ── una foto ────────────────────────────────────────────────────────────
   const foto = await sharp({
     create: { width: 40, height: 30, channels: 3, background: { r: 10, g: 90, b: 60 } },
@@ -252,9 +373,9 @@ const main = async () => {
   );
   await decir('No llegó nada y sin novedades');
 
-  const cuarta = await esperarRespuestas(4);
+  const octava = await esperarRespuestas(8);
   exigir(
-    cuarta.length === 4 && Boolean(cuarta[3].texto?.includes('borrador')),
+    octava.length === 8 && Boolean(octava[7].texto?.includes('borrador')),
     'la foto y el mensaje que la sigue se atienden juntos',
   );
 
@@ -275,9 +396,9 @@ const main = async () => {
   // Sin guion: el Claude de mentira contesta error, que es justo lo que se
   // quiere probar.
   await decir('Mándame el borrador');
-  const quinta = await esperarRespuestas(5, 25);
+  const novena = await esperarRespuestas(9, 25);
   exigir(
-    quinta.length === 5 && Boolean(quinta[4].texto?.includes('complicó')),
+    novena.length === 9 && Boolean(novena[8].texto?.includes('complicó')),
     'si el modelo no contesta, a la persona se le avisa en vez de dejarla esperando',
   );
   const intentos = await query<{ intentos: number; procesado_at: Date | null }>(

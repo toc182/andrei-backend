@@ -290,12 +290,76 @@ function contestada(datos: DatosReporte, clave: Seccion['clave'], fotos: number)
  * Las secciones de las que el ingeniero no ha hablado y por las que tampoco se
  * le ha preguntado. Es la lista que el asistente va vaciando, una pregunta cada
  * vez.
+ *
+ * Con las listas del proyecto, un proyecto sin areas no pregunta por ellas: no
+ * habria nada que anotar. El equipo si se pregunta aunque la lista este vacia,
+ * porque la maquina que nombre la persona se agrega a la lista.
  */
-export function faltantes(datos: DatosReporte, fotos: number): Seccion[] {
+export function faltantes(
+  datos: DatosReporte,
+  fotos: number,
+  listas?: ListasProyecto | null,
+): Seccion[] {
   const preguntadas = new Set(datos.preguntadas ?? []);
+  const sinAreas = listas !== undefined && listas !== null && listas.areas.length === 0;
   return SECCIONES.filter(
-    (s) => !contestada(datos, s.clave, fotos) && !preguntadas.has(String(s.clave)),
+    (s) =>
+      !contestada(datos, s.clave, fotos) &&
+      !preguntadas.has(String(s.clave)) &&
+      !(sinAreas && s.clave === 'areas'),
   );
+}
+
+/** Un nombre como se compara: sin mayusculas, tildes, espacios ni signos. */
+function normalizar(nombre: string): string {
+  return nombre
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * La maquina de la lista que se parece a la que se quiere agregar, si hay una.
+ *
+ * `igual`: es la misma escrita de otra manera («Retro excavadora» y
+ * «Retroexcavadora»); esa nunca se agrega. Si no, una contiene a la otra
+ * («Retro» y «Retroexcavadora», «Mixer» y «Mixer 2»): puede ser la misma o no,
+ * y eso solo lo sabe la persona. Un apodo que no se parece en nada no se caza.
+ */
+export function equipoParecido(
+  nombre: string,
+  equipos: { id: number; nombre: string }[],
+): { equipo: { id: number; nombre: string }; igual: boolean } | null {
+  const buscado = normalizar(nombre);
+  if (!buscado) return null;
+  const igual = equipos.find((e) => normalizar(e.nombre) === buscado);
+  if (igual) return { equipo: igual, igual: true };
+  const parecido = equipos.find((e) => {
+    const otro = normalizar(e.nombre);
+    return (
+      Math.min(otro.length, buscado.length) >= 3 &&
+      (otro.includes(buscado) || buscado.includes(otro))
+    );
+  });
+  return parecido ? { equipo: parecido, igual: false } : null;
+}
+
+/**
+ * La pregunta de las areas, con TODAS las del proyecto y numeradas.
+ *
+ * La lista la pone el codigo y no el modelo: en la primera prueba de verdad
+ * (Cesar, 2026-09-18) el modelo resumio las areas con sus palabras y justo se
+ * dejo fuera las dos donde se habia trabajado. Lo unico que escribe el modelo
+ * es la frase de antes.
+ */
+export function preguntaDeAreas(
+  areas: { id: number; nombre: string }[],
+  pregunta?: string | null,
+): string {
+  const inicio = pregunta?.trim() || '¿En qué áreas se trabajó?';
+  const lista = areas.map((a, i) => `${i + 1}. ${a.nombre}`).join('\n');
+  return `${inicio}\n\n${lista}\n\nPuedes contestar con los números.`;
 }
 
 /** Lo que impide guardar el reporte, aunque ya se haya preguntado todo. */

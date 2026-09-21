@@ -15,12 +15,29 @@
 //
 // El archivo de casos se saca de produccion en SOLO LECTURA y vive FUERA del
 // repositorio: es texto real de gente real.
+//
+// Un caso con `conversacion` se repite ENTERO en vez de en dos mensajes: a cada
+// pregunta del asistente se le contesta lo que contesto el ingeniero a esa
+// pregunta ese dia (`respuestas`: la primera regla cuya expresion calce con la
+// pregunta). Asi se ve si un arreglo cambia lo que salio mal en una
+// conversacion de verdad, aunque el asistente pregunte en otro orden.
 
 import 'dotenv/config';
 import fs from 'fs';
 import crypto from 'crypto';
+import sharp from 'sharp';
 import { Client } from 'pg';
 import { crearEntorno, SECRETOS_PRUEBA } from './pruebas/entorno.js';
+
+interface Respuesta {
+  /** Expresion que tiene que calzar con la pregunta del asistente. */
+  si: string;
+  /** Lo que se contesta, en orden si se pregunta mas de una vez. */
+  responde?: string[];
+  foto?: boolean;
+  /** Aqui se acaba el ensayo. */
+  fin?: boolean;
+}
 
 interface Caso {
   numero: string;
@@ -43,6 +60,13 @@ interface Caso {
     equipos: { id: number; nombre: string; unidades: number; horas: string }[];
     entregas: { descripcion: string; cantidad: string | null; unidad: string | null }[];
   };
+  conversacion?: { inicio: string; respuestas: Respuesta[] };
+}
+
+/** La pregunta de un mensaje del asistente: desde el ultimo «¿». */
+function preguntaDe(texto: string): string {
+  const i = texto.lastIndexOf('¿');
+  return i >= 0 ? texto.slice(i) : texto;
 }
 
 const NUMERO = '50769999999';
@@ -107,7 +131,7 @@ const main = async (): Promise<void> => {
 
     let vistos = 0;
     let n = 0;
-    const decir = async (texto: string): Promise<void> => {
+    const entregar = async (mensaje: Record<string, unknown>): Promise<void> => {
       const sobre = {
         object: 'whatsapp_business_account',
         entry: [
@@ -119,9 +143,7 @@ const main = async (): Promise<void> => {
                 value: {
                   messaging_product: 'whatsapp',
                   metadata: { phone_number_id: SECRETOS_PRUEBA.numeroId },
-                  messages: [
-                    { id: `wamid.E${(n += 1)}`, from: NUMERO, type: 'text', text: { body: texto } },
-                  ],
+                  messages: [{ id: `wamid.E${(n += 1)}`, from: NUMERO, ...mensaje }],
                 },
               },
             ],
@@ -139,6 +161,47 @@ const main = async (): Promise<void> => {
         },
         body: crudo,
       });
+    };
+    const decir = (texto: string) => entregar({ type: 'text', text: { body: texto } });
+    const mandarFoto = async (): Promise<void> => {
+      const foto = await sharp({
+        create: { width: 40, height: 30, channels: 3, background: { r: 10, g: 90, b: 60 } },
+      })
+        .jpeg()
+        .toBuffer();
+      const media = (await (
+        await fetch(`${meta}/_prueba/media`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64: foto.toString('base64'), tipoMime: 'image/jpeg' }),
+        })
+      ).json()) as { mediaId: string };
+      await entregar({ type: 'image', image: { id: media.mediaId, mime_type: 'image/jpeg' } });
+    };
+    /**
+     * Todo lo que el asistente mando en un turno. Un turno puede soltar dos
+     * mensajes —la lista de las areas sale por su cuenta—, asi que se espera a
+     * que lo de la persona quede atendido y se recoge todo lo nuevo.
+     */
+    const esperarTurno = async (): Promise<string[]> => {
+      const hasta = Date.now() + 180_000;
+      await esperar(1500);
+      for (;;) {
+        const pendientes = await base.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM whatsapp_mensajes
+            WHERE direccion = 'entrante' AND telefono = $1 AND procesado_at IS NULL`,
+          [NUMERO],
+        );
+        if (pendientes.rows[0].n === 0) break;
+        if (Date.now() > hasta) return ['(no contestó)'];
+        await esperar(500);
+      }
+      const r = (await (await fetch(`${meta}/_prueba/enviados`)).json()) as {
+        texto: string | null;
+      }[];
+      const nuevos = r.slice(vistos).map((m) => m.texto ?? '');
+      vistos = r.length;
+      return nuevos;
     };
     const esperarRespuesta = async (): Promise<string> => {
       const hasta = Date.now() + 180_000;
@@ -194,17 +257,49 @@ const main = async (): Promise<void> => {
       await base.query('UPDATE whatsapp_conversaciones SET activa = false WHERE telefono = $1', [NUMERO]);
 
       console.log(`\n══════ ${caso.numero} · ${caso.proyecto.slice(0, 60)} ══════`);
-      const contado = [caso.que_se_hizo, caso.atrasos, caso.novedades]
-        .filter((x) => x && x.trim())
-        .join('\n');
-      console.log(`TU (lo que escribio ese dia):\n${contado.slice(0, 400)}`);
-      await decir(`Ayúdame con el reporte diario.\n${contado}`);
-      console.log(`\nEL: ${await esperarRespuesta()}`);
+      if (caso.conversacion) {
+        // La conversacion entera, contestando cada pregunta como la contesto el
+        // ingeniero ese dia.
+        const veces = new Map<Respuesta, number>();
+        console.log(`TU: ${caso.conversacion.inicio}`);
+        await decir(caso.conversacion.inicio);
+        for (let turno = 0; turno < 30; turno += 1) {
+          const dijo = await esperarTurno();
+          for (const m of dijo) console.log(`\nEL: ${m}`);
+          const pregunta = preguntaDe(dijo.at(-1) ?? '');
+          const regla = caso.conversacion.respuestas.find((r) =>
+            new RegExp(r.si, 'i').test(pregunta),
+          );
+          if (!regla) {
+            console.log('\n(el ensayo no sabe que contestar a eso: se acaba aqui)');
+            break;
+          }
+          if (regla.fin) break;
+          if (regla.foto) {
+            console.log('\nTU: [foto]');
+            await mandarFoto();
+            continue;
+          }
+          const usadas = veces.get(regla) ?? 0;
+          veces.set(regla, usadas + 1);
+          const opciones = regla.responde ?? [];
+          const respuesta = opciones[Math.min(usadas, opciones.length - 1)] ?? '';
+          console.log(`\nTU: ${respuesta}`);
+          await decir(respuesta);
+        }
+      } else {
+        const contado = [caso.que_se_hizo, caso.atrasos, caso.novedades]
+          .filter((x) => x && x.trim())
+          .join('\n');
+        console.log(`TU (lo que escribio ese dia):\n${contado.slice(0, 400)}`);
+        await decir(`Ayúdame con el reporte diario.\n${contado}`);
+        console.log(`\nEL: ${await esperarRespuesta()}`);
 
-      const frase = fraseDeGenteYEquipo(caso);
-      console.log(`\nTU: ${frase}`);
-      await decir(frase);
-      console.log(`\nEL: ${await esperarRespuesta()}`);
+        const frase = fraseDeGenteYEquipo(caso);
+        console.log(`\nTU: ${frase}`);
+        await decir(frase);
+        console.log(`\nEL: ${await esperarRespuesta()}`);
+      }
 
       const datos = (
         await base.query<{ datos: Record<string, unknown> }>(
@@ -262,7 +357,23 @@ const main = async (): Promise<void> => {
         caso.real.entregas.map((e) => e.descripcion).join(', ') || '(nada)',
       );
       console.log('clima:   ', datos?.clima ?? '(nada)', '   ||   real:', caso.clima);
-      console.log('trabajo: ', String(datos?.queSeHizo ?? '(nada)').slice(0, 160));
+      console.log(
+        'perdidas:',
+        datos?.horasPerdidas ?? '(nada)',
+        'h ·',
+        String(datos?.motivo ?? '(sin motivo)'),
+        '   ||   real:',
+        caso.motivo ?? '(nada)',
+      );
+      console.log('atrasos: ', String(datos?.atrasos ?? '(nada)'), '   ||   real:', caso.atrasos ?? '(nada)');
+      const listaEquipos = await base.query<{ nombre: string }>(
+        'SELECT nombre FROM proyecto_equipos WHERE proyecto_id = 1 AND activo ORDER BY id',
+      );
+      console.log(
+        'equipos de la obra al terminar:',
+        listaEquipos.rows.map((r) => r.nombre).join(', ') || '(ninguno)',
+      );
+      console.log(`trabajo:\n${String(datos?.queSeHizo ?? '(nada)')}`);
     }
 
     const gasto = entorno

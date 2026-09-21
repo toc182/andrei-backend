@@ -54,10 +54,23 @@ COMO TRABAJAS
 - La fecha es la de hoy salvo que diga otra cosa («lo de ayer»). Lo primero que le pides es
   que te cuente que se hizo.
 - Cuando te cuente algo, anotalo con anotar. Anota SOLO lo que dijo.
+- El trabajo ejecutado va con SUS palabras: si lo mando en lista numerada, copias su lista
+  tal cual, con sus numeros. Solo corriges faltas de ortografia evidentes («zapataz» →
+  «zapatas»). No cambias la redaccion («Preparamos» se queda «Preparamos») ni una palabra
+  que no conoces: en cada obra hay nombres propios que tu no sabes.
+- Lo que cuente que paro o atraso el trabajo —«llovio y tuvimos que cancelar el vaciado»,
+  «no llego el concreto»— va tambien en atrasos, con sus palabras, aunque ya este en el
+  trabajo ejecutado o en el motivo de las horas perdidas. Asi, cuando te toque preguntar
+  por los atrasos, preguntas solo si hubo algo mas, y lo que ya conto no se pierde.
 - Despues repasas las secciones que faltan (te las dice la herramienta en
   falta_preguntar) y le preguntas por ellas UNA A UNA, en el orden en que vienen.
 - Si contesta que de esa seccion no hubo nada —«no llego material», «sin novedades»—,
   marcala en preguntadas para no volver a preguntar por ella.
+- Las areas se preguntan SIEMPRE con preguntar_areas: la pregunta sale con todas las
+  areas del proyecto, numeradas. Nunca las nombres tu ni escojas cuales mencionar. Si lo
+  que contesta no calza con ninguna, vuelve a usar preguntar_areas y di en la frase que
+  no la encontraste. Si contesta con numeros, son los de esa lista, en su orden. Despues
+  de preguntar_areas no escribas nada mas en ese turno.
 - Las fotos son una seccion mas: cuando te toque, pidele las fotos del dia y dile que si
   quiere puede escribir en cada una lo que muestra.
 - Cuando no quede nada por preguntar, preguntale si hay algo mas que quiera mencionar o si
@@ -85,6 +98,10 @@ SI LA SEMANA ESTA CERRADA
 CUANDO PREGUNTAR Y CUANDO NO
 - Si lo que dijo no calza con las listas del proyecto —dos equipos parecidos, un puesto que
   no existe, «12 hombres» sin decir de que— preguntas cual es. Nunca escoges tu.
+- Si nombra una maquina que no esta en la lista de equipos del proyecto, no le preguntes
+  si la agregas: agregala con agregar_equipo, con su nombre completo, anotala con sus
+  horas y diselo en una linea («Agregué Retroexcavadora a los equipos de la obra»). Si la
+  herramienta te dice que se parece a una que ya esta, preguntale si es esa.
 - Si lo que dijo es claro, no lo confirmes: anotalo y sigue.
 - No inventas nada. Lo que no te dijeron, no va en el reporte.
 
@@ -126,7 +143,7 @@ async function contexto(ctx: Contexto): Promise<string> {
     `Datos en crudo: ${JSON.stringify(ctx.conversacion.datos)}`,
     `Fotos recibidas: ${ctx.fotos}`,
     `Secciones que faltan por preguntar: ${
-      faltantes(ctx.conversacion.datos, ctx.fotos)
+      faltantes(ctx.conversacion.datos, ctx.fotos, listas)
         .map((s) => `${String(s.clave)} (${s.nombre})`)
         .join(', ') || '(ninguna)'
     }`,
@@ -252,8 +269,10 @@ export async function conversar(args: {
 
     mensajes.push({ role: 'assistant', content: respuesta.content });
     const resultados: Anthropic.ToolResultBlockParam[] = [];
+    let preguntaHecha = false;
     for (const llamada of llamadas) {
       const r = await ejecutarHerramienta(llamada.name, llamada.input, ctx, cache);
+      if (r.ok && r.cierraTurno) preguntaHecha = true;
       resultados.push({
         type: 'tool_result',
         tool_use_id: llamada.id,
@@ -261,6 +280,12 @@ export async function conversar(args: {
         is_error: !r.ok,
       });
     }
+    // Una herramienta que ya le hizo la pregunta a la persona —la lista de las
+    // areas, los botones de Enviar— cierra el turno: lo que el modelo escribiera
+    // despues le llegaria detras de la pregunta. En el primer ensayo con Claude
+    // de verdad (2026-09-21) mando «[Esperando la respuesta de la pregunta ya
+    // enviada]» justo despues de la lista de las areas.
+    if (preguntaHecha) return { texto: '', uso };
     mensajes.push({ role: 'user', content: resultados });
   }
 
