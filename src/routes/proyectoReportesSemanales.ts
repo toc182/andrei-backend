@@ -55,6 +55,10 @@ const router = Router();
 /** Tope de fotos del reporte semanal. Lo pidió Ivan: «digamos que 15». */
 export const FOTOS_MAX = 15;
 
+/** Un problema sin contestar no deja salir el reporte (migración 174). */
+export const PROBLEMA_SIN_CONTESTAR =
+  'Cada problema tiene que decir si sigue pendiente. Contesta los que faltan o elimínalos.';
+
 const ESTADOS = ['completada', 'parcial', 'no_completada'] as const;
 type Estado = (typeof ESTADOS)[number];
 
@@ -94,7 +98,12 @@ interface SemanalBody {
   metas_evaluadas?: MetaBody[];
   /** Las metas nuevas del plan de la próxima semana. */
   metas_plan?: MetaBody[];
-  problemas?: { fecha?: string | null; problema?: string; accion?: string | null; pendiente?: boolean }[];
+  /** `pendiente` en null es «sin contestar»: se guarda así en el borrador, pero
+   *  no se puede enviar ni corregir el reporte hasta que diga sí o no. */
+  problemas?: {
+    fecha?: string | null; problema?: string; accion?: string | null;
+    pendiente?: boolean | null;
+  }[];
   decisiones?: { texto?: string }[];
   /** Los ids de las fotos elegidas, en el orden en que van. */
   fotos?: number[];
@@ -150,7 +159,9 @@ async function leerEstado(reporteId: number, consultar: Consultar): Promise<Esta
         WHERE reporte_plan_id = $1 ORDER BY orden, id`,
       [reporteId],
     ),
-    consultar<{ fecha: Date | null; problema: string; accion: string | null; pendiente: boolean }>(
+    consultar<{
+      fecha: Date | null; problema: string; accion: string | null; pendiente: boolean | null;
+    }>(
       `SELECT fecha, problema, accion, pendiente FROM proyecto_reporte_semanal_problemas
         WHERE reporte_id = $1 ORDER BY orden, id`,
       [reporteId],
@@ -484,10 +495,12 @@ router.get(
     const [metas, problemas, decisiones, elegidas, datos] = await Promise.all([
       leerMetas(reporte.id),
       query(
-        // Lo pendiente primero: es lo único que hay que seguir mirando.
+        // Lo pendiente primero: es lo único que hay que seguir mirando. Lo que
+        // todavía no se ha contestado se queda donde estaba —moverlo al abrir
+        // el borrador solo desordenaría lo que el ingeniero acaba de escribir—.
         `SELECT id, fecha, problema, accion, pendiente, orden
            FROM proyecto_reporte_semanal_problemas
-          WHERE reporte_id = $1 ORDER BY pendiente DESC, orden, id`,
+          WHERE reporte_id = $1 ORDER BY pendiente DESC NULLS LAST, orden, id`,
         [reporte.id],
       ),
       query(
@@ -601,6 +614,16 @@ router.put(
         ? await leerEstado(reporte.id, consultar)
         : null;
 
+      // Corrigiendo un reporte ya enviado no hay borrador donde dejar un
+      // problema a medias: o dice si sigue pendiente, o se quita de la lista.
+      if (reporte.completo && body.problemas?.some(
+        (p) => textoONull(p.problema) && p.pendiente !== true && p.pendiente !== false,
+      )) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ success: false, message: PROBLEMA_SIN_CONTESTAR });
+        return;
+      }
+
       if (body.fotos !== undefined && body.fotos.length > FOTOS_MAX) {
         await client.query('ROLLBACK');
         res.status(400).json({
@@ -711,7 +734,13 @@ router.put(
             `INSERT INTO proyecto_reporte_semanal_problemas
                (reporte_id, fecha, problema, accion, pendiente, orden)
              VALUES ($1, $2, $3, $4, $5, $6)`,
-            [reporte.id, p.fecha || null, texto, textoONull(p.accion), p.pendiente === true, orden],
+            [
+              reporte.id, p.fecha || null, texto, textoONull(p.accion),
+              // null es «sin contestar»: no se convierte a false, porque el
+              // reporte no sale hasta que alguien lo conteste.
+              p.pendiente === true || p.pendiente === false ? p.pendiente : null,
+              orden,
+            ],
           );
           orden += 1;
         }
@@ -832,6 +861,19 @@ router.post(
         success: false,
         message: 'Falta el resumen de la semana',
       });
+      return;
+    }
+
+    // El reporte sale diciendo, de cada problema, si la semana lo dejó vivo o
+    // no. Sin eso la oficina tiene que llamar al ingeniero para saberlo, que es
+    // justo lo que Ivan encontró leyendo el primero de verdad.
+    const sinContestar = await query<{ n: string }>(
+      `SELECT COUNT(*) AS n FROM proyecto_reporte_semanal_problemas
+        WHERE reporte_id = $1 AND pendiente IS NULL`,
+      [reporte.id],
+    );
+    if (sinContestar.rows[0].n !== '0') {
+      res.status(400).json({ success: false, message: PROBLEMA_SIN_CONTESTAR });
       return;
     }
 

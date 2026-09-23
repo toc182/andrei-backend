@@ -88,7 +88,11 @@ const main = async () => {
     resumen: 'Semana de estructura: se coló la losa del nivel 3 y se perdieron 2 horas por lluvia.',
     lo_que_se_espera: 'Cerrar el nivel 3.',
     metas_plan: [{ texto: 'Colar la rampa', cantidad: 7, unidad: 'm3' }],
-    problemas: [{ fecha: LUNES, problema: 'Lluvia por la tarde', accion: 'Se cubrio el acero' }],
+    problemas: [{
+      fecha: LUNES, problema: 'Lluvia por la tarde', accion: 'Se cubrio el acero',
+      // Contestado: sin eso el reporte no sale (migración 174).
+      pendiente: false,
+    }],
     decisiones: [{ texto: 'Aprobar la madera adicional' }],
     fotos: fotos.map((f) => f.id),
   });

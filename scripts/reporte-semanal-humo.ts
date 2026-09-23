@@ -125,6 +125,33 @@ const main = async () => {
   c(tocado.cuerpo.data.metas_plan.length === 2 && tocado.cuerpo.data.problemas.length === 1,
     'guardar solo el resumen no borra las demas secciones');
 
+  // ---- un problema sin contestar no deja salir el reporte ----
+  //
+  // Ivan, 2026-09-22, leyendo el primero de verdad: la seccion listaba cuatro
+  // problemas sin decir cual seguia vivo, «me toca preguntar a Cesar que paso».
+  // El borrador si lo guarda a medias; lo que no sale es el papel.
+  await pedir('PUT', `/proyecto-reportes-semanales/${P}/${id}`, {
+    problemas: [
+      { fecha: '2026-10-06', problema: 'Lluvia por la tarde', accion: 'Se cubrio el acero', pendiente: false },
+      { fecha: '2026-10-07', problema: 'Falto el vibrador', accion: null },
+    ],
+  });
+  const aMedias = await pedir('GET', `/proyecto-reportes-semanales/${P}/${id}`);
+  const enBorrador = aMedias.cuerpo.data.problemas as { pendiente: boolean | null }[];
+  c(enBorrador.some((p) => p.pendiente === null),
+    'el borrador guarda un problema sin contestar');
+  c(enBorrador[enBorrador.length - 1]?.pendiente === null,
+    'y el que falta se queda donde estaba, no salta al principio');
+
+  const frenado = await pedir('POST', `/proyecto-reportes-semanales/${P}/${id}/emitir`);
+  c(frenado.estado === 400, `sin contestar no se envia (dio ${frenado.estado})`);
+  c(String(frenado.cuerpo?.message ?? '').includes('sigue pendiente'),
+    'y el mensaje dice que hay que contestarlo o quitarlo');
+
+  await pedir('PUT', `/proyecto-reportes-semanales/${P}/${id}`, {
+    problemas: [{ fecha: '2026-10-06', problema: 'Lluvia por la tarde', accion: 'Se cubrio el acero', pendiente: false }],
+  });
+
   // ---- se envía ----
   const emitido = await pedir('POST', `/proyecto-reportes-semanales/${P}/${id}/emitir`);
   c(emitido.estado === 200, `enviarlo da 200 (dio ${emitido.estado})`);

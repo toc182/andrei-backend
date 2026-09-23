@@ -137,7 +137,9 @@ export async function buildSemanalPdfInput(
         WHERE reporte_plan_id = $1 ORDER BY orden, id`,
       [reporteId],
     ),
-    query<{ fecha: Date | null; problema: string; accion: string | null; pendiente: boolean }>(
+    query<{
+      fecha: Date | null; problema: string; accion: string | null; pendiente: boolean | null;
+    }>(
       `SELECT fecha, problema, accion, pendiente FROM proyecto_reporte_semanal_problemas
         WHERE reporte_id = $1 ORDER BY orden, id`,
       [reporteId],

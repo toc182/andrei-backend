@@ -68,7 +68,12 @@ export interface ReporteSemanalPdfInput {
   datos: DatosSemana;
   metas: MetaPdf[];
   metasPlan: { texto: string; cantidad: number | null; unidad: string | null }[];
-  problemas: { fecha: string | null; problema: string; accion: string | null; pendiente: boolean }[];
+  // `pendiente` en null es «sin contestar»: no sale marcado. Un reporte
+  // enviado no puede traerlo (routes/proyectoReportesSemanales.ts lo impide),
+  // pero el PDF del borrador sí.
+  problemas: {
+    fecha: string | null; problema: string; accion: string | null; pendiente: boolean | null;
+  }[];
   decisiones: string[];
   fotos: (FotoDelReporte & { fecha: string })[];
   /** fecha y hora ya escritas en la hora de Panamá. */

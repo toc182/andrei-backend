@@ -39,7 +39,9 @@ export interface EstadoSemanal {
   lo_que_se_espera: string | null;
   metas: MetaComparable[];
   metas_plan: { texto: string; cantidad: number | null; unidad: string | null }[];
-  problemas: { fecha: string | null; problema: string; accion: string | null; pendiente: boolean }[];
+  problemas: {
+    fecha: string | null; problema: string; accion: string | null; pendiente: boolean | null;
+  }[];
   decisiones: string[];
   /** Los ids de las fotos elegidas, en su orden. */
   fotos: number[];
@@ -76,7 +78,7 @@ function planComoTexto(m: { texto: string; cantidad: number | null; unidad: stri
 
 /** Un problema, como se lee: «9 sept · la planta no despachó · pendiente». */
 function problemaComoTexto(
-  p: { fecha: string | null; problema: string; accion: string | null; pendiente: boolean },
+  p: { fecha: string | null; problema: string; accion: string | null; pendiente: boolean | null },
 ): string {
   const dia = p.fecha ? `${p.fecha} · ` : '';
   const accion = texto(p.accion) ? ` · ${texto(p.accion)}` : '';

@@ -109,6 +109,16 @@ const main = async () => {
   c(dos[1].cambios.some((k) => k.etiqueta === 'Problemas y atrasos'),
     'la segunda nombra los problemas');
 
+  // ---- corrigiendo tampoco se admite un problema sin contestar ----
+  //
+  // Aqui no hay borrador donde dejarlo a medias: el reporte ya esta en la
+  // bandeja de Ivan, asi que o dice si sigue pendiente o se quita de la lista.
+  const aMedias = await pedir('PUT', `/proyecto-reportes-semanales/${P}/${id}`, {
+    problemas: [{ fecha: LUNES, problema: 'Falto madera', accion: 'Se compro el martes' }],
+  });
+  c(aMedias.estado === 400, `corregir sin contestar da 400 (dio ${aMedias.estado})`);
+  c((await correcciones()).length === 2, 'y ese guardado no deja linea en Correcciones');
+
   // ---- cada correccion archiva su version del PDF ----
   await archivarCorreccionesSemanalesPendientes();
   const versiones = await query<{ n: string }>(
