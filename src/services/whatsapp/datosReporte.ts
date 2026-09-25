@@ -14,12 +14,16 @@ export interface Seccion {
   obligatoria: boolean;
 }
 
+// El orden es el de la conversacion, y lo eligio Ivan el 2026-09-25 probandolo:
+// en la obra se trabaja POR AREAS, asi que lo primero que se pregunta es en
+// cuales se trabajo —con su lista— y despues que se hizo. Preguntar primero
+// «que se hizo» y despues las areas se sentia al reves.
 export const SECCIONES: Seccion[] = [
   { clave: 'fecha', nombre: 'Fecha del reporte', obligatoria: true },
-  { clave: 'clima', nombre: 'Clima', obligatoria: true },
-  { clave: 'horasPerdidas', nombre: 'Horas perdidas y su motivo', obligatoria: false },
   { clave: 'areas', nombre: 'Áreas de trabajo', obligatoria: false },
   { clave: 'queSeHizo', nombre: 'Trabajo ejecutado', obligatoria: true },
+  { clave: 'clima', nombre: 'Clima', obligatoria: true },
+  { clave: 'horasPerdidas', nombre: 'Horas perdidas y su motivo', obligatoria: false },
   { clave: 'atrasos', nombre: 'Atrasos o impedimentos', obligatoria: false },
   { clave: 'novedades', nombre: 'Novedades del día', obligatoria: false },
   { clave: 'personal', nombre: 'Personal por puesto', obligatoria: false },
