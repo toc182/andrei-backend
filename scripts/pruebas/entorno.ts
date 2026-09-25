@@ -124,6 +124,8 @@ function entornoHijo(base: string, puerto: number): NodeJS.ProcessEnv {
   delete env.WHATSAPP_APP_SECRET;
   delete env.WHATSAPP_VERIFY_TOKEN;
   delete env.WHATSAPP_API_URL;
+  delete env.OPENAI_API_KEY;
+  delete env.OPENAI_BASE_URL;
   return env;
 }
 
@@ -144,6 +146,9 @@ function entornoWhatsapp(urlMeta: string): NodeJS.ProcessEnv {
     // contestaria distinto cada vez.
     ANTHROPIC_API_KEY: SECRETOS_PRUEBA.llaveIa,
     ANTHROPIC_BASE_URL: urlMeta,
+    // Y las notas de voz las «oye» el Whisper de mentira, en el mismo sitio.
+    OPENAI_API_KEY: SECRETOS_PRUEBA.llaveAudio,
+    OPENAI_BASE_URL: `${urlMeta}/v1`,
     // En una obra se esperan segundos a que la persona termine de escribir; en
     // una prueba, poco más de un segundo: lo justo para que tres mensajes
     // seguidos de la prueba lleguen dentro de la misma espera, y no tanto como
@@ -156,6 +161,7 @@ function entornoWhatsapp(urlMeta: string): NodeJS.ProcessEnv {
 /** Lo que usan el servidor de pruebas y la prueba de WhatsApp. No son secretos. */
 export const SECRETOS_PRUEBA = {
   llaveIa: 'sk-ant-de-mentira',
+  llaveAudio: 'sk-audio-de-mentira',
   token: 'token-de-mentira',
   numeroId: '100000000000001',
   appSecret: 'secreto-de-mentira',
@@ -488,6 +494,10 @@ export async function crearEntorno(
     // Se le devuelven las llaves de verdad del .env, que entornoHijo dejo pasar.
     whatsapp.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
     delete whatsapp.ANTHROPIC_BASE_URL;
+    if (process.env.OPENAI_API_KEY) {
+      whatsapp.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+      delete whatsapp.OPENAI_BASE_URL;
+    }
     // Y se espera de verdad a que la persona termine de escribir.
     whatsapp.WHATSAPP_ESPERA_MS = process.env.WHATSAPP_ESPERA_MS ?? '3000';
   }

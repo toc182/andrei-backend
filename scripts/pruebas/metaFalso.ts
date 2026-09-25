@@ -83,6 +83,9 @@ export async function arrancarMetaFalso(puertoPedido?: number): Promise<MetaFals
   const escribiendo: string[] = [];
   /** Lo que se le pidió al modelo, para que la prueba pueda mirarlo. */
   const peticionesIa: unknown[] = [];
+  /** Lo que «se oyó» en cada nota de voz, en orden, y el vocabulario que se mandó. */
+  const guionAudio: string[] = [];
+  const promptsAudio: string[] = [];
 
   const servidor = http.createServer((req, res) => {
     void (async () => {
@@ -109,6 +112,26 @@ export async function arrancarMetaFalso(puertoPedido?: number): Promise<MetaFals
       }
       if (ruta === '/_prueba/ia/peticiones' && req.method === 'GET') {
         return json(200, peticionesIa);
+      }
+      if (ruta === '/_prueba/audio' && req.method === 'POST') {
+        const cuerpo: unknown = JSON.parse((await leerCuerpo(req)).toString('utf8'));
+        for (const t of Array.isArray(cuerpo) ? cuerpo : [cuerpo]) guionAudio.push(String(t));
+        return json(200, { guionizadas: guionAudio.length });
+      }
+
+      // --- el Whisper de mentira: la nota de voz pasada a texto ---
+      if (ruta === '/v1/audio/transcriptions' && req.method === 'POST') {
+        const crudo = (await leerCuerpo(req)).toString('latin1');
+        // El cuerpo es multipart; de el solo interesa el prompt, que es el
+        // vocabulario de la obra, para que la prueba pueda comprobar que va.
+        const trozo = crudo.split('name="prompt"')[1];
+        promptsAudio.push(trozo ? Buffer.from(trozo.split('\r\n\r\n')[1]?.split('\r\n')[0] ?? '', 'latin1').toString('utf8') : '');
+        const siguiente = guionAudio.shift();
+        if (siguiente === undefined) return json(400, { error: { message: 'sin audio guionizado' } });
+        return json(200, { text: siguiente });
+      }
+      if (ruta === '/_prueba/audio/prompts' && req.method === 'GET') {
+        return json(200, promptsAudio);
       }
 
       // --- el Claude de mentira ---

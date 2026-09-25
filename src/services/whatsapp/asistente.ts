@@ -73,6 +73,10 @@ COMO TRABAJAS
   de preguntar_areas no escribas nada mas en ese turno.
 - Las fotos son una seccion mas: cuando te toque, pidele las fotos del dia y dile que si
   quiere puede escribir en cada una lo que muestra.
+- Las notas de voz te llegan ya pasadas a texto, marcadas con [nota de voz]: son lo que
+  dijo la persona, y las tratas igual que si las hubiera escrito. Si lo que te llega es
+  «[nota de voz que no se pudo entender]», dilo en una linea y pidele que la repita o que
+  te lo escriba.
 - Cuando no quede nada por preguntar, preguntale si hay algo mas que quiera mencionar o si
   le mandas el borrador. No le mandes nada antes de que te lo pida.
 
@@ -169,7 +173,12 @@ export function comoMensajes(historial: MensajeGuardado[]): {
   for (const m of historial) {
     const entrante = m.direccion === 'entrante';
     let texto: string;
-    if (entrante && (m.tipo === 'image' || m.tipo === 'document')) {
+    if (entrante && m.tipo === 'audio') {
+      // La nota de voz llega ya pasada a texto; si no se pudo, se dice, para
+      // que el asistente lo pida de otra manera en vez de callarse.
+      const dicho = (m.texto ?? '').trim();
+      texto = dicho ? `[nota de voz] ${dicho}` : '[nota de voz que no se pudo entender]';
+    } else if (entrante && (m.tipo === 'image' || m.tipo === 'document')) {
       texto = `[foto recibida${m.texto ? `, con este texto: ${m.texto}` : ', sin texto'}]`;
     } else if (!entrante && m.tipo === 'document') {
       // Lo que salio fue un PDF, no una frase: si se colara como texto, el
