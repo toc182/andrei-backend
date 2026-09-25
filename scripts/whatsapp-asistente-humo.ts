@@ -19,6 +19,8 @@
 // - las fotos de la conversacion se cuentan;
 // - lo que el modelo no pregunta no se da por preguntado, y lo que marca como
 //   preguntado deja de estar pendiente;
+// - si la persona pide empezar de cero, la conversacion se cierra y la nueva no
+//   arrastra nada;
 // - si el modelo revienta, el mensaje se reintenta y, agotados los intentos, a
 //   la persona se le avisa en vez de dejarla esperando.
 import { API } from './pruebas/contexto.js';
@@ -392,13 +394,39 @@ const main = async () => {
     'lo que el modelo marco como preguntado deja de estar pendiente',
   );
 
+  // ── empezar de cero: lo decide la persona, no el asistente ─────────────
+  await guionizar([
+    usar('empezar_de_nuevo', {}),
+    texto('Listo, empezamos de cero. ¿De qué obra es el reporte?'),
+  ]);
+  await decir('Mejor empecemos otro reporte desde cero');
+  const novena = await esperarRespuestas(9);
+  exigir(
+    novena.length === 9 && Boolean(novena[8].texto?.includes('de cero')),
+    'si pide empezar de cero, se empieza de cero',
+  );
+  const conversaciones = await query<{ id: number; activa: boolean; datos: object; proyecto_id: number | null }>(
+    'SELECT id, activa, datos, proyecto_id FROM whatsapp_conversaciones WHERE telefono = $1 ORDER BY id',
+    [NUMERO],
+  );
+  const vieja = conversaciones.rows.find((c) => c.id === conv.rows[0].id);
+  const fresca = conversaciones.rows.find((c) => c.activa);
+  exigir(
+    vieja?.activa === false && fresca !== undefined && fresca.id !== conv.rows[0].id,
+    'la conversacion de antes se cierra y se abre otra',
+  );
+  exigir(
+    JSON.stringify(fresca?.datos ?? {}) === '{}' && fresca?.proyecto_id === null,
+    'y la nueva no arrastra nada: ni lo anotado, ni la obra, ni las fotos',
+  );
+
   // ── el modelo revienta ──────────────────────────────────────────────────
   // Sin guion: el Claude de mentira contesta error, que es justo lo que se
   // quiere probar.
   await decir('Mándame el borrador');
-  const novena = await esperarRespuestas(9, 25);
+  const decima = await esperarRespuestas(10, 25);
   exigir(
-    novena.length === 9 && Boolean(novena[8].texto?.includes('complicó')),
+    decima.length === 10 && Boolean(decima[9].texto?.includes('complicó')),
     'si el modelo no contesta, a la persona se le avisa en vez de dejarla esperando',
   );
   const intentos = await query<{ intentos: number; procesado_at: Date | null }>(

@@ -24,7 +24,12 @@ import {
   type ListasProyecto,
 } from './datosReporte.js';
 import { mensajeSemanaCerrada, semanaCerrada } from '../semanaCerrada.js';
-import { cerrarConversacion, guardarConversacion, type Conversacion } from './conversacion.js';
+import {
+  cerrarConversacion,
+  conversacionViva,
+  guardarConversacion,
+  type Conversacion,
+} from './conversacion.js';
 import { responder, responderBotones, responderDocumento } from './entrantes.js';
 import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal } from './borrador.js';
 
@@ -232,6 +237,14 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'empezar_de_nuevo',
+    description:
+      'Tira lo anotado y empieza un reporte desde cero. Uselo SOLO cuando la persona ya ' +
+      'le dijo que si despues de avisarle de que se pierde lo que lleva anotado. Despues ' +
+      'de esto no queda nada: ni obra elegida, ni fotos, ni borrador.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'agregar_equipo',
     description:
       'Agrega una maquina a la lista de equipos del proyecto cuando la persona nombra una ' +
@@ -429,6 +442,32 @@ export async function ejecutarHerramienta(
     ctx.conversacion.datos = fusion.datos;
     await guardarConversacion(ctx.conversacion.id, { datos: fusion.datos });
     return { ok: true, contenido: await estado(ctx, listas) };
+  }
+
+  if (nombre === 'empezar_de_nuevo') {
+    // Decision de Ivan (2026-09-25): si pide empezar otro reporte, se empieza.
+    // El asistente avisa de lo que se pierde y pregunta; decidir es de ella.
+    if (ctx.conversacion.reporteId !== null) {
+      await query(
+        `UPDATE proyecto_reportes SET activo = false
+          WHERE id = $1 AND completo = false AND activo = true`,
+        [ctx.conversacion.reporteId],
+      );
+    }
+    // Se cierra la conversacion entera y se abre otra: asi no arrastra ni las
+    // fotos ya mandadas ni lo que se dijeron, que es lo que significa «de cero».
+    await cerrarConversacion(ctx.conversacion.id);
+    const nueva = await conversacionViva(ctx.conversacion.telefono, ctx.usuario.id);
+    Object.assign(ctx.conversacion, nueva);
+    ctx.fotos = 0;
+    cache.listas = null;
+    return {
+      ok: true,
+      contenido: {
+        limpio: 'No queda nada anotado. Empieza otra vez: preguntale de que obra es.',
+        ...((await estado(ctx, null)) as object),
+      },
+    };
   }
 
   if (nombre === 'agregar_equipo') {
