@@ -16,6 +16,7 @@ import {
   estaConfigurado,
   marcarLeidoYEscribiendo,
 } from './cliente.js';
+import { leerNotaRecienLlegada } from './transcripcion.js';
 
 /** Un mensaje ya leido del sobre de Meta, sin el archivo todavia. */
 export interface MensajeEntrante {
@@ -335,6 +336,14 @@ export async function procesarPayload(cuerpo: unknown): Promise<void> {
     }
 
     if (m.mediaId) await traerMedia(fila.id, m.mediaId);
+
+    // La nota de voz se lee en cuanto llega, no cuando el asistente va a
+    // contestar: asi la espera de la persona es una sola, no dos seguidas.
+    if (m.tipo === 'audio' && userId !== null) {
+      await leerNotaRecienLlegada(fila.id).catch((e: Error) =>
+        console.error('[whatsapp] no se pudo leer la nota de voz al llegar:', e.message),
+      );
+    }
 
     if (userId === null) {
       // No hay nada mas que hacer con el: se le contesta —si se puede— y se da

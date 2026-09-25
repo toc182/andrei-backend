@@ -10,7 +10,6 @@
 
 import { query } from '../../database/config.js';
 import { downloadFile } from '../storage.js';
-import { listasDe } from './herramientas.js';
 
 const llave = (): string | undefined => process.env.OPENAI_API_KEY;
 const base = (): string => process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1';
@@ -103,6 +102,10 @@ export async function transcribir(
 
 /** Las palabras de esa obra, para que Whisper las escriba como son. */
 export async function vocabularioDe(proyectoId: number): Promise<string | undefined> {
+  // La importacion va aqui dentro a proposito: herramientas.ts tira de
+  // entrantes.ts, y entrantes.ts llama a este archivo cuando llega una nota de
+  // voz. Cargarlo al arrancar cerraria ese circulo.
+  const { listasDe } = await import('./herramientas.js');
   const listas = await listasDe(proyectoId);
   const nombres = [
     ...listas.areas.map((a) => a.nombre),
@@ -114,6 +117,42 @@ export async function vocabularioDe(proyectoId: number): Promise<string | undefi
   // Whisper solo atiende a las primeras frases del prompt, asi que va corto y
   // con los nombres propios primero.
   return `Reporte de obra en Panamá. Nombres propios: ${nombres.join(', ')}.`.slice(0, 600);
+}
+
+/**
+ * Lee una nota de voz recien llegada, sin esperar al turno del asistente.
+ *
+ * Es lo que hace que la respuesta llegue antes: cuando el asistente va a
+ * pensar, la nota ya es texto. Si falla, no pasa nada —queda pendiente y el
+ * turno la vuelve a intentar—.
+ */
+export async function leerNotaRecienLlegada(filaId: number): Promise<void> {
+  const fila = await query<{ r2_key: string | null; proyecto_id: number | null }>(
+    `SELECT m.r2_key, c.proyecto_id
+       FROM whatsapp_mensajes m
+       LEFT JOIN whatsapp_conversaciones c ON c.telefono = m.telefono AND c.activa
+      WHERE m.id = $1`,
+    [filaId],
+  );
+  const r2Key = fila.rows[0]?.r2_key;
+  if (!r2Key) return;
+  const vocabulario =
+    fila.rows[0]?.proyecto_id === null || fila.rows[0]?.proyecto_id === undefined
+      ? undefined
+      : await vocabularioDe(fila.rows[0].proyecto_id);
+  const audio = await downloadFile(r2Key);
+  const r = await transcribir(audio, `nota-${filaId}.ogg`, vocabulario);
+  if (r.ok) {
+    await query('UPDATE whatsapp_mensajes SET texto = $2 WHERE id = $1', [filaId, r.texto]);
+    return;
+  }
+  // Un fallo pasajero no se marca: la nota queda pendiente y el turno la
+  // vuelve a intentar. Lo que no tiene arreglo —muy larga, no se entendio— si.
+  if (r.motivo === 'fallo') return;
+  await query('UPDATE whatsapp_mensajes SET error = $2 WHERE id = $1', [
+    filaId,
+    MOTIVOS[r.motivo] ?? r.motivo,
+  ]);
 }
 
 /** Espera a que el audio este guardado, hasta unos segundos. */
@@ -148,8 +187,9 @@ const MOTIVOS: Record<string, string> = {
 /**
  * Pasa a texto las notas de voz de esta conversacion que aun no lo estan.
  *
- * Se hace aqui, cuando el asistente va a contestar, y no al recibirlas: aqui ya
- * se sabe de que obra habla la persona, y por tanto que palabras esperar.
+ * La red de seguridad: lo normal es que ya se hayan leido al llegar
+ * (leerNotaRecienLlegada). Aqui se recogen las que no —porque el archivo
+ * tardo, porque la transcripcion fallo— antes de que el asistente piense.
  */
 export async function transcribirNotasDeVoz(conversacion: {
   id: number;

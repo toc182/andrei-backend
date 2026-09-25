@@ -11,6 +11,7 @@ import {
   obligatoriasQueFaltan,
   preguntaDeAreas,
   resumen,
+  trabajoFlaco,
   type DatosReporte,
   type ListasProyecto,
 } from '../src/services/whatsapp/datosReporte.js';
@@ -145,6 +146,13 @@ exigir(
     !pendientes.includes('novedades'),
   'sin fecha ni trabajo ejecutado el reporte no se puede guardar; las novedades si pueden faltar',
 );
+
+// ── un trabajo ejecutado de una linea ──────────────────────────────────────
+exigir(trabajoFlaco({ queSeHizo: 'Vaciamos concreto.' }),
+  'una linea suelta se marca para preguntarle si asi lo quiere');
+exigir(!trabajoFlaco({ queSeHizo: 'Vaciamos la losa del nivel 2 y se colocaron 6 zapatas con sus pedestales' }),
+  'un relato de verdad no se marca');
+exigir(!trabajoFlaco({}), 'y si todavia no ha contado nada, no hay nada que revisar');
 
 // ── el resumen que lee la persona ───────────────────────────────────────────
 const texto = resumen(

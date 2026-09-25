@@ -17,8 +17,14 @@ import { responder } from './entrantes.js';
 import { transcribirNotasDeVoz } from './transcripcion.js';
 import type { Usuario } from './herramientas.js';
 
-/** Lo que se espera a que la persona termine de escribir. */
-const ESPERA_MS = Number(process.env.WHATSAPP_ESPERA_MS ?? 8000);
+/**
+ * Lo que se espera a que la persona termine de escribir.
+ *
+ * Cinco segundos desde el 2026-09-25 (antes ocho): en la prueba de Ivan cada
+ * vuelta se sentia lenta, y esta espera es la mitad de la tardanza. Bajarla mas
+ * corta las ideas que llegan en dos mensajes.
+ */
+const ESPERA_MS = Number(process.env.WHATSAPP_ESPERA_MS ?? 5000);
 
 /** Cada cuanto se mira si hay algo que atender. */
 const TIC_MS = Number(process.env.WHATSAPP_TIC_MS ?? 2000);

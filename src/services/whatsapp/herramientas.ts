@@ -17,6 +17,7 @@ import {
   faltantes,
   preguntaDeAreas,
   resumen,
+  trabajoFlaco,
   CLIMAS,
   SECCIONES,
   type DatosReporte,
@@ -329,6 +330,14 @@ async function estado(ctx: Contexto, listas: ListasProyecto | null): Promise<unk
     proyecto_id: ctx.conversacion.proyectoId,
     fecha_de_hoy: hoyEnPanama(),
     ...(cerrada ? { no_se_puede_reportar_esa_fecha: cerrada } : {}),
+    ...(trabajoFlaco(datos)
+      ? {
+          revisar_trabajo:
+            'Lo que tienes anotado del trabajo ejecutado es muy corto para un reporte. ' +
+            'Léeselo tal cual y pregúntale si así lo quiere o si quiere agregar algo. ' +
+            'No lo escribas tú por ella. Si dice que así está bien, déjalo como está.',
+        }
+      : {}),
     anotado: listas ? resumen(datos, listas, ctx.fotos) : null,
     datos,
     fotos: ctx.fotos,

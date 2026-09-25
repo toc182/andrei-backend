@@ -362,6 +362,20 @@ export function preguntaDeAreas(
   return `${inicio}\n\n${lista}\n\nPuedes contestar con los números.`;
 }
 
+/**
+ * Un trabajo ejecutado de una linea suelta —«Vaciamos concreto»— es lo que la
+ * persona dijo, y nadie va a cambiarlo por ella; pero tampoco es un reporte.
+ * Cuando pasa, se le lee de vuelta y se le pregunta si asi lo quiere.
+ *
+ * Decision de Ivan del 2026-09-25: «la IA no es la que va a decidir que se
+ * pone, pero si puede chequear y preguntar».
+ */
+export function trabajoFlaco(datos: DatosReporte): boolean {
+  const dicho = (datos.queSeHizo ?? '').trim();
+  if (!dicho) return false;
+  return dicho.length < 60 && dicho.split(/\s+/).length < 10;
+}
+
 /** Lo que impide guardar el reporte, aunque ya se haya preguntado todo. */
 export function obligatoriasQueFaltan(datos: DatosReporte): Seccion[] {
   return SECCIONES.filter((s) => s.obligatoria && !contestada(datos, s.clave, 0));
