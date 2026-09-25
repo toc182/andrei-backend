@@ -394,15 +394,61 @@ const main = async () => {
     'lo que el modelo marco como preguntado deja de estar pendiente',
   );
 
+  // ── un area que no esta en la lista se agrega ──────────────────────────
+  const secuenciaAreas = await query<{ siguiente: string }>(
+    `SELECT (CASE WHEN is_called THEN last_value + 1 ELSE last_value END)::text AS siguiente
+       FROM proyecto_areas_id_seq`,
+  );
+  const areaNueva = Number(secuenciaAreas.rows[0].siguiente);
+  // Sin confirmar no se agrega: primero hay que preguntarle.
+  await guionizar([
+    usar('agregar_area', { nombre: 'Cajón pluvial' }),
+    texto('No tenemos «Cajón pluvial» en las áreas. ¿La agrego así?'),
+  ]);
+  await decir('Trabajamos también en el cajón pluvial');
+  await esperarRespuestas(9);
+  const sinConfirmar = await query(
+    `SELECT 1 FROM proyecto_areas WHERE proyecto_id = 1 AND nombre = 'Cajón pluvial'`,
+  );
+  exigir(sinConfirmar.rows.length === 0, 'un area nueva no se agrega sin preguntarle antes');
+
+  await guionizar([
+    usar('agregar_area', { nombre: 'Cajón pluvial', confirmado: true }),
+    usar('anotar', { areas: [areas.rows[0].id, areaNueva] }),
+    texto('Agregué Cajón pluvial a las áreas de la obra.'),
+  ]);
+  await decir('Sí, agrégala');
+  const areaMsg = await esperarRespuestas(10);
+  exigir(
+    areaMsg.length === 10 && Boolean(areaMsg[9].texto?.includes('Agregué Cajón pluvial')),
+    'cuando dice que si, el area se agrega y se le dice',
+  );
+  const areaFila = await query<{ id: number; activo: boolean; creado_por: number }>(
+    `SELECT id, activo, creado_por FROM proyecto_areas
+      WHERE proyecto_id = 1 AND nombre = 'Cajón pluvial'`,
+  );
+  exigir(
+    areaFila.rows.length === 1 && areaFila.rows[0].id === areaNueva && areaFila.rows[0].creado_por === userId,
+    'queda en las areas del proyecto, a nombre de quien la nombro',
+  );
+  const datosArea = await query<{ datos: { areas?: number[] } }>(
+    'SELECT datos FROM whatsapp_conversaciones WHERE id = $1',
+    [conv.rows[0].id],
+  );
+  exigir(
+    (datosArea.rows[0].datos.areas ?? []).includes(areaNueva),
+    'y el reporte queda senalando esa area nueva',
+  );
+
   // ── empezar de cero: lo decide la persona, no el asistente ─────────────
   await guionizar([
     usar('empezar_de_nuevo', {}),
     texto('Listo, empezamos de cero. ¿De qué obra es el reporte?'),
   ]);
   await decir('Mejor empecemos otro reporte desde cero');
-  const novena = await esperarRespuestas(9);
+  const novena = await esperarRespuestas(11);
   exigir(
-    novena.length === 9 && Boolean(novena[8].texto?.includes('de cero')),
+    novena.length === 11 && Boolean(novena[10].texto?.includes('de cero')),
     'si pide empezar de cero, se empieza de cero',
   );
   const conversaciones = await query<{ id: number; activa: boolean; datos: object; proyecto_id: number | null }>(
@@ -424,9 +470,9 @@ const main = async () => {
   // Sin guion: el Claude de mentira contesta error, que es justo lo que se
   // quiere probar.
   await decir('Mándame el borrador');
-  const decima = await esperarRespuestas(10, 25);
+  const decima = await esperarRespuestas(12, 25);
   exigir(
-    decima.length === 10 && Boolean(decima[9].texto?.includes('complicó')),
+    decima.length === 12 && Boolean(decima[11].texto?.includes('complicó')),
     'si el modelo no contesta, a la persona se le avisa en vez de dejarla esperando',
   );
   const intentos = await query<{ intentos: number; procesado_at: Date | null }>(

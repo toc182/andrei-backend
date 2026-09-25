@@ -11,8 +11,9 @@ import { query } from '../../database/config.js';
 import { loadUserPermissions } from '../../middleware/auth.js';
 import { HORA_PANAMA } from '../reportePdf.js';
 import { agregarALista } from '../../routes/proyectoListas.js';
+import { agregarArea } from '../../routes/proyectoAreas.js';
 import {
-  equipoParecido,
+  parecidoEnLista,
   fusionar,
   faltantes,
   preguntaDeAreas,
@@ -267,6 +268,31 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'agregar_area',
+    description:
+      'Agrega un area a la lista del proyecto cuando la persona nombra una zona que no ' +
+      'esta. Antes hay que decirle que no la tenemos y preguntarle si la agregamos con ese ' +
+      'nombre; solo cuando conteste que si se llama con confirmado. Devuelve su id para ' +
+      'anotarla con anotar. Si se parece a una que ya esta, no la agrega y te dice cual: ' +
+      'preguntale si es esa. Si ya te dijo que es otra zona, llamalo otra vez con es_otra.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        nombre: { type: 'string' },
+        confirmado: {
+          type: 'boolean',
+          description: 'La persona ya dijo que si a agregar esa area con ese nombre',
+        },
+        es_otra: {
+          type: 'boolean',
+          description: 'Solo cuando la persona ya dijo que no es el area parecida de la lista',
+        },
+      },
+      required: ['nombre', 'confirmado'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'preguntar_areas',
     description:
       'Le pregunta a la persona en que areas se trabajo. El mensaje sale con TODAS las areas ' +
@@ -490,7 +516,7 @@ export async function ejecutarHerramienta(
     }
 
     const listas = cache.listas ?? (cache.listas = await listasDe(proyectoId));
-    const parecido = equipoParecido(maquina, listas.equipos);
+    const parecido = parecidoEnLista(maquina, listas.equipos);
     if (parecido?.igual) {
       return {
         ok: false,
@@ -523,6 +549,70 @@ export async function ejecutarHerramienta(
         recuerde:
           'Anótala con anotar, con sus horas, y dile a la persona en una línea que la ' +
           'agregaste a los equipos de la obra.',
+      },
+    };
+  }
+
+  if (nombre === 'agregar_area') {
+    const proyectoId = ctx.conversacion.proyectoId;
+    if (proyectoId === null) {
+      return {
+        ok: false,
+        contenido: { error: 'Primero hay que elegir el proyecto con elegir_proyecto' },
+      };
+    }
+    if (!(await proyectosDe(ctx.usuario)).some((p) => p.id === proyectoId)) {
+      return { ok: false, contenido: { error: 'Esa persona ya no puede reportar en este proyecto' } };
+    }
+    const zona = typeof input.nombre === 'string' ? input.nombre.trim() : '';
+    if (!zona) return { ok: false, contenido: { error: 'El area necesita un nombre' } };
+    // Un area se queda en la obra para siempre, asi que no se agrega a espaldas
+    // de la persona: primero se le dice y se le pregunta (decision de Ivan,
+    // 2026-09-25). Lo comprueba el codigo, no las instrucciones del modelo.
+    if (input.confirmado !== true) {
+      return {
+        ok: false,
+        contenido: {
+          error:
+            `«${zona}» no está en las áreas de la obra. Díselo y pregúntale si la agregas ` +
+            'con ese nombre. Cuando diga que sí, vuelve a llamarlo con confirmado.',
+        },
+      };
+    }
+
+    const listas = cache.listas ?? (cache.listas = await listasDe(proyectoId));
+    const parecido = parecidoEnLista(zona, listas.areas);
+    if (parecido?.igual) {
+      return {
+        ok: false,
+        contenido: {
+          error: `Esa área ya está en la lista como «${parecido.equipo.nombre}»: usa esa`,
+          area: parecido.equipo,
+        },
+      };
+    }
+    if (parecido && input.es_otra !== true) {
+      return {
+        ok: false,
+        contenido: {
+          error:
+            `Se parece a «${parecido.equipo.nombre}», que ya está en la lista. Pregúntale si ` +
+            'es esa; si dice que es otra zona, vuelve a llamarlo con es_otra.',
+          area: parecido.equipo,
+        },
+      };
+    }
+
+    const agregada = await agregarArea(proyectoId, zona, ctx.usuario.id);
+    if (!agregada.ok) return { ok: false, contenido: { error: agregada.message } };
+    cache.listas = await listasDe(proyectoId);
+    return {
+      ok: true,
+      contenido: {
+        agregada: { area_id: agregada.fila.id, nombre: agregada.fila.nombre },
+        recuerde:
+          'Anótala con anotar y dile a la persona en una línea que la agregaste a las ' +
+          'áreas de la obra.',
       },
     };
   }

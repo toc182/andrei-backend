@@ -5,7 +5,7 @@
 // lo que diga, si el area o el puesto no son de ese proyecto, no entra.
 
 import {
-  equipoParecido,
+  parecidoEnLista,
   fusionar,
   faltantes,
   obligatoriasQueFaltan,
@@ -109,17 +109,17 @@ const MAQUINAS = [
   { id: 31, nombre: 'Grúa' },
   { id: 32, nombre: 'Mixer' },
 ];
-exigir(equipoParecido('Retro excavadora', MAQUINAS)?.igual === true,
+exigir(parecidoEnLista('Retro excavadora', MAQUINAS)?.igual === true,
   'la misma maquina escrita con otro espacio es la misma');
-exigir(equipoParecido('grua', MAQUINAS)?.equipo.id === 31,
+exigir(parecidoEnLista('grua', MAQUINAS)?.equipo.id === 31,
   'y sin tilde ni mayuscula tambien');
-const retro = equipoParecido('retro', MAQUINAS);
+const retro = parecidoEnLista('retro', MAQUINAS);
 exigir(retro?.equipo.id === 30 && retro.igual === false,
   'un nombre dentro de otro se parece, pero puede ser otra maquina');
-exigir(equipoParecido('Mixer 2', MAQUINAS)?.equipo.id === 32,
+exigir(parecidoEnLista('Mixer 2', MAQUINAS)?.equipo.id === 32,
   'y al reves: la de la lista dentro del nombre nuevo');
-exigir(equipoParecido('Minicargador', MAQUINAS) === null, 'una maquina distinta no se parece a nada');
-exigir(equipoParecido('Retroexcavadora', []) === null, 'con la lista vacia no se parece a nada');
+exigir(parecidoEnLista('Minicargador', MAQUINAS) === null, 'una maquina distinta no se parece a nada');
+exigir(parecidoEnLista('Retroexcavadora', []) === null, 'con la lista vacia no se parece a nada');
 
 // ── la pregunta de las areas ────────────────────────────────────────────────
 // En la prueba de Cesar (2026-09-18) el modelo nombro solo algunas y se dejo

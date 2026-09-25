@@ -324,22 +324,25 @@ function normalizar(nombre: string): string {
 }
 
 /**
- * La maquina de la lista que se parece a la que se quiere agregar, si hay una.
+ * Lo de la lista que se parece a lo que se quiere agregar, si hay algo.
+ *
+ * Vale para las maquinas y para las areas: las dos las puede agregar el
+ * asistente cuando la persona nombra una que no esta.
  *
  * `igual`: es la misma escrita de otra manera («Retro excavadora» y
  * «Retroexcavadora»); esa nunca se agrega. Si no, una contiene a la otra
  * («Retro» y «Retroexcavadora», «Mixer» y «Mixer 2»): puede ser la misma o no,
  * y eso solo lo sabe la persona. Un apodo que no se parece en nada no se caza.
  */
-export function equipoParecido(
+export function parecidoEnLista(
   nombre: string,
-  equipos: { id: number; nombre: string }[],
+  lista: { id: number; nombre: string }[],
 ): { equipo: { id: number; nombre: string }; igual: boolean } | null {
   const buscado = normalizar(nombre);
   if (!buscado) return null;
-  const igual = equipos.find((e) => normalizar(e.nombre) === buscado);
+  const igual = lista.find((e) => normalizar(e.nombre) === buscado);
   if (igual) return { equipo: igual, igual: true };
-  const parecido = equipos.find((e) => {
+  const parecido = lista.find((e) => {
     const otro = normalizar(e.nombre);
     return (
       Math.min(otro.length, buscado.length) >= 3 &&

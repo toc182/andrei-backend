@@ -53,6 +53,62 @@ router.get(
   }),
 );
 
+export type AreaAgregada =
+  | { ok: true; fila: AreaRow }
+  | { ok: false; status: 400 | 409; message: string };
+
+/**
+ * Agrega un área al proyecto.
+ *
+ * La usan el botón del formulario del reporte y el asistente de WhatsApp
+ * cuando el ingeniero nombra una zona que todavía no está en la lista: una
+ * sola manera de agregar un área, con su rastro. Quién puede hacerlo lo decide
+ * quien llama.
+ */
+export async function agregarArea(
+  proyectoId: number | string,
+  nombreCrudo: string,
+  usuarioId: number,
+): Promise<AreaAgregada> {
+  const nombre = nombreCrudo.trim();
+  if (!nombre) return { ok: false, status: 400, message: 'El nombre del área es obligatorio' };
+  if (nombre.length > 120) {
+    return { ok: false, status: 400, message: 'El nombre del área es demasiado largo' };
+  }
+
+  // Hay un índice único sobre (proyecto_id, lower(nombre)) para las activas.
+  // Se comprueba antes para poder dar un mensaje entendible en vez de dejar
+  // que reviente la restricción.
+  const repetida = await query(
+    `SELECT 1 FROM proyecto_areas
+      WHERE proyecto_id = $1 AND lower(nombre) = lower($2) AND activo = true`,
+    [proyectoId, nombre],
+  );
+  if (repetida.rows.length > 0) {
+    return { ok: false, status: 409, message: `El proyecto ya tiene un área "${nombre}"` };
+  }
+
+  const orden = await query<{ next: number }>(
+    `SELECT COALESCE(MAX(orden), 0) + 1 AS next
+       FROM proyecto_areas WHERE proyecto_id = $1`,
+    [proyectoId],
+  );
+
+  const result = await query<AreaRow>(
+    `INSERT INTO proyecto_areas (proyecto_id, nombre, orden, creado_por)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, proyecto_id, nombre, orden, activo`,
+    [proyectoId, nombre, orden.rows[0].next, usuarioId],
+  );
+
+  await registrarAudit(usuarioId, 'crear', 'proyecto_area', result.rows[0].id, {
+    proyecto_id: Number(proyectoId),
+    nombre,
+  });
+
+  return { ok: true, fila: result.rows[0] };
+}
+
 // POST /api/proyecto-areas/:proyectoId — agregar una
 router.post(
   '/:proyectoId',
@@ -60,48 +116,12 @@ router.post(
   checkPermission('reportes'),
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
-    const nombre = leerNombre(req);
-    if (!nombre) {
-      res
-        .status(400)
-        .json({ success: false, message: 'El nombre del área es obligatorio' });
+    const r = await agregarArea(req.params.proyectoId, leerNombre(req), req.user!.id);
+    if (!r.ok) {
+      res.status(r.status).json({ success: false, message: r.message });
       return;
     }
-
-    // Hay un índice único sobre (proyecto_id, lower(nombre)) para las activas.
-    // Se comprueba antes para poder dar un mensaje entendible en vez de dejar
-    // que reviente la restricción.
-    const repetida = await query(
-      `SELECT 1 FROM proyecto_areas
-        WHERE proyecto_id = $1 AND lower(nombre) = lower($2) AND activo = true`,
-      [req.params.proyectoId, nombre],
-    );
-    if (repetida.rows.length > 0) {
-      res
-        .status(409)
-        .json({ success: false, message: `El proyecto ya tiene un área "${nombre}"` });
-      return;
-    }
-
-    const orden = await query<{ next: number }>(
-      `SELECT COALESCE(MAX(orden), 0) + 1 AS next
-         FROM proyecto_areas WHERE proyecto_id = $1`,
-      [req.params.proyectoId],
-    );
-
-    const result = await query<AreaRow>(
-      `INSERT INTO proyecto_areas (proyecto_id, nombre, orden, creado_por)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, proyecto_id, nombre, orden, activo`,
-      [req.params.proyectoId, nombre, orden.rows[0].next, req.user!.id],
-    );
-
-    await registrarAudit(req.user!.id, 'crear', 'proyecto_area', result.rows[0].id, {
-      proyecto_id: Number(req.params.proyectoId),
-      nombre,
-    });
-
-    res.status(201).json({ success: true, data: result.rows[0] });
+    res.status(201).json({ success: true, data: r.fila });
   }),
 );
 
