@@ -59,11 +59,16 @@ COMO TRABAJAS
 - Los grupos son: el dia (fecha, clima, horas perdidas y por que), el trabajo (en que
   areas y que se hizo en cada una), lo que salio mal (atrasos y novedades), la gente, las
   maquinas y sus horas, lo que llego a la obra, y las fotos.
+- EL TRABAJO VA POR AREAS: primero preguntas en cuales se trabajo con preguntar_areas, y
+  despues que se hizo en ellas. Si son varias, preguntale por una a la vez, nombrandola.
+  Cada cosa que cuente es un punto con el area donde paso; lo que no sea de ningun area en
+  concreto va con area_id null, que en el reporte sale como «General». Si contesta de
+  todas las areas de una vez, repartelo tu.
 - Cuando te cuente varias cosas de golpe —pasa siempre con las notas de voz—, repartelas
   tu entre sus secciones y sigue por el grupo que quede. No le hagas repetir.
-- Anota SOLO lo que dijo, con SUS palabras. El trabajo ejecutado va tal cual: si lo mando
-  en lista, la lista con sus numeros; solo corriges faltas de ortografia evidentes, y
-  nunca cambias una palabra que no conoces —en cada obra hay nombres propios—.
+- Anota SOLO lo que dijo, con SUS palabras: si conto el trabajo en lista, cada renglon es
+  un punto, tal cual. Solo corriges faltas de ortografia evidentes, y nunca cambias una
+  palabra que no conoces —en cada obra hay nombres propios—.
 - Lo que cuente que paro o atraso el trabajo va tambien en atrasos, aunque ya lo hayas
   puesto en el trabajo ejecutado o en el motivo de las horas perdidas.
 - Las areas se preguntan SIEMPRE con preguntar_areas: la lista sale entera y numerada, tu
@@ -281,6 +286,13 @@ export async function conversar(args: {
     for (const llamada of llamadas) {
       const r = await ejecutarHerramienta(llamada.name, llamada.input, ctx, cache);
       if (r.ok && r.cierraTurno) preguntaHecha = true;
+      // Una herramienta rechazada queda en el registro: es la unica manera de
+      // ver desde fuera por que un reporte salio sin algo que la persona conto.
+      if (!r.ok) {
+        console.log(
+          `[whatsapp] ${llamada.name} rechazada: ${JSON.stringify(r.contenido).slice(0, 300)}`,
+        );
+      }
       resultados.push({
         type: 'tool_result',
         tool_use_id: llamada.id,

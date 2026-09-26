@@ -152,7 +152,7 @@ const main = async () => {
   // ── una nota de voz se oye y se anota ───────────────────────────────────
   await guionizarAudio(['Hoy vaciamos la losa del nivel 2 con la retroexcavadora']);
   await guionizar([
-    usar('anotar', { que_se_hizo: 'Vaciado de la losa del nivel 2' }),
+    usar('anotar', { trabajos: [{ area_id: null, texto: 'Vaciado de la losa del nivel 2' }] }),
     texto('Anotado lo del vaciado. ¿Cómo estuvo el clima?'),
   ]);
   await mandarNota();

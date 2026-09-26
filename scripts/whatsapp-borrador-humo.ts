@@ -147,7 +147,7 @@ const main = async () => {
     usar('anotar', {
       fecha: HOY,
       clima: 'Soleado',
-      que_se_hizo: 'Vaciado de losa del nivel 2',
+      trabajos: [{ area_id: null, texto: 'Vaciado de losa del nivel 2' }],
       areas: [areas.rows[0].id],
     }),
     texto('Anotado. Mándame las fotos cuando quieras.'),

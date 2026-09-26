@@ -44,9 +44,19 @@ const r1 = anotar({}, { clima: 'Lluvia parcial', horas_perdidas: 2, motivo: 'Llu
 exigir(r1.ok && r1.datos.clima === 'Lluvia parcial' && r1.datos.horasPerdidas === 2,
   'el clima y las horas perdidas se anotan');
 
-const r2 = anotar(r1.ok ? r1.datos : {}, { que_se_hizo: 'Vaciado de losa' });
-exigir(r2.ok && r2.datos.clima === 'Lluvia parcial' && r2.datos.queSeHizo === 'Vaciado de losa',
+const r2 = anotar(r1.ok ? r1.datos : {}, {
+  trabajos: [{ area_id: 10, texto: 'Vaciado de losa' }, { area_id: null, texto: 'Limpieza general' }],
+});
+exigir(r2.ok && r2.datos.clima === 'Lluvia parcial' && r2.datos.trabajos?.length === 2,
   'anotar algo nuevo no borra lo anotado antes');
+exigir(r2.ok && r2.datos.trabajos?.[1].areaId === null,
+  'un punto sin area se queda en «General»');
+exigir(!anotar({}, { trabajos: [{ area_id: 99, texto: 'algo' }] }).ok,
+  'un punto en un area de otro proyecto se rechaza');
+exigir(!anotar({}, { trabajos: [] }).ok, 'el trabajo ejecutado necesita al menos un punto');
+const viejo = anotar({}, { que_se_hizo: 'Vaciado de losa' });
+exigir(!viejo.ok && viejo.motivo.includes('trabajos'),
+  'un campo que ya no existe se rechaza y se dice como se manda ahora, en vez de perderse');
 
 const r3 = anotar({}, { areas: [10, 11, 10] });
 exigir(r3.ok && JSON.stringify(r3.datos.areas) === '[10,11]', 'las areas repetidas se juntan');
@@ -73,7 +83,8 @@ exigir(!anotar({}, { equipos: [{ equipo_id: 99, horas: 3 }] }).ok,
   'un equipo de otro proyecto se rechaza');
 exigir(!anotar({}, { entregas: [{ categoria_id: 99, descripcion: 'Arena' }] }).ok,
   'una categoria de otro proyecto se rechaza');
-exigir(!anotar({}, { que_se_hizo: '   ' }).ok, 'el trabajo ejecutado no puede ir en blanco');
+exigir(!anotar({}, { trabajos: [{ area_id: null, texto: '  ' }] }).ok,
+  'un punto en blanco no se anota');
 exigir(!anotar({}, { equipos: [{ equipo_id: 30, horas: 25 }] }).ok,
   'mas de 24 horas de una maquina se rechaza');
 
@@ -142,15 +153,15 @@ exigir(preguntaDeAreas(cincoAreas, '  ').startsWith('¿En qué áreas se trabaj�
 
 const pendientes = obligatoriasQueFaltan({ clima: 'Soleado' }).map((s) => String(s.clave));
 exigir(
-  pendientes.includes('fecha') && pendientes.includes('queSeHizo') &&
+  pendientes.includes('fecha') && pendientes.includes('trabajos') &&
     !pendientes.includes('novedades'),
   'sin fecha ni trabajo ejecutado el reporte no se puede guardar; las novedades si pueden faltar',
 );
 
 // ── un trabajo ejecutado de una linea ──────────────────────────────────────
-exigir(trabajoFlaco({ queSeHizo: 'Vaciamos concreto.' }),
+exigir(trabajoFlaco({ trabajos: [{ areaId: null, texto: 'Vaciamos concreto.' }] }),
   'una linea suelta se marca para preguntarle si asi lo quiere');
-exigir(!trabajoFlaco({ queSeHizo: 'Vaciamos la losa del nivel 2 y se colocaron 6 zapatas con sus pedestales' }),
+exigir(!trabajoFlaco({ trabajos: [{ areaId: null, texto: 'Vaciamos la losa del nivel 2 y se colocaron 6 zapatas con sus pedestales' }] }),
   'un relato de verdad no se marca');
 exigir(!trabajoFlaco({}), 'y si todavia no ha contado nada, no hay nada que revisar');
 
@@ -161,7 +172,7 @@ const texto = resumen(
     horasPerdidas: 2,
     motivo: 'Lluvia de 2 a 4',
     areas: [10],
-    queSeHizo: 'Vaciado de losa',
+    trabajos: [{ areaId: 10, texto: 'Vaciado de losa' }],
     personal: [{ puestoId: 20, cantidad: 3 }, { puestoId: 21, cantidad: 0 }],
     equipos: [{ equipoId: 30, unidades: 1, horas: 6 }],
     entregas: [{ categoriaId: 40, descripcion: 'Cemento', cantidad: 40, unidad: 'sacos', notas: null }],

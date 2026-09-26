@@ -181,11 +181,27 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
         horas_perdidas: { type: 'number' },
         motivo: { type: 'string' },
         areas: { type: 'array', items: { type: 'integer' } },
-        que_se_hizo: {
-          type: 'string',
+        trabajos: {
+          type: 'array',
           description:
-            'Con las palabras de la persona; si lo mando en lista numerada, su lista tal cual. ' +
-            'Solo se corrigen faltas de ortografia evidentes.',
+            'El trabajo ejecutado, en puntos y cada uno con su area. Con las palabras de la ' +
+            'persona: si lo conto en lista, un punto por renglon, tal cual. Solo se corrigen ' +
+            'faltas de ortografia evidentes. Manda la lista ENTERA cada vez: reemplaza a la ' +
+            'anterior.',
+          items: {
+            type: 'object',
+            properties: {
+              area_id: {
+                type: 'integer',
+                description:
+                  'El area donde paso eso. Dejalo fuera si no es de ningun area: sale como ' +
+                  '«General».',
+              },
+              texto: { type: 'string' },
+            },
+            required: ['texto'],
+            additionalProperties: false,
+          },
         },
         atrasos: { type: 'string' },
         novedades: { type: 'string' },

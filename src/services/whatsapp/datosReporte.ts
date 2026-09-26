@@ -29,7 +29,7 @@ export const SECCIONES: Seccion[] = [
   { clave: 'clima', nombre: 'Clima', obligatoria: true, grupo: 'el día' },
   { clave: 'horasPerdidas', nombre: 'Horas perdidas y su motivo', obligatoria: false, grupo: 'el día' },
   { clave: 'areas', nombre: 'Áreas de trabajo', obligatoria: false, grupo: 'el trabajo' },
-  { clave: 'queSeHizo', nombre: 'Trabajo ejecutado', obligatoria: true, grupo: 'el trabajo' },
+  { clave: 'trabajos', nombre: 'Trabajo ejecutado', obligatoria: true, grupo: 'el trabajo' },
   { clave: 'atrasos', nombre: 'Atrasos o impedimentos', obligatoria: false, grupo: 'lo que salió mal' },
   { clave: 'novedades', nombre: 'Novedades del día', obligatoria: false, grupo: 'lo que salió mal' },
   { clave: 'personal', nombre: 'Personal por puesto', obligatoria: false, grupo: 'la gente' },
@@ -52,6 +52,13 @@ export interface FilaEquipo {
   horas: number;
 }
 
+/** Un punto del trabajo ejecutado: que se hizo, y en que area. */
+export interface FilaTrabajo {
+  /** null = «General», lo que no es de ningun area. */
+  areaId: number | null;
+  texto: string;
+}
+
 export interface FilaEntrega {
   categoriaId: number;
   descripcion: string;
@@ -67,6 +74,9 @@ export interface DatosReporte {
   horasPerdidas?: number;
   motivo?: string;
   areas?: number[];
+  /** Los puntos del trabajo ejecutado, por area. Es lo que guarda el reporte. */
+  trabajos?: FilaTrabajo[];
+  /** Lo de antes: un solo texto. Solo queda para una conversacion a medias. */
   queSeHizo?: string;
   atrasos?: string;
   novedades?: string;
@@ -117,6 +127,12 @@ export type Fusion = { ok: true; datos: DatosReporte } | Rechazo;
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Lo que anotar sabe recibir. Cualquier otra cosa es un error, no un olvido. */
+const CAMPOS = [
+  'fecha', 'clima', 'horas_perdidas', 'motivo', 'areas', 'trabajos', 'atrasos',
+  'novedades', 'personal', 'equipos', 'entregas', 'preguntadas',
+];
+
 /**
  * Mete en los datos lo que el asistente acaba de entender.
  *
@@ -133,6 +149,20 @@ export function fusionar(
   listas: ListasProyecto,
 ): Fusion {
   const nuevo: DatosReporte = { ...datos };
+
+  // Un campo que no se conoce se RECHAZA, no se ignora. Cuando el trabajo
+  // ejecutado paso de un texto a puntos por area (2026-09-26), el modelo siguio
+  // mandando `que_se_hizo` un rato: se perdia sin decir nada y el reporte salia
+  // sin el trabajo. Un error le dice como se manda ahora.
+  const desconocidos = Object.keys(parche).filter((k) => !CAMPOS.includes(k));
+  if (desconocidos.length > 0) {
+    return {
+      ok: false,
+      motivo:
+        `No conozco ${desconocidos.join(', ')}. El trabajo ejecutado va en trabajos, ` +
+        'una lista de puntos {area_id, texto}; area_id null es «General».',
+    };
+  }
 
   if ('fecha' in parche) {
     const f = texto(parche.fecha);
@@ -157,10 +187,28 @@ export function fusionar(
   }
 
   if ('motivo' in parche) nuevo.motivo = texto(parche.motivo) ?? undefined;
-  if ('que_se_hizo' in parche) {
-    const q = texto(parche.que_se_hizo);
-    if (!q) return { ok: false, motivo: 'El trabajo ejecutado no puede ir en blanco' };
-    nuevo.queSeHizo = q;
+
+  if ('trabajos' in parche) {
+    if (!Array.isArray(parche.trabajos)) {
+      return { ok: false, motivo: 'El trabajo ejecutado va en una lista de puntos' };
+    }
+    const filas: FilaTrabajo[] = [];
+    for (const t of parche.trabajos) {
+      if (typeof t !== 'object' || t === null) {
+        return { ok: false, motivo: 'Cada punto lleva area_id y texto' };
+      }
+      const r = t as Record<string, unknown>;
+      const dicho = texto(r.texto);
+      if (!dicho) return { ok: false, motivo: 'Un punto del trabajo no puede ir en blanco' };
+      // null es «General»: lo que se hizo pero no es de un area concreta.
+      const areaId = r.area_id === null || r.area_id === undefined ? null : entero(r.area_id);
+      if (areaId !== null && !listas.areas.some((a) => a.id === areaId)) {
+        return { ok: false, motivo: `El área ${String(r.area_id)} no es de este proyecto` };
+      }
+      filas.push({ areaId, texto: dicho });
+    }
+    if (filas.length === 0) return { ok: false, motivo: 'Hace falta al menos un punto' };
+    nuevo.trabajos = filas;
   }
   if ('atrasos' in parche) nuevo.atrasos = texto(parche.atrasos) ?? undefined;
   if ('novedades' in parche) nuevo.novedades = texto(parche.novedades) ?? undefined;
@@ -277,8 +325,8 @@ function contestada(datos: DatosReporte, clave: Seccion['clave'], fotos: number)
       return datos.horasPerdidas !== undefined;
     case 'areas':
       return datos.areas !== undefined;
-    case 'queSeHizo':
-      return datos.queSeHizo !== undefined;
+    case 'trabajos':
+      return (datos.trabajos?.length ?? 0) > 0 || datos.queSeHizo !== undefined;
     case 'atrasos':
       return datos.atrasos !== undefined;
     case 'novedades':
@@ -384,7 +432,8 @@ export function preguntaDeAreas(
  * pone, pero si puede chequear y preguntar».
  */
 export function trabajoFlaco(datos: DatosReporte): boolean {
-  const dicho = (datos.queSeHizo ?? '').trim();
+  const dicho = (datos.trabajos ?? []).map((t) => t.texto).join(' ').trim()
+    || (datos.queSeHizo ?? '').trim();
   if (!dicho) return false;
   return dicho.length < 60 && dicho.split(/\s+/).length < 10;
 }
@@ -413,7 +462,15 @@ export function resumen(
   if (datos.areas?.length) {
     lineas.push(`Áreas: ${datos.areas.map((id) => nombre(listas.areas, id)).join(', ')}`);
   }
-  if (datos.queSeHizo) lineas.push(`Trabajo: ${datos.queSeHizo}`);
+  if (datos.trabajos?.length) {
+    lineas.push('Trabajo:');
+    for (const t of datos.trabajos) {
+      const donde = t.areaId === null ? 'General' : nombre(listas.areas, t.areaId);
+      lineas.push(`  · ${donde}: ${t.texto}`);
+    }
+  } else if (datos.queSeHizo) {
+    lineas.push(`Trabajo: ${datos.queSeHizo}`);
+  }
   if (datos.personal?.length) {
     const gente = datos.personal
       .filter((p) => p.cantidad > 0)

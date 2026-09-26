@@ -25,8 +25,12 @@ function comoCuerpoDeReporte(datos: DatosReporte) {
     clima: datos.clima,
     horas_perdidas: datos.horasPerdidas ?? null,
     motivo: datos.motivo ?? null,
-    areas: datos.areas ?? [],
-    que_se_hizo: datos.queSeHizo,
+    // El reporte guarda el trabajo en puntos por area; las areas del dia son
+    // las que tienen puntos, asi que ya no se mandan aparte. `que_se_hizo` solo
+    // queda por si una conversacion venia a medias de antes del cambio.
+    ...(datos.trabajos?.length
+      ? { trabajos: datos.trabajos.map((t) => ({ area_id: t.areaId, texto: t.texto })) }
+      : { areas: datos.areas ?? [], que_se_hizo: datos.queSeHizo }),
     atrasos: datos.atrasos ?? null,
     novedades: datos.novedades ?? null,
     personal: (datos.personal ?? []).map((p) => ({

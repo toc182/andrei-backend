@@ -174,7 +174,7 @@ const main = async () => {
       clima: 'Lluvia parcial',
       horas_perdidas: 2,
       motivo: 'Lluvia de 2 a 4',
-      que_se_hizo: 'Vaciado de la losa del nivel 2',
+      trabajos: [{ area_id: areas.rows[0].id, texto: 'Vaciado de la losa del nivel 2' }],
       areas: [areas.rows[0].id],
       personal: [{ puesto_id: puestos.rows[0].id, cantidad: 3 }],
     }),
@@ -200,7 +200,7 @@ const main = async () => {
   const d1 = datos1.rows[0].datos;
   exigir(
     d1.clima === 'Lluvia parcial' &&
-      d1.queSeHizo === 'Vaciado de la losa del nivel 2' &&
+      (d1.trabajos as { texto: string }[])[0]?.texto === 'Vaciado de la losa del nivel 2' &&
       Array.isArray(d1.areas) &&
       (d1.areas as number[])[0] === areas.rows[0].id,
     'lo que el modelo anoto queda guardado en la conversacion',
