@@ -144,9 +144,11 @@ const main = async () => {
   );
 
   // ── primer turno: pide el reporte y el asistente elige la obra ──────────
+  // El numero que contesta la persona es la POSICION en la lista que manda el
+  // sistema, no el id: el proyecto de pruebas es el unico suyo, o sea el 1.
   await guionizar([
     usar('ver_proyectos', {}),
-    usar('elegir_proyecto', { proyecto_id: 1 }),
+    usar('elegir_proyecto', { numero_de_la_lista: 1 }),
     texto('Reporte diario de PRUEBAS1, hoy. Cuéntame qué se hizo.'),
   ]);
   await decir('Ayúdame a redactar el reporte diario');
@@ -155,6 +157,14 @@ const main = async () => {
   exigir(
     primera.length === 1 && Boolean(primera[0].texto?.includes('Cuéntame qué se hizo')),
     'el asistente contesta por WhatsApp lo que dijo el modelo',
+  );
+  const elegido = await query<{ proyecto_id: number }>(
+    'SELECT proyecto_id FROM whatsapp_conversaciones WHERE telefono = $1 AND activa',
+    [NUMERO],
+  );
+  exigir(
+    elegido.rows[0]?.proyecto_id === 1,
+    'el numero de la lista lo resuelve el sistema, no el modelo',
   );
 
   const conv = await query<{ id: number; modo: string; proyecto_id: number; user_id: number }>(

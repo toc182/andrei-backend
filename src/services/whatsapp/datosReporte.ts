@@ -418,8 +418,24 @@ export function preguntaDeAreas(
   areas: { id: number; nombre: string }[],
   pregunta?: string | null,
 ): string {
-  const inicio = pregunta?.trim() || '¿En qué áreas se trabajó?';
-  const lista = areas.map((a, i) => `${i + 1}. ${a.nombre}`).join('\n');
+  return preguntaDeLista(areas, pregunta, '¿En qué áreas se trabajó?');
+}
+
+/**
+ * Una pregunta con su lista numerada, escrita por el sistema.
+ *
+ * El numero que ve la persona es la POSICION en esta lista, y quien la manda es
+ * quien lo resuelve despues. Pedirle al modelo que traduzca «5» a un id es
+ * justo lo que salio mal el 2026-09-26: Ivan contesto 5 por «Proyecto de
+ * Prueba» y el asistente eligio la obra cuyo id era 5, que era otra.
+ */
+export function preguntaDeLista(
+  cosas: { id: number; nombre: string }[],
+  pregunta: string | null | undefined,
+  porDefecto: string,
+): string {
+  const inicio = pregunta?.trim() || porDefecto;
+  const lista = cosas.map((c, i) => `${i + 1}. ${c.nombre}`).join('\n');
   return `${inicio}\n\n${lista}\n\nPuedes contestar con los números.`;
 }
 

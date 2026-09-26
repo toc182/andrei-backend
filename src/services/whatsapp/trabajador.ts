@@ -14,17 +14,19 @@ import {
   type Conversacion,
 } from './conversacion.js';
 import { responder } from './entrantes.js';
+import { marcarLeidoYEscribiendo } from './cliente.js';
 import { transcribirNotasDeVoz } from './transcripcion.js';
 import type { Usuario } from './herramientas.js';
 
 /**
  * Lo que se espera a que la persona termine de escribir.
  *
- * Cinco segundos desde el 2026-09-25 (antes ocho): en la prueba de Ivan cada
- * vuelta se sentia lenta, y esta espera es la mitad de la tardanza. Bajarla mas
- * corta las ideas que llegan en dos mensajes.
+ * Tres segundos desde el 2026-09-26 (fueron ocho y luego cinco). Para lo que
+ * sirve de verdad es para las fotos: treinta y una fotos son treinta y un
+ * mensajes, y sin esta espera el asistente contestaria a cada una. Quien
+ * escribe de corrido no la necesita, y por eso se acorto.
  */
-const ESPERA_MS = Number(process.env.WHATSAPP_ESPERA_MS ?? 5000);
+const ESPERA_MS = Number(process.env.WHATSAPP_ESPERA_MS ?? 3000);
 
 /** Cada cuanto se mira si hay algo que atender. */
 const TIC_MS = Number(process.env.WHATSAPP_TIC_MS ?? 2000);
@@ -139,6 +141,21 @@ async function atender(p: Pendiente): Promise<void> {
   const ids = await recoger(conversacion);
   if (ids.length === 0) return;
 
+  // Meta solo ensena «escribiendo…» 25 segundos, y un turno con notas de voz y
+  // varias vueltas de herramientas puede durar mas. Se renueva mientras dure:
+  // si no, la persona ve un silencio y no sabe si le estan contestando.
+  const ultimo = ids[ids.length - 1];
+  const wa = await query<{ wa_id: string | null }>(
+    'SELECT wa_id FROM whatsapp_mensajes WHERE id = $1',
+    [ultimo],
+  );
+  const waId = wa.rows[0]?.wa_id ?? null;
+  const escribiendo = waId
+    ? setInterval(() => {
+      void marcarLeidoYEscribiendo(waId).catch(() => undefined);
+    }, 20_000)
+    : null;
+
   try {
     // Las notas de voz se leen antes de pensar nada: el asistente no oye, lee.
     await transcribirNotasDeVoz(conversacion);
@@ -166,6 +183,8 @@ async function atender(p: Pendiente): Promise<void> {
       await responder(p.telefono, NO_PUDE, conversacion.id).catch(() => undefined);
       await marcarAtendidos(ids);
     }
+  } finally {
+    if (escribiendo) clearInterval(escribiendo);
   }
 }
 

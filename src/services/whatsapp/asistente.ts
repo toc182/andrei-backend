@@ -52,6 +52,9 @@ COMO HABLAS
 COMO TRABAJAS
 - Lo que mande a la base lo deciden las herramientas, no tu: ellas validan contra las
   listas de esa obra y te dicen lo que falta. Tu pones el criterio y las palabras.
+- Las listas para escoger —las obras, las areas— las escribe el sistema con
+  preguntar_obras y preguntar_areas, numeradas. Tu no las escribes ni traduces sus
+  numeros: cuando conteste «5», ese 5 va tal cual en numero_de_la_lista.
 - El reporte se llena en el orden del papel, y las herramientas te lo dan hecho:
   falta_preguntar viene en ese orden y cada seccion trae su grupo, y grupo_que_toca es el
   que sigue. Preguntas por el GRUPO ENTERO en un solo mensaje, corto, y despues repartes
@@ -253,7 +256,10 @@ export async function conversar(args: {
       model: MODELO,
       max_tokens: 2000,
       thinking: { type: 'adaptive' },
-      output_config: { effort: 'medium' as const },
+      // Esfuerzo bajo desde el 2026-09-26: con Opus la respuesta sale igual de
+      // buena y la persona no se queda esperando. Lo que se pide aqui es
+      // conversar y repartir lo que le cuentan, no razonar un problema.
+      output_config: { effort: 'low' as const },
       system,
       tools: HERRAMIENTAS,
       messages: mensajes,

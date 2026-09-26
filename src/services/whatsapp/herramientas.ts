@@ -14,6 +14,7 @@ import { agregarALista } from '../../routes/proyectoListas.js';
 import { agregarArea } from '../../routes/proyectoAreas.js';
 import {
   parecidoEnLista,
+  preguntaDeLista,
   fusionar,
   faltantes,
   preguntaDeAreas,
@@ -155,14 +156,36 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'preguntar_obras',
+    description:
+      'Le manda la lista de las obras donde puede reportar, numerada. La escribe el ' +
+      'sistema, no usted. Uselo cuando tenga varias y haya que preguntarle cual. Despues ' +
+      'de llamarlo no escriba nada mas en ese turno: la pregunta ya salio. Cuando conteste ' +
+      'con un numero, ese numero va en elegir_proyecto como numero_de_la_lista.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pregunta: {
+          type: 'string',
+          description: 'La frase que va antes de la lista, sin nombrar obras',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'elegir_proyecto',
     description:
       'Fija el proyecto del reporte y devuelve sus listas (areas, puestos, equipos, ' +
-      'categorias de entrega) y sus ultimos reportes. Hay que llamarlo antes de anotar nada.',
+      'categorias de entrega) y sus ultimos reportes. Hay que llamarlo antes de anotar nada. ' +
+      'Si la persona contesto con un numero de la lista que mando preguntar_obras, manda ese ' +
+      'numero en numero_de_la_lista y NO adivines el proyecto_id: no son lo mismo.',
     input_schema: {
       type: 'object',
-      properties: { proyecto_id: { type: 'integer' } },
-      required: ['proyecto_id'],
+      properties: {
+        proyecto_id: { type: 'integer' },
+        numero_de_la_lista: { type: 'integer' },
+      },
       additionalProperties: false,
     },
   },
@@ -440,9 +463,40 @@ export async function ejecutarHerramienta(
     };
   }
 
+  if (nombre === 'preguntar_obras') {
+    const proyectos = await proyectosDe(ctx.usuario);
+    if (proyectos.length === 0) {
+      return { ok: false, contenido: { error: 'Esta persona no tiene ninguna obra donde reportar' } };
+    }
+    const pregunta = typeof input.pregunta === 'string' ? input.pregunta : null;
+    const salio = await responder(
+      ctx.conversacion.telefono,
+      preguntaDeLista(proyectos, pregunta, '¿De qué obra es el reporte?'),
+      ctx.conversacion.id,
+    );
+    return salio
+      ? {
+          ok: true,
+          cierraTurno: true,
+          contenido: {
+            preguntado: 'La lista de obras salió numerada',
+            recuerde:
+              'Cuando conteste con un número, mándalo en elegir_proyecto como ' +
+              'numero_de_la_lista. Ese número es la posición en esta lista, no el id.',
+          },
+        }
+      : { ok: false, contenido: { error: 'No se pudo mandar la lista' } };
+  }
+
   if (nombre === 'elegir_proyecto') {
-    const proyectoId = Number(input.proyecto_id);
     const permitidos = await proyectosDe(ctx.usuario);
+    // El numero es la POSICION en la lista que mando el sistema. Probandolo
+    // (Ivan, 2026-09-26) contesto «5» y el modelo eligio la obra con id 5, que
+    // era otra: el numero lo resuelve el codigo, no el modelo.
+    const porNumero = input.numero_de_la_lista !== undefined
+      ? permitidos[Number(input.numero_de_la_lista) - 1]
+      : undefined;
+    const proyectoId = porNumero ? porNumero.id : Number(input.proyecto_id);
     const elegido = permitidos.find((p) => p.id === proyectoId);
     if (!elegido) {
       return {
