@@ -380,11 +380,15 @@ async function estado(ctx: Contexto, listas: ListasProyecto | null): Promise<unk
     anotado: listas ? resumen(datos, listas, ctx.fotos) : null,
     datos,
     fotos: ctx.fotos,
+    // Agrupadas: lo de un mismo grupo se pregunta en un solo mensaje, y la
+    // respuesta se reparte entre sus secciones.
     falta_preguntar: faltantes(datos, ctx.fotos, listas).map((s) => ({
       seccion: s.clave,
       nombre: s.nombre,
       obligatoria: s.obligatoria,
+      grupo: s.grupo,
     })),
+    grupo_que_toca: faltantes(datos, ctx.fotos, listas)[0]?.grupo ?? null,
   };
 }
 

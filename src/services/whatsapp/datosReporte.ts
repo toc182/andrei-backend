@@ -12,24 +12,30 @@ export interface Seccion {
   nombre: string;
   /** Sin esto el reporte no se puede guardar. */
   obligatoria: boolean;
+  /**
+   * Las secciones que se preguntan juntas, en un solo mensaje. Ivan, probandolo
+   * el 2026-09-25: «cada pregunta toma mucho tiempo, puede preguntar varias
+   * cosas a la vez... luego yo le respondo, y tiene que analizar que va en cada
+   * seccion».
+   */
+  grupo: string;
 }
 
-// El orden es el de la conversacion, y lo eligio Ivan el 2026-09-25 probandolo:
-// en la obra se trabaja POR AREAS, asi que lo primero que se pregunta es en
-// cuales se trabajo —con su lista— y despues que se hizo. Preguntar primero
-// «que se hizo» y despues las areas se sentia al reves.
+// El orden es el del reporte en la pantalla, y lo repaso Ivan el 2026-09-25:
+// el dia, el trabajo por areas, lo que salio mal, la gente, las maquinas, lo
+// que llego y las fotos. Las secciones de un mismo grupo se preguntan juntas.
 export const SECCIONES: Seccion[] = [
-  { clave: 'fecha', nombre: 'Fecha del reporte', obligatoria: true },
-  { clave: 'areas', nombre: 'Áreas de trabajo', obligatoria: false },
-  { clave: 'queSeHizo', nombre: 'Trabajo ejecutado', obligatoria: true },
-  { clave: 'clima', nombre: 'Clima', obligatoria: true },
-  { clave: 'horasPerdidas', nombre: 'Horas perdidas y su motivo', obligatoria: false },
-  { clave: 'atrasos', nombre: 'Atrasos o impedimentos', obligatoria: false },
-  { clave: 'novedades', nombre: 'Novedades del día', obligatoria: false },
-  { clave: 'personal', nombre: 'Personal por puesto', obligatoria: false },
-  { clave: 'equipos', nombre: 'Equipo y sus horas', obligatoria: false },
-  { clave: 'entregas', nombre: 'Lo que llegó a la obra', obligatoria: false },
-  { clave: 'fotos', nombre: 'Fotos del día', obligatoria: false },
+  { clave: 'fecha', nombre: 'Fecha del reporte', obligatoria: true, grupo: 'el día' },
+  { clave: 'clima', nombre: 'Clima', obligatoria: true, grupo: 'el día' },
+  { clave: 'horasPerdidas', nombre: 'Horas perdidas y su motivo', obligatoria: false, grupo: 'el día' },
+  { clave: 'areas', nombre: 'Áreas de trabajo', obligatoria: false, grupo: 'el trabajo' },
+  { clave: 'queSeHizo', nombre: 'Trabajo ejecutado', obligatoria: true, grupo: 'el trabajo' },
+  { clave: 'atrasos', nombre: 'Atrasos o impedimentos', obligatoria: false, grupo: 'lo que salió mal' },
+  { clave: 'novedades', nombre: 'Novedades del día', obligatoria: false, grupo: 'lo que salió mal' },
+  { clave: 'personal', nombre: 'Personal por puesto', obligatoria: false, grupo: 'la gente' },
+  { clave: 'equipos', nombre: 'Equipo y sus horas', obligatoria: false, grupo: 'las máquinas' },
+  { clave: 'entregas', nombre: 'Lo que llegó a la obra', obligatoria: false, grupo: 'lo que llegó' },
+  { clave: 'fotos', nombre: 'Fotos del día', obligatoria: false, grupo: 'las fotos' },
 ];
 
 export const CLIMAS = ['Soleado', 'Nublado', 'Lluvia parcial', 'Lluvia todo el día'] as const;
