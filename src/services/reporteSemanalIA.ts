@@ -19,6 +19,11 @@ import { jsonSchemaOutputFormat } from '@anthropic-ai/sdk/helpers/json-schema';
 import { estaConfigurado, obtenerCliente } from './asistentePagos/cliente.js';
 import { query } from '../database/config.js';
 import { diasDeLaSemana, domingoDe } from './reporteSemana.js';
+import {
+  agruparTrabajos,
+  trabajosComoTexto,
+  type TrabajoGuardado,
+} from './reporteTrabajos.js';
 
 export { estaConfigurado as iaConfigurada };
 
@@ -126,12 +131,12 @@ const FORMATO = {
 } as const;
 
 /** Lo que dicen los diarios de esa semana, ordenados por día. */
-async function diariosDeLaSemana(proyectoId: number, lunes: string): Promise<DiaParaIA[]> {
+export async function diariosDeLaSemana(proyectoId: number, lunes: string): Promise<DiaParaIA[]> {
   const domingo = domingoDe(lunes);
   const reportes = await query<{
     id: number; numero: string; fecha: Date; clima: string;
     horas_perdidas: string | null; motivo: string | null;
-    que_se_hizo: string; atrasos: string | null; novedades: string | null;
+    que_se_hizo: string | null; atrasos: string | null; novedades: string | null;
   }>(
     `SELECT id, numero, fecha, clima, horas_perdidas, motivo, que_se_hizo, atrasos, novedades
        FROM proyecto_reportes
@@ -143,12 +148,20 @@ async function diariosDeLaSemana(proyectoId: number, lunes: string): Promise<Dia
   if (reportes.rows.length === 0) return [];
 
   const ids = reportes.rows.map((r) => r.id);
-  const [areas, personal, equipos, entregas] = await Promise.all([
+  const [areas, trabajos, personal, equipos, entregas] = await Promise.all([
     query<{ reporte_id: number; nombre: string }>(
       `SELECT ra.reporte_id, a.nombre
          FROM proyecto_reporte_areas ra
          JOIN proyecto_areas a ON a.id = ra.area_id
         WHERE ra.reporte_id = ANY($1)`,
+      [ids],
+    ),
+    query<TrabajoGuardado & { reporte_id: number }>(
+      `SELECT t.reporte_id, t.area_id, a.nombre AS area_nombre, t.texto
+         FROM proyecto_reporte_trabajos t
+         LEFT JOIN proyecto_areas a ON a.id = t.area_id
+        WHERE t.reporte_id = ANY($1)
+        ORDER BY t.reporte_id, t.orden, t.id`,
       [ids],
     ),
     query<{ reporte_id: number; puesto: string; empresa: string | null; cantidad: number }>(
@@ -183,8 +196,21 @@ async function diariosDeLaSemana(proyectoId: number, lunes: string): Promise<Dia
     clima: r.clima,
     horas_perdidas: r.horas_perdidas === null ? 0 : Number(r.horas_perdidas),
     motivo: r.motivo,
-    areas: porReporte(areas.rows, r.id).map((a) => a.nombre),
-    que_se_hizo: r.que_se_hizo,
+    // Un diario por areas se le cuenta al modelo con la misma forma que uno de
+    // antes: sus areas y su trabajo como texto, un renglon por area.
+    ...(() => {
+      const puntos = porReporte(trabajos.rows, r.id);
+      if (puntos.length === 0) {
+        return {
+          areas: porReporte(areas.rows, r.id).map((a) => a.nombre),
+          que_se_hizo: r.que_se_hizo ?? '',
+        };
+      }
+      return {
+        areas: agruparTrabajos(puntos).map((g) => g.nombre),
+        que_se_hizo: trabajosComoTexto(puntos),
+      };
+    })(),
     atrasos: r.atrasos,
     novedades: r.novedades,
     personal: porReporte(personal.rows, r.id).map((p) => ({

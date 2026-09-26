@@ -9,7 +9,8 @@ src/
 ├── routes/ # 36 route files — one per domain
 ├── middleware/ # auth.ts (JWT + permissions), asyncHandler.ts
 ├── services/ # storage.ts, emailService.ts, pdfGenerator.ts, auditLog.ts, dailyNotification.ts, cronogramaEngine.ts, partidasProyecto.ts, constanciaPdf.ts, asistentePagos/
-│                # reporte diario: reportePdf.ts, reporteNumero.ts, reporteCambios.ts, reporteEnvio.ts
+│                # reporte diario: reportePdf.ts, reporteNumero.ts, reporteCambios.ts, reporteEnvio.ts,
+│                #   reporteTrabajos.ts (trabajo ejecutado por áreas; reportes de antes = que_se_hizo)
 │                # reporte semanal: reporteSemana.ts, semanaCerrada.ts, reporteSemanalDatos.ts,
 │                #   reporteSemanalPdf.ts, reporteSemanalEnvio.ts, reporteSemanalIA.ts,
 │                #   reporteSemanalCambios.ts; reportePdfComun.ts es lo que los dos papeles comparten

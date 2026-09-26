@@ -253,7 +253,7 @@ const main = async () => {
     proyectoNombre: 'Prueba', autorNombre: 'Prueba', clima: 'Soleado',
     horasPerdidas: null, motivo: null, personalCalificado: 0, ayudantes: 0,
     equipo: [], personal: [], equipos: [], entregas: [], areas: [],
-    queSeHizo: 'Prueba', atrasos: null, novedades: null, correcciones: [],
+    trabajos: [], queSeHizo: 'Prueba', atrasos: null, novedades: null, correcciones: [],
     fotos: [],
   };
   const porHoja = async (pdf: Buffer) => {

@@ -19,6 +19,7 @@ import {
 
 import { nombreEmisor, nombrePropio, type Consorcio } from './consorcioProyecto.js';
 import type { CambioLegible, Trozo } from './reporteCambios.js';
+import { agruparTrabajos, type TrabajoGuardado } from './reporteTrabajos.js';
 
 // Las piezas comunes se siguen pudiendo importar desde aqui: rutas y pruebas
 // las piden a este modulo desde antes de que existiera el reporte semanal.
@@ -61,8 +62,14 @@ export interface ReportePdfInput {
     categoria: string; descripcion: string;
     cantidad: number | null; unidad: string | null; notas: string | null;
   }[];
+  /**
+   * El trabajo ejecutado por areas. Vacio en un reporte de antes del cambio,
+   * que trae su texto en queSeHizo y su lista de areas aparte, y se imprime
+   * como se imprimia.
+   */
+  trabajos: TrabajoGuardado[];
   areas: string[];
-  queSeHizo: string;
+  queSeHizo: string | null;
   atrasos: string | null;
   novedades: string | null;
   /** En el orden del reporte. Sin leyenda, la foto sale solo con su numero. */
@@ -254,6 +261,21 @@ export function armarHtml(
   const texto = (v: string | null, vacio: string) =>
     v ? `<p>${esc(v)}</p>` : `<p class="none">${vacio}</p>`;
 
+  // Un reporte por areas: «Resumen del dia» con tres partes, y el trabajo en
+  // una tabla con el area a la izquierda y sus puntos a la derecha (opcion 1
+  // de Ivan, 2026-09-25). Novedades va antes que Atrasos, tambien por el.
+  const resumenDelDia = `<div class="sect"><div class="sect-h">Resumen del día</div><div class="sect-b">
+      <div class="parte"><div class="k">Trabajo ejecutado</div>
+        <table class="areas">${agruparTrabajos(d.trabajos).map((g) => `<tr>
+          <td class="area">${esc(g.nombre)}</td>
+          <td><ul class="puntos">${g.puntos.map((p) => `<li>${esc(p)}</li>`).join('')}</ul></td>
+        </tr>`).join('')}</table></div>
+      <div class="parte"><div class="k">Novedades del día</div>
+        ${texto(d.novedades, 'Sin novedades')}</div>
+      <div class="parte"><div class="k">Atrasos o impedimentos</div>
+        ${texto(d.atrasos, 'Sin atrasos reportados')}</div>
+    </div></div>`;
+
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><style>
     /* Los tamanos van en px porque Chrome compone la pagina, pero la vara es
        el reporte impreso: 1px = 0.75pt. El cuerpo a 12.5px son 9.4pt, que es
@@ -310,6 +332,19 @@ export function armarHtml(
     .cols > div.ancho { flex:2; }
     .prose { margin-top:12px; }
     .prose p { margin:0; font-size:13px; line-height:20px; white-space:pre-wrap; }
+    /* Las tres partes de «Resumen del dia». La primera va pegada al titulo:
+       con el margen de las demas quedaba un hueco que Ivan senalo. */
+    .parte { margin-top:14px; }
+    .parte:first-child { margin-top:0; }
+    .parte .k { margin-bottom:6px; }
+    .parte p { margin:0; font-size:13px; line-height:20px; white-space:pre-wrap; }
+    table.areas { width:100%; border-collapse:collapse; }
+    table.areas tr { page-break-inside:avoid; }
+    table.areas td { border:1px solid ${RULE}; padding:6px 10px; vertical-align:top;
+                     font-size:13px; line-height:20px; }
+    table.areas td.area { width:30%; background:${LIGHT_BG}; font-weight:700; }
+    .puntos { margin:0; padding-left:16px; }
+    .puntos li { margin:0; white-space:pre-wrap; }
     .none { color:${GRAY}; font-style:italic; }
     /* Tope de ALTO, no de ancho, y nada de recortar.
      *
@@ -403,15 +438,15 @@ export function armarHtml(
         <div class="v" style="font-weight:400">${d.motivo ? esc(d.motivo) : '—'}</div></div>
     </div></div></div>
 
-    <div class="sect"><div class="sect-h">Trabajo ejecutado</div><div class="sect-b">
+    ${d.trabajos.length ? resumenDelDia : `<div class="sect"><div class="sect-h">Trabajo ejecutado</div><div class="sect-b">
       <div class="prose"><div class="k">Áreas de trabajo</div>
         ${texto(d.areas.length ? d.areas.join(' · ') : null, 'No se indicaron áreas')}</div>
-      <div class="prose"><p>${esc(d.queSeHizo)}</p></div>
+      <div class="prose"><p>${esc(d.queSeHizo ?? '')}</p></div>
       <div class="prose"><div class="k">Atrasos o impedimentos</div>
         ${texto(d.atrasos, 'Sin atrasos reportados')}</div>
       <div class="prose"><div class="k">Novedades del día</div>
         ${texto(d.novedades, 'Sin novedades')}</div>
-    </div></div>
+    </div></div>`}
 
     ${columnasFilas(d)}
 

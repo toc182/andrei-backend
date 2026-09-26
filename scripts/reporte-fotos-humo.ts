@@ -104,7 +104,7 @@ const main = async () => {
     proyectoNombre: 'Prueba', autorNombre: 'Prueba', clima: 'Soleado',
     horasPerdidas: null, motivo: null, personalCalificado: 0, ayudantes: 0,
     equipo: [], personal: [], equipos: [], entregas: [], areas: [],
-    queSeHizo: 'Prueba', atrasos: null, novedades: null, correcciones: [],
+    trabajos: [], queSeHizo: 'Prueba', atrasos: null, novedades: null, correcciones: [],
     fotos: claves.map((k, i) => ({ r2_key: k, nombre_archivo: `obra-${i + 1}.jpg`, tipo_mime: 'image/jpeg' })),
   });
   c(propio.length > 200 * 1024, 'el generador llamado directo tambien saca el PDF');
@@ -129,7 +129,7 @@ const main = async () => {
     proyectoNombre: 'Prueba', autorNombre: 'Prueba', clima: 'Soleado',
     horasPerdidas: null, motivo: null, personalCalificado: 0, ayudantes: 0,
     equipo: [], personal: [], equipos: [], entregas: [], areas: [],
-    queSeHizo: 'Prueba', atrasos: null, novedades: null, correcciones: [],
+    trabajos: [], queSeHizo: 'Prueba', atrasos: null, novedades: null, correcciones: [],
     fotos: claves.map((k, i) => ({ r2_key: k, nombre_archivo: `obra-${i + 1}.jpg`, tipo_mime: 'image/jpeg' })),
   });
   c(rescatado.length > 200 * 1024, 'el PDF sale igual sin la copia reducida');

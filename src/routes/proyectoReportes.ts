@@ -65,6 +65,12 @@ import {
   semanaCerrada,
 } from '../services/semanaCerrada.js';
 import { registrarAudit } from '../services/auditLog.js';
+import {
+  leerTrabajosPedidos,
+  trabajosParaComparar,
+  type TrabajoGuardado,
+  type TrabajoPedido,
+} from '../services/reporteTrabajos.js';
 
 const router = Router();
 
@@ -78,8 +84,12 @@ interface ReporteBody {
   personal_calificado?: number | string;
   ayudantes?: number | string;
   equipo?: string[];
+  // `areas` y `que_se_hizo` son la forma de antes (un texto y una lista de
+  // areas aparte). Se siguen aceptando para los reportes viejos y para una
+  // pagina abierta desde antes del cambio; un reporte nuevo manda `trabajos`.
   areas?: number[];
   que_se_hizo?: string;
+  trabajos?: TrabajoPedido[];
   atrasos?: string | null;
   novedades?: string | null;
   // Las tres secciones que son filas. OJO: `equipos` (plural) son las filas
@@ -110,7 +120,7 @@ interface ReporteRow {
   personal_calificado: number;
   ayudantes: number;
   equipo: string[];
-  que_se_hizo: string;
+  que_se_hizo: string | null;
   atrasos: string | null;
   novedades: string | null;
   creado_por: number;
@@ -424,11 +434,20 @@ export async function generateReporteNumero(
   );
 }
 
-/** Valida el cuerpo de un alta. Devuelve el mensaje del primer problema. */
+/**
+ * Valida el cuerpo de un alta. Devuelve el mensaje del primer problema.
+ *
+ * El trabajo ejecutado llega en puntos por area (`trabajos`) o, desde una
+ * pagina de antes del cambio, como un solo texto. Hace falta uno de los dos.
+ */
 function validarAlta(body: ReporteBody): string | null {
   if (!body.fecha) return 'La fecha es obligatoria';
   if (!body.clima || !CLIMAS.includes(body.clima)) return 'Clima inválido';
-  if (!body.que_se_hizo?.trim()) return 'Debes describir qué se hizo hoy';
+  if (body.trabajos !== undefined) {
+    const leidos = leerTrabajosPedidos(body.trabajos);
+    return leidos.ok ? null : leidos.motivo;
+  }
+  if (!body.que_se_hizo?.trim()) return 'Debes anotar al menos un trabajo ejecutado';
   return null;
 }
 
@@ -443,6 +462,76 @@ function validarAlta(body: ReporteBody): string | null {
 type Consultar = (sql: string, params: unknown[]) => Promise<{ rows: QueryResultRow[] }>;
 
 const conPool: Consultar = (sql, params) => query(sql, params);
+
+/**
+ * Comprueba que cada punto va a un area que se puede usar. Devuelve el motivo
+ * del primer problema, o null.
+ *
+ * El area tiene que ser de ESTE proyecto y estar activa. En una correccion
+ * vale tambien una que ya estaba en el reporte aunque despues la quitaran de
+ * la lista: volver a guardar lo que el reporte ya decia no puede fallar.
+ *
+ * Se rechaza y no se descarta: un punto que se cayera en silencio seria texto
+ * del ingeniero perdido sin que nadie lo sepa.
+ */
+async function problemaDeAreas(
+  consultar: Consultar,
+  proyectoId: number,
+  trabajos: TrabajoPedido[],
+  reporteId: number | string | null,
+): Promise<string | null> {
+  const ids = [...new Set(trabajos.map((t) => t.area_id).filter((id): id is number => id !== null))];
+  if (ids.length === 0) return null;
+  const validas = await consultar(
+    `SELECT a.id FROM proyecto_areas a
+      WHERE a.id = ANY($1::int[]) AND a.proyecto_id = $2
+        AND (a.activo = true
+             OR EXISTS (SELECT 1 FROM proyecto_reporte_trabajos t
+                         WHERE t.area_id = a.id AND t.reporte_id = $3))`,
+    [ids, proyectoId, reporteId],
+  );
+  const ok = new Set(validas.rows.map((r) => Number(r.id)));
+  return ids.every((id) => ok.has(id))
+    ? null
+    : 'Una de las áreas del trabajo ejecutado ya no está en la lista del proyecto';
+}
+
+/** Reemplaza los puntos del reporte por los de la lista, en su orden. */
+async function guardarTrabajos(
+  consultar: Consultar,
+  reporteId: number | string,
+  trabajos: TrabajoPedido[],
+): Promise<void> {
+  await consultar('DELETE FROM proyecto_reporte_trabajos WHERE reporte_id = $1', [reporteId]);
+  await consultar(
+    `INSERT INTO proyecto_reporte_trabajos (reporte_id, area_id, texto, orden)
+     SELECT $1, v.area_id, v.texto, v.orden
+       FROM unnest($2::int[], $3::text[], $4::int[]) AS v(area_id, texto, orden)`,
+    [reporteId, trabajos.map((t) => t.area_id), trabajos.map((t) => t.texto),
+      trabajos.map((_, i) => i + 1)],
+  );
+}
+
+/**
+ * Los puntos del reporte, con el nombre de su area.
+ *
+ * Sin filtrar por `activo`: un area que se quito despues sigue siendo donde se
+ * trabajo ese dia.
+ */
+export async function leerTrabajos(
+  reporteId: number | string,
+  consultar: Consultar = conPool,
+): Promise<(TrabajoGuardado & { id: number; orden: number })[]> {
+  const r = await consultar(
+    `SELECT t.id, t.area_id, a.nombre AS area_nombre, t.texto, t.orden
+       FROM proyecto_reporte_trabajos t
+       LEFT JOIN proyecto_areas a ON a.id = t.area_id
+      WHERE t.reporte_id = $1
+      ORDER BY t.orden, t.id`,
+    [reporteId],
+  );
+  return r.rows as (TrabajoGuardado & { id: number; orden: number })[];
+}
 
 /**
  * Guarda las filas de Personal, Equipo y Entregas de un reporte.
@@ -750,9 +839,16 @@ router.get(
     if (q) {
       params.push(`%${q}%`);
       const i = params.length;
+      // Un reporte por areas se encuentra por lo que dice cualquiera de sus
+      // puntos y tambien por el nombre del area: buscar «torre» tiene que
+      // traer los dias en que se trabajo en la torre.
       where.push(
         `(r.que_se_hizo ILIKE $${i} OR r.atrasos ILIKE $${i}
-          OR r.novedades ILIKE $${i} OR r.numero ILIKE $${i})`,
+          OR r.novedades ILIKE $${i} OR r.numero ILIKE $${i}
+          OR EXISTS (SELECT 1 FROM proyecto_reporte_trabajos t
+                       LEFT JOIN proyecto_areas a ON a.id = t.area_id
+                      WHERE t.reporte_id = r.id
+                        AND (t.texto ILIKE $${i} OR a.nombre ILIKE $${i})))`,
       );
     }
 
@@ -769,15 +865,34 @@ router.get(
               -- Solo el arranque del texto: la lista lo muestra recortado y
               -- pide hasta 2000 filas de una vez. El texto completo va en el
               -- detalle.
-              left(r.que_se_hizo, 300) AS que_se_hizo,
+              --
+              -- Un reporte por areas no tiene ese texto: se arma con sus puntos,
+              -- un renglon por area en el orden en que se escribieron, igual
+              -- que trabajosComoTexto.
+              left(COALESCE(r.que_se_hizo, (
+                SELECT string_agg(g.linea, E'\n' ORDER BY g.primero)
+                  FROM (SELECT COALESCE(a.nombre, 'General') || ': '
+                                 || string_agg(t.texto, ' · ' ORDER BY t.orden, t.id) AS linea,
+                               min(t.orden) AS primero
+                          FROM proyecto_reporte_trabajos t
+                          LEFT JOIN proyecto_areas a ON a.id = t.area_id
+                         WHERE t.reporte_id = r.id
+                         GROUP BY t.area_id, a.nombre) g
+              )), 300) AS que_se_hizo,
               u.nombre AS creador_nombre,
               (SELECT COUNT(*)::int FROM proyecto_reporte_fotos f
                 WHERE f.reporte_id = r.id) AS fotos,
+              -- Las areas del dia: las de la lista aparte en un reporte de
+              -- antes, las de sus puntos en uno por areas.
               COALESCE(
                 (SELECT json_agg(a.nombre ORDER BY a.orden)
                    FROM proyecto_reporte_areas ra
                    JOIN proyecto_areas a ON a.id = ra.area_id
                   WHERE ra.reporte_id = r.id),
+                (SELECT json_agg(a.nombre ORDER BY a.orden)
+                   FROM proyecto_areas a
+                  WHERE a.id IN (SELECT t.area_id FROM proyecto_reporte_trabajos t
+                                  WHERE t.reporte_id = r.id)),
                 '[]'::json
               ) AS areas
          FROM proyecto_reportes r
@@ -921,6 +1036,7 @@ async function leerPartesDelReporte(reporteId: number | string) {
 
   return {
     areas: areas.rows,
+    trabajos: await leerTrabajos(reporteId),
     fotos: fotosConUrl,
     ...(await leerFilas(reporteId)),
   };
@@ -1040,6 +1156,11 @@ export async function crearBorradorDeReporte(
 > {
   const problema = validarAlta(body);
   if (problema) return { ok: false, motivo: problema };
+  const trabajos = body.trabajos !== undefined ? leerTrabajosPedidos(body.trabajos) : null;
+  if (trabajos?.ok) {
+    const malArea = await problemaDeAreas(conPool, proyectoId, trabajos.trabajos, null);
+    if (malArea) return { ok: false, motivo: malArea };
+  }
 
   // El numero se asigna al COMPLETAR, no aqui: un borrador abandonado no gasta
   // numero. Pero los dos motivos por los que podria no poder numerarse se
@@ -1089,7 +1210,9 @@ export async function crearBorradorDeReporte(
       Number(body.personal_calificado ?? 0),
       Number(body.ayudantes ?? 0),
       body.equipo ?? [],
-      body.que_se_hizo!.trim(),
+      // Con puntos, el texto de antes queda vacio: un reporte es de una forma
+      // o de la otra.
+      trabajos?.ok ? null : body.que_se_hizo!.trim(),
       body.atrasos?.trim() || null,
       body.novedades?.trim() || null,
       usuarioId,
@@ -1098,7 +1221,9 @@ export async function crearBorradorDeReporte(
 
   const reporte = inserted.rows[0];
 
-  if (body.areas?.length) {
+  if (trabajos?.ok) {
+    await guardarTrabajos(conPool, reporte.id, trabajos.trabajos);
+  } else if (body.areas?.length) {
     // Solo areas activas de ESTE proyecto: sin el filtro, un id de otra obra
     // colaria una area ajena en el reporte.
     await query(
@@ -1231,12 +1356,45 @@ router.put(
         res.status(400).json({ success: false, message: 'Clima inválido' });
         return;
       }
-      if (body.que_se_hizo !== undefined && !body.que_se_hizo.trim()) {
+      // El trabajo ejecutado se corrige en la forma que el reporte ya tiene.
+      //
+      // Un reporte ENVIADO con el texto de antes se queda con su texto: Ivan
+      // decidio el 2026-09-25 que los viejos no se tocan. Un borrador de antes
+      // si pasa a puntos, porque todavia no ha salido y el formulario nuevo lo
+      // abre asi. Y a un reporte con puntos no se le escribe el texto de antes:
+      // eso solo lo manda una pagina abierta desde antes del cambio, que no
+      // sabe de puntos y lo dejaria con las dos cosas.
+      const conPuntos = (await leerTrabajos(req.params.id, consultar)).length > 0;
+      const fallo = async (mensaje: string) => {
         await client.query('ROLLBACK');
-        res
-          .status(400)
-          .json({ success: false, message: 'Debes describir qué se hizo hoy' });
-        return;
+        res.status(400).json({ success: false, message: mensaje });
+      };
+      let trabajos: TrabajoPedido[] | null = null;
+      if (body.trabajos !== undefined) {
+        if (actual.rows[0].completo && !conPuntos) {
+          await fallo('Este reporte se escribió antes de separar el trabajo por áreas y se corrige como está');
+          return;
+        }
+        const leidos = leerTrabajosPedidos(body.trabajos);
+        if (!leidos.ok) {
+          await fallo(leidos.motivo);
+          return;
+        }
+        const malArea = await problemaDeAreas(consultar, proyectoId, leidos.trabajos, req.params.id);
+        if (malArea) {
+          await fallo(malArea);
+          return;
+        }
+        trabajos = leidos.trabajos;
+      } else if (body.que_se_hizo !== undefined) {
+        if (conPuntos) {
+          await fallo('Este reporte ya va por áreas. Recarga la página para corregirlo.');
+          return;
+        }
+        if (!body.que_se_hizo.trim()) {
+          await fallo('Debes anotar al menos un trabajo ejecutado');
+          return;
+        }
       }
 
       // Las fotos de ESTE reporte en su orden, leidas bajo el mismo bloqueo: de
@@ -1296,8 +1454,8 @@ router.put(
         set('personal_calificado', Number(body.personal_calificado));
       if (body.ayudantes !== undefined) set('ayudantes', Number(body.ayudantes));
       if (body.equipo !== undefined) set('equipo', body.equipo);
-      if (body.que_se_hizo !== undefined)
-        set('que_se_hizo', body.que_se_hizo.trim());
+      if (trabajos !== null) set('que_se_hizo', null);
+      else if (body.que_se_hizo !== undefined) set('que_se_hizo', body.que_se_hizo.trim());
       if (body.atrasos !== undefined) set('atrasos', body.atrasos?.trim() || null);
       if (body.novedades !== undefined)
         set('novedades', body.novedades?.trim() || null);
@@ -1312,7 +1470,13 @@ router.put(
         valores,
       );
 
-      if (body.areas) {
+      // Con puntos, las areas del dia son las de los puntos: la lista aparte se
+      // vacia, que es lo que pasa cuando un borrador de antes pasa a puntos.
+      if (trabajos !== null) {
+        await client.query('DELETE FROM proyecto_reporte_areas WHERE reporte_id = $1', [
+          req.params.id,
+        ]);
+      } else if (body.areas) {
         await client.query('DELETE FROM proyecto_reporte_areas WHERE reporte_id = $1', [
           req.params.id,
         ]);
@@ -1329,8 +1493,10 @@ router.put(
 
       // El antes se lee ANTES de guardar; si no, se compararia contra si mismo.
       const filasAntes = paraComparar(await leerFilas(req.params.id, consultar));
+      const trabajosAntes = trabajosParaComparar(await leerTrabajos(req.params.id, consultar));
 
       await guardarFilas(req.params.id, proyectoId, body, consultar);
+      if (trabajos !== null) await guardarTrabajos(consultar, req.params.id, trabajos);
 
       // Solo se escriben las leyendas que cambiaron, y la misma lista es la que
       // se anota en Correcciones.
@@ -1374,6 +1540,10 @@ router.put(
       }
       if (body.entregas !== undefined) {
         Object.assign(cambios, diffFilas(filasAntes.entregas, filasAhora.entregas, null));
+      }
+      if (trabajos !== null) {
+        const trabajosAhora = trabajosParaComparar(await leerTrabajos(req.params.id, consultar));
+        Object.assign(cambios, diffFilas(trabajosAntes, trabajosAhora, null));
       }
       Object.assign(cambios, cambiosDeLeyendas(leyendas));
 
@@ -1444,7 +1614,7 @@ export async function buildReportePdfInput(
     personal_calificado: number;
     ayudantes: number;
     equipo: string[];
-    que_se_hizo: string;
+    que_se_hizo: string | null;
     atrasos: string | null;
     novedades: string | null;
     autor: string;
@@ -1552,6 +1722,7 @@ export async function buildReportePdfInput(
       unidad: f.unidad === null || f.unidad === undefined ? null : String(f.unidad),
       notas: f.notas === null || f.notas === undefined ? null : String(f.notas),
     })),
+    trabajos: await leerTrabajos(reporteId),
     areas: areas.rows.map((a) => a.nombre),
     queSeHizo: row.que_se_hizo,
     atrasos: row.atrasos,

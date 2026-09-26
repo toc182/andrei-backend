@@ -586,6 +586,8 @@ function valorCorto(campo: string, v: string | number): string {
 function orden(campo: string): number {
   const i = Object.keys(CAMPO_LABELS).indexOf(campo);
   if (i >= 0) return i;
+  // Los puntos de cada area van donde iba el texto de antes, antes de Atrasos.
+  if (campo.startsWith('trabajo:')) return Object.keys(CAMPO_LABELS).indexOf('que_se_hizo') + 0.5;
   if (campo.startsWith('puesto:')) return 100;
   if (campo.startsWith('equipo:')) return 200;
   if (campo.startsWith('leyenda:')) return 400;
@@ -597,7 +599,11 @@ function cambioLegible(campo: string, c: Cambio): CambioLegible | null {
   // Una leyenda es un texto corto: se marca palabra por palabra, como un
   // renglon de Trabajo ejecutado. «Acero de columna C-4» a «… C-5» sale con
   // solo el numero tachado y el nuevo subrayado.
-  if (CAMPOS_DE_TEXTO.has(campo) || campo.startsWith('leyenda:')) {
+  //
+  // Los puntos de un area son un punto por renglon, asi que se leen como un
+  // texto largo: el punto agregado sale subrayado y el reescrito, marcado
+  // palabra por palabra, bajo «Trabajo ejecutado · Losa nivel 2».
+  if (CAMPOS_DE_TEXTO.has(campo) || campo.startsWith('leyenda:') || campo.startsWith('trabajo:')) {
     const grupos = cambiosDeTexto(
       c.antes === null ? null : String(c.antes),
       c.despues === null ? null : String(c.despues),
