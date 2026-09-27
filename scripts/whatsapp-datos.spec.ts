@@ -74,6 +74,10 @@ exigir(
 
 // ── lo que NO entra ─────────────────────────────────────────────────────────
 exigir(!anotar({}, { clima: 'Lloviznando' }).ok, 'un clima que no esta en la lista se rechaza');
+const porNumero = anotar({}, { clima: '3' });
+exigir(porNumero.ok && porNumero.datos.clima === 'Lluvia parcial',
+  'el clima se puede contestar con el numero de la lista que le salio');
+exigir(!anotar({}, { clima: '9' }).ok, 'pero un numero que no existe se rechaza');
 exigir(!anotar({}, { fecha: '17/09/2026' }).ok, 'una fecha con otro formato se rechaza');
 exigir(!anotar({}, { horas_perdidas: 30 }).ok, 'mas de 24 horas perdidas se rechaza');
 exigir(!anotar({}, { areas: [99] }).ok, 'un area de otro proyecto se rechaza');

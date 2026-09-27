@@ -56,6 +56,19 @@ export interface Resultado {
   cierraTurno?: boolean;
 }
 
+/** «sábado 27 de septiembre», para preguntarle la fecha como se habla. */
+export function diaEnPalabras(fecha: string): string {
+  const [a, m, d] = fecha.split('-').map(Number);
+  const dias = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  const meses = [
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+  ];
+  // Mediodia UTC: asi el dia de la semana no se corre por la zona horaria.
+  const dia = new Date(Date.UTC(a, m - 1, d, 12)).getUTCDay();
+  return `${dias[dia]} ${d} de ${meses[m - 1]}`;
+}
+
 /** El dia de hoy en Panama, que es donde estan las obras. */
 export function hoyEnPanama(): string {
   // en-CA da AAAA-MM-DD, que es como se guardan las fechas.
@@ -332,6 +345,41 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
         },
       },
       required: ['nombre', 'confirmado'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'preguntar_fecha',
+    description:
+      'Le pregunta si el reporte es del dia de hoy, con dos botones: «Sí» y «Otra fecha». ' +
+      'Es lo PRIMERO que se pregunta. Los botones los pone el sistema; la frase la escribe ' +
+      'usted, y si tiene que volver a preguntar la cambia —no repita la misma frase dos ' +
+      'veces—. Despues de llamarlo no escriba nada mas en ese turno.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pregunta: {
+          type: 'string',
+          description:
+            'La frase, con la fecha de hoy dentro. Por ejemplo «¿El reporte es de hoy, ' +
+            'domingo 27 de septiembre?»',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'preguntar_clima',
+    description:
+      'Le pregunta como estuvo el clima con los cuatro climas numerados. La lista la pone ' +
+      'el sistema y la frase la escribe usted; la persona contesta con el numero y usted lo ' +
+      'manda tal cual en anotar (clima acepta el numero). Despues de llamarlo no escriba ' +
+      'nada mas en ese turno.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pregunta: { type: 'string', description: 'La frase que va antes de la lista' },
+      },
       additionalProperties: false,
     },
   },
@@ -693,6 +741,49 @@ export async function ejecutarHerramienta(
           'áreas de la obra.',
       },
     };
+  }
+
+  if (nombre === 'preguntar_fecha') {
+    const hoy = hoyEnPanama();
+    const suya = typeof input.pregunta === 'string' ? input.pregunta.trim() : '';
+    const salio = await responderBotones(
+      ctx.conversacion.telefono,
+      suya || `¿El reporte es de hoy, ${diaEnPalabras(hoy)}?`,
+      [
+        { id: 'fecha_hoy', titulo: 'Sí' },
+        { id: 'fecha_otra', titulo: 'Otra fecha' },
+      ],
+      ctx.conversacion.id,
+    );
+    return salio
+      ? {
+          ok: true,
+          cierraTurno: true,
+          contenido: {
+            preguntado: `La pregunta salió con los botones Sí y Otra fecha. Hoy es ${hoy}.`,
+          },
+        }
+      : { ok: false, contenido: { error: 'No se pudo mandar la pregunta' } };
+  }
+
+  if (nombre === 'preguntar_clima') {
+    const climas = CLIMAS.map((c, i) => ({ id: i + 1, nombre: c }));
+    const suya = typeof input.pregunta === 'string' ? input.pregunta : null;
+    const salio = await responder(
+      ctx.conversacion.telefono,
+      preguntaDeLista(climas, suya, '¿Cómo estuvo el clima hoy?'),
+      ctx.conversacion.id,
+    );
+    return salio
+      ? {
+          ok: true,
+          cierraTurno: true,
+          contenido: {
+            preguntado: 'Los cuatro climas salieron numerados',
+            recuerde: 'Cuando conteste con un número, mándalo tal cual en anotar, en clima.',
+          },
+        }
+      : { ok: false, contenido: { error: 'No se pudo mandar la pregunta' } };
   }
 
   if (nombre === 'preguntar_areas') {

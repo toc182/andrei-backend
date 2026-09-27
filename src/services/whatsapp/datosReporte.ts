@@ -25,9 +25,11 @@ export interface Seccion {
 // el dia, el trabajo por areas, lo que salio mal, la gente, las maquinas, lo
 // que llego y las fotos. Las secciones de un mismo grupo se preguntan juntas.
 export const SECCIONES: Seccion[] = [
-  { clave: 'fecha', nombre: 'Fecha del reporte', obligatoria: true, grupo: 'el día' },
-  { clave: 'clima', nombre: 'Clima', obligatoria: true, grupo: 'el día' },
-  { clave: 'horasPerdidas', nombre: 'Horas perdidas y su motivo', obligatoria: false, grupo: 'el día' },
+  // La fecha y el clima van solas y con opciones para tocar (decision de Ivan,
+  // 2026-09-27: «puedes dar opciones para que yo escoja, en vez de escribir»).
+  { clave: 'fecha', nombre: 'Fecha del reporte', obligatoria: true, grupo: 'la fecha' },
+  { clave: 'clima', nombre: 'Clima', obligatoria: true, grupo: 'el clima' },
+  { clave: 'horasPerdidas', nombre: 'Horas perdidas y su motivo', obligatoria: false, grupo: 'las horas perdidas' },
   { clave: 'areas', nombre: 'Áreas de trabajo', obligatoria: false, grupo: 'el trabajo' },
   { clave: 'trabajos', nombre: 'Trabajo ejecutado', obligatoria: true, grupo: 'el trabajo' },
   { clave: 'atrasos', nombre: 'Atrasos o impedimentos', obligatoria: false, grupo: 'lo que salió mal' },
@@ -194,11 +196,15 @@ export function fusionar(
   }
 
   if ('clima' in parche) {
+    // El clima se pregunta numerado, asi que tambien se acepta el numero tal
+    // cual: traducirlo seria otra cuenta del modelo, y esas se equivocan.
     const c = texto(parche.clima);
-    if (!c || !(CLIMAS as readonly string[]).includes(c)) {
+    const porNumero = c && /^[1-9]$/.test(c) ? CLIMAS[Number(c) - 1] : undefined;
+    const elegido = porNumero ?? c;
+    if (!elegido || !(CLIMAS as readonly string[]).includes(elegido)) {
       return { ok: false, motivo: `El clima solo puede ser: ${CLIMAS.join(', ')}` };
     }
-    nuevo.clima = c as Clima;
+    nuevo.clima = elegido as Clima;
   }
 
   if ('horas_perdidas' in parche) {
