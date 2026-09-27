@@ -70,12 +70,16 @@ export function hoyEnPanama(): string {
  * global.
  */
 export async function proyectosDe(usuario: Usuario): Promise<{ id: number; nombre: string }[]> {
+  // El nombre que se le ensena a la gente es el corto —«Playa Blanca»—, no el
+  // del contrato, que ocupa cuatro renglones de WhatsApp. Ivan lo vio el
+  // 2026-09-26 cuando la lista la empezo a escribir el sistema.
+  const corto = "COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS nombre";
   if (usuario.rol === 'usuario') {
     const permisos = await loadUserPermissions(usuario.id);
     if (!permisos?.reportes) return [];
     if (!permisos.acceso_global) {
       const r = await query<{ id: number; nombre: string }>(
-        `SELECT p.id, p.nombre
+        `SELECT p.id, ${corto}
            FROM proyectos p
            JOIN user_project_access a ON a.proyecto_id = p.id AND a.user_id = $1
           WHERE p.activo = true
@@ -86,7 +90,7 @@ export async function proyectosDe(usuario: Usuario): Promise<{ id: number; nombr
     }
   }
   const r = await query<{ id: number; nombre: string }>(
-    'SELECT id, nombre FROM proyectos WHERE activo = true ORDER BY nombre',
+    `SELECT p.id, ${corto} FROM proyectos p WHERE p.activo = true ORDER BY p.nombre`,
   );
   return r.rows;
 }

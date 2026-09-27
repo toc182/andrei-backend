@@ -2,6 +2,12 @@
 //
 //   npx tsx --env-file=.env scripts/whatsapp-real.ts
 //   npx tsx --env-file=.env scripts/whatsapp-real.ts guion2.json
+//   npx tsx --env-file=.env scripts/whatsapp-real.ts scripts/guiones/bateria.json
+//
+// El archivo puede traer UN guion (una lista de mensajes) o VARIOS, con nombre:
+// [{ "nombre": "...", "mensajes": [...] }, ...]. Con varios, cada uno empieza
+// con la conversacion limpia y al final se imprime lo que quedo anotado en cada
+// uno: es la tanda con la que se mira como se comporta antes de publicar.
 //
 // Para que sirve: ver si el modelo entiende como escribe un ingeniero de obra,
 // y cuanto cuesta un reporte. Lo automatico (que las herramientas hagan lo que
@@ -36,9 +42,13 @@ async function main(): Promise<void> {
     console.error('Falta ANTHROPIC_API_KEY: esta prueba habla con el modelo de verdad.');
     process.exit(1);
   }
-  const guion: string[] = process.argv[2]
-    ? (JSON.parse(fs.readFileSync(process.argv[2], 'utf8')) as string[])
+  const crudo: unknown = process.argv[2]
+    ? JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
     : GUION_POR_DEFECTO;
+  const guiones: { nombre: string; mensajes: string[] }[] = Array.isArray(crudo)
+    && crudo.every((x) => typeof x === 'string')
+    ? [{ nombre: 'guion', mensajes: crudo as string[] }]
+    : (crudo as { nombre: string; mensajes: string[] }[]);
 
   console.log('Levantando base, servidor y «Meta» de mentira…');
   const entorno = await crearEntorno(undefined, { iaDeVerdad: true });
@@ -109,31 +119,42 @@ async function main(): Promise<void> {
       (await (await fetch(`${meta}/_prueba/enviados`)).json()) as never;
 
     let vistas = 0;
-    for (const linea of guion) {
-      console.log(`\nTU: ${linea}`);
-      await decir(linea);
-      const hasta = Date.now() + 120_000;
-      for (;;) {
-        const r = await leerRespuestas();
-        if (r.length > vistas) {
-          for (const nueva of r.slice(vistas)) console.log(`\nEL: ${nueva.texto}`);
-          vistas = r.length;
-          break;
-        }
-        if (Date.now() > hasta) {
-          console.log('\n(el asistente no contestó en dos minutos)');
-          break;
-        }
-        await esperar(500);
+    for (const guion of guiones) {
+      if (guiones.length > 1) {
+        // Cada guion arranca con la conversacion limpia: son situaciones
+        // distintas, no una conversacion larguisima.
+        await base.query('UPDATE whatsapp_conversaciones SET activa = false WHERE telefono = $1', [
+          NUMERO,
+        ]);
+        console.log(`\n══════════ ${guion.nombre} ══════════`);
       }
-    }
 
-    const datos = await base.query<{ datos: unknown; modo: string; proyecto_id: number }>(
-      'SELECT datos, modo, proyecto_id FROM whatsapp_conversaciones WHERE telefono = $1',
-      [NUMERO],
-    );
-    console.log('\n──────── lo que quedó anotado ────────');
-    console.log(JSON.stringify(datos.rows[0]?.datos, null, 2));
+      for (const linea of guion.mensajes) {
+        console.log(`\nTU: ${linea}`);
+        await decir(linea);
+        const hasta = Date.now() + 120_000;
+        for (;;) {
+          const r = await leerRespuestas();
+          if (r.length > vistas) {
+            for (const nueva of r.slice(vistas)) console.log(`\nEL: ${nueva.texto}`);
+            vistas = r.length;
+            break;
+          }
+          if (Date.now() > hasta) {
+            console.log('\n(el asistente no contestó en dos minutos)');
+            break;
+          }
+          await esperar(500);
+        }
+      }
+
+      const datos = await base.query<{ datos: unknown }>(
+        'SELECT datos FROM whatsapp_conversaciones WHERE telefono = $1 AND activa',
+        [NUMERO],
+      );
+      console.log('\n── lo que quedó anotado ──');
+      console.log(JSON.stringify(datos.rows[0]?.datos ?? {}, null, 1));
+    }
 
     // Lo que costó: el servidor lo dice en su registro, turno por turno.
     const gasto = entorno

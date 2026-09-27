@@ -158,6 +158,20 @@ exigir(
   'sin fecha ni trabajo ejecutado el reporte no se puede guardar; las novedades si pueden faltar',
 );
 
+// ── «sin novedades» no es una novedad ──────────────────────────────────────
+const negado = anotar({}, { novedades: 'Sin novedades', atrasos: 'No hubo' });
+exigir(negado.ok && negado.datos.novedades === undefined && negado.datos.atrasos === undefined,
+  'una negacion no se escribe en el reporte');
+exigir(negado.ok && (negado.datos.preguntadas ?? []).includes('novedades')
+  && (negado.datos.preguntadas ?? []).includes('atrasos'),
+  'pero la seccion queda por preguntada, para no volver a preguntarla');
+const novedadDeVerdad = anotar({}, { novedades: 'Vino el inspector de la Contraloría' });
+exigir(novedadDeVerdad.ok && novedadDeVerdad.datos.novedades?.startsWith('Vino'),
+  'y una novedad de verdad si se anota');
+const largo = anotar({}, { atrasos: 'No pudimos vaciar porque no llego el concreto a tiempo' });
+exigir(largo.ok && largo.datos.atrasos !== undefined,
+  'una frase que empieza con «no» pero cuenta algo tambien se anota');
+
 // ── un trabajo ejecutado de una linea ──────────────────────────────────────
 exigir(trabajoFlaco({ trabajos: [{ areaId: null, texto: 'Vaciamos concreto.' }] }),
   'una linea suelta se marca para preguntarle si asi lo quiere');

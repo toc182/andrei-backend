@@ -117,6 +117,29 @@ const numero = (x: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+/**
+ * «Sin novedades», «ninguno», «no hubo»: la persona esta diciendo que esa
+ * seccion esta vacia, no dictando su contenido.
+ */
+function esNegacion(dicho: string): boolean {
+  const plano = dicho
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, '')
+    .trim();
+  if (plano.split(/\s+/).length > 5) return false;
+  return /^(no|ninguno|ninguna|nada|sin novedad(es)?|sin atrasos?|no hubo|ninguno mas|nada mas|todo normal|sin problemas?)( .*)?$/
+    .test(plano);
+}
+
+/** Deja la seccion por preguntada sin escribir nada en ella. */
+function marcarPreguntada(datos: DatosReporte, clave: string): void {
+  const ya = new Set(datos.preguntadas ?? []);
+  ya.add(clave);
+  datos.preguntadas = [...ya];
+}
+
 /** Lo que se le devuelve al asistente cuando lo que dijo no se puede anotar. */
 export interface Rechazo {
   ok: false;
@@ -210,8 +233,19 @@ export function fusionar(
     if (filas.length === 0) return { ok: false, motivo: 'Hace falta al menos un punto' };
     nuevo.trabajos = filas;
   }
-  if ('atrasos' in parche) nuevo.atrasos = texto(parche.atrasos) ?? undefined;
-  if ('novedades' in parche) nuevo.novedades = texto(parche.novedades) ?? undefined;
+  // «Sin novedades» no es una novedad: es que no hubo. Si se anotara, el reporte
+  // saldria con esa frase escrita donde deberia estar vacio (lo enseno la tanda
+  // de conversaciones del 2026-09-26). La seccion queda vacia y preguntada.
+  if ('atrasos' in parche) {
+    const a = texto(parche.atrasos);
+    nuevo.atrasos = a && !esNegacion(a) ? a : undefined;
+    if (a && esNegacion(a)) marcarPreguntada(nuevo, 'atrasos');
+  }
+  if ('novedades' in parche) {
+    const n = texto(parche.novedades);
+    nuevo.novedades = n && !esNegacion(n) ? n : undefined;
+    if (n && esNegacion(n)) marcarPreguntada(nuevo, 'novedades');
+  }
 
   if ('areas' in parche) {
     if (!Array.isArray(parche.areas)) return { ok: false, motivo: 'Las áreas van en una lista' };

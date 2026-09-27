@@ -1,0 +1,130 @@
+[
+  {
+    "nombre": "el reporte de siempre",
+    "mensajes": [
+      "Ayúdame con el reporte diario",
+      "Es de hoy, soleado, no se perdieron horas",
+      "1",
+      "Colocamos 6 zapatas y armamos el acero de dos columnas",
+      "No hubo atrasos ni novedades",
+      "1 ingeniero, 2 supervisores y 8 ayudantes",
+      "La retroexcavadora 6 horas",
+      "Llegaron 40 sacos de cemento"
+    ]
+  },
+  {
+    "nombre": "contesta vago",
+    "mensajes": [
+      "Ayúdame con el reporte",
+      "Lo normal",
+      "Por ahí, lo de siempre",
+      "Ya te dije, lo normal de la obra",
+      "Bueno, estuvimos en el área 1 haciendo relleno"
+    ]
+  },
+  {
+    "nombre": "se contradice",
+    "mensajes": [
+      "Reporte de hoy por favor",
+      "Llovió todo el día y perdimos 4 horas",
+      "1",
+      "Vaciado de losa",
+      "No, mentira, fueron 2 horas perdidas, no 4",
+      "Eso es todo"
+    ]
+  },
+  {
+    "nombre": "escribe cualquier cosa",
+    "mensajes": [
+      "hola",
+      "asdf",
+      "xd",
+      "jajaja no nada",
+      "ok ahora sí, reporte diario de hoy",
+      "1",
+      "Excavación para la fundación"
+    ]
+  },
+  {
+    "nombre": "cuenta todo de una vez",
+    "mensajes": [
+      "Ayúdame con el reporte diario de hoy",
+      "En el área 1 vaciamos la losa del nivel 2 y en el área 2 armamos acero. Llovió de 2 a 4 y perdimos 2 horas. Éramos 3 albañiles y 10 ayudantes, la retro trabajó 6 horas y llegaron 40 sacos de cemento. Sin novedades.",
+      "No, nada más"
+    ]
+  },
+  {
+    "nombre": "pide el borrador antes de tiempo",
+    "mensajes": [
+      "Reporte diario",
+      "Mándame el borrador",
+      "1",
+      "Relleno y compactación",
+      "Ahora sí mándame el borrador"
+    ]
+  },
+  {
+    "nombre": "nombra un area que no existe",
+    "mensajes": [
+      "Reporte de hoy",
+      "Hoy, nublado, sin horas perdidas",
+      "Trabajamos en el cajón pluvial",
+      "Sí, agrégala",
+      "Colocamos la formaleta del cajón"
+    ]
+  },
+  {
+    "nombre": "una maquina que no esta en la lista",
+    "mensajes": [
+      "Ayúdame con el reporte diario",
+      "Hoy, soleado, sin horas perdidas",
+      "1",
+      "Movimiento de tierra",
+      "Sin atrasos ni novedades",
+      "2 operadores",
+      "Trabajó el minicargador 5 horas y la retro 3"
+    ]
+  },
+  {
+    "nombre": "cambia de obra a la mitad",
+    "mensajes": [
+      "Reporte diario",
+      "1",
+      "Vaciado de pedestales",
+      "Espera, este reporte no es de esta obra, es de otra",
+      "Sí, empecemos de nuevo"
+    ]
+  },
+  {
+    "nombre": "pregunta otra cosa",
+    "mensajes": [
+      "¿Cuánto llevamos gastado en esta obra?",
+      "¿Y cuántas solicitudes de pago hay pendientes?",
+      "Bueno, entonces hagamos el reporte diario de hoy",
+      "1",
+      "Encofrado de muros"
+    ]
+  },
+  {
+    "nombre": "corrige algo ya anotado",
+    "mensajes": [
+      "Reporte diario de hoy",
+      "Soleado, sin horas perdidas",
+      "1",
+      "Vaciado de losa",
+      "Cambia eso: no fue vaciado de losa, fue vaciado de vigas",
+      "Sin atrasos"
+    ]
+  },
+  {
+    "nombre": "dos areas y algo que no es de ninguna",
+    "mensajes": [
+      "Ayúdame con el reporte de hoy",
+      "Hoy, soleado, no perdimos horas",
+      "1 y 2",
+      "En el área 1 armamos acero de columnas",
+      "En el área 2 vaciamos la losa",
+      "Y aparte la cuadrilla limpió todo el acceso a la obra, eso no es de un área"
+    ]
+  }
+]
