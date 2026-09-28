@@ -1,13 +1,18 @@
-// Prueba de humo: el «Sí» a la pregunta de la fecha lo anota el sistema.
+// Prueba de humo: la fecha no frena el reporte, y el asistente no dice «lo
+// anoto» sin anotar ni repite el mismo mensaje.
 // npm run pruebas -- whatsapp-fecha
 //
-// Con el boton «Sí» el modelo volvia a preguntar la fecha (tanda del
-// 2026-09-28). Ahora, si lo ultimo que salio fue la pregunta de la fecha y la
-// persona contesta que si, la fecha de hoy queda anotada antes de que el
-// modelo piense. Se exige:
-// - «Sí» deja la fecha de hoy, y el modelo ya la ve anotada;
-// - «Otra fecha» no anota nada: eso lo resuelve el modelo preguntando cual;
-// - un «sí» que no contesta a la pregunta de la fecha no toca la fecha.
+// Salio de la tanda del 2026-09-28: con el boton «Sí» volvia a preguntar la
+// fecha; si a la fecha le contestaban otra cosa insistia cinco veces igual; y
+// decia «lo anoto» y lo que le contaron se perdia. Se exige:
+// - al elegir la obra el reporte ya trae la fecha de hoy, pendiente de confirmar;
+// - «Sí» la confirma;
+// - «Otra fecha» la deja pendiente: el modelo pregunta cual;
+// - si contesta otra cosa, se queda la de hoy y el modelo recibe el aviso;
+// - un «sí» que no contesta a la pregunta de la fecha no la toca;
+// - la misma pregunta de la fecha, igualita, no sale dos veces seguidas;
+// - una respuesta que dice «anoté» sin haber anotado vuelve al modelo;
+// - una respuesta igual a la ultima que salio vuelve al modelo.
 import { API } from './pruebas/contexto.js';
 import { SECRETOS_PRUEBA } from './pruebas/entorno.js';
 import crypto from 'crypto';
@@ -68,18 +73,33 @@ const texto = (t: string) => ({ content: [{ type: 'text', text: t }], stop_reaso
 
 const salidas = async (): Promise<unknown[]> =>
   (await (await fetch(`${META}/_prueba/enviados`)).json()) as unknown[];
-const esperarSalidas = async (cuantas: number): Promise<void> => {
-  for (const hasta = Date.now() + 20000; Date.now() < hasta; await esperar(200)) {
+const esperarSalidas = async (cuantas: number, segundos = 20): Promise<void> => {
+  for (const hasta = Date.now() + segundos * 1000; Date.now() < hasta; await esperar(200)) {
     if ((await salidas()).length >= cuantas) return;
   }
 };
-const fecha = async (): Promise<string | undefined> =>
-  (
-    await query<{ datos: { fecha?: string } }>(
+const estado = async (): Promise<{ fecha?: string; confirmada: boolean }> => {
+  const d = (
+    await query<{ datos: { fecha?: string; preguntadas?: string[] } }>(
       'SELECT datos FROM whatsapp_conversaciones WHERE telefono = $1 AND activa',
       [NUMERO],
     )
-  ).rows[0]?.datos?.fecha;
+  ).rows[0]?.datos;
+  return { fecha: d?.fecha, confirmada: (d?.preguntadas ?? []).includes('fecha') };
+};
+const ultimaPeticion = async (): Promise<{ system: string; ultimo: string }> => {
+  const ps = (await (await fetch(`${META}/_prueba/ia/peticiones`)).json()) as {
+    system?: { text: string }[];
+    messages?: { content: unknown }[];
+  }[];
+  const p = ps.at(-1);
+  return {
+    system: (p?.system ?? []).map((x) => x.text).join('\n'),
+    ultimo: JSON.stringify(p?.messages?.at(-1)?.content ?? ''),
+  };
+};
+const ultimoSalido = async (): Promise<string | null> =>
+  ((await salidas()).at(-1) as { texto: string | null } | undefined)?.texto ?? null;
 const empezar = async (): Promise<void> => {
   await query('UPDATE whatsapp_conversaciones SET activa = false WHERE telefono = $1', [NUMERO]);
 };
@@ -104,21 +124,22 @@ const main = async () => {
     [u.rows[0].id],
   );
 
-  // ── «Sí» ────────────────────────────────────────────────────────────────
+  // ── al elegir la obra ya hay fecha, sin confirmar ─────────────────────
   await guionizar([usar('elegir_proyecto', { proyecto_id: 1 }), usar('preguntar_fecha', {})]);
   await decir('Ayúdame con el reporte diario');
   await esperarSalidas(1);
+  let e = await estado();
+  exigir(e.fecha === hoyEnPanama() && !e.confirmada, 'al elegir la obra el reporte ya trae la fecha de hoy, sin confirmar');
+
+  // ── «Sí» ────────────────────────────────────────────────────────────────
   await guionizar([texto('¿Cómo estuvo el clima?')]);
   await decir('Sí');
   await esperarSalidas(2);
-  exigir((await fecha()) === hoyEnPanama(), '«Sí» a la pregunta de la fecha deja anotada la de hoy');
-  const peticiones = (await (await fetch(`${META}/_prueba/ia/peticiones`)).json()) as {
-    system?: { text: string }[];
-  }[];
-  const contexto = (peticiones.at(-1)?.system ?? []).map((s) => s.text).join('\n');
+  e = await estado();
+  exigir(e.fecha === hoyEnPanama() && e.confirmada, '«Sí» a la pregunta de la fecha la confirma');
   exigir(
-    contexto.includes(`"fecha":"${hoyEnPanama()}"`),
-    'y el modelo ya la ve anotada cuando le toca pensar',
+    (await ultimaPeticion()).system.includes('"preguntadas":["fecha"]'),
+    'y el modelo ya la ve confirmada cuando le toca pensar',
   );
 
   // ── «Otra fecha» ────────────────────────────────────────────────────────
@@ -129,17 +150,60 @@ const main = async () => {
   await guionizar([texto('¿De qué fecha es?')]);
   await decir('Otra fecha');
   await esperarSalidas(4);
-  exigir((await fecha()) === undefined, '«Otra fecha» no anota nada');
+  exigir(!(await estado()).confirmada, '«Otra fecha» la deja pendiente');
+
+  // ── contesta otra cosa, y el modelo quiere repetir la pregunta ─────────
+  await empezar();
+  await guionizar([usar('elegir_proyecto', { proyecto_id: 1 }), usar('preguntar_fecha', {})]);
+  await decir('Reporte');
+  await esperarSalidas(5);
+  await guionizar([usar('preguntar_fecha', {}), texto('Queda con la de hoy. ¿Cómo estuvo el clima?')]);
+  await decir('Colocamos 6 zapatas en el área 1');
+  await esperarSalidas(6);
+  e = await estado();
+  const p = await ultimaPeticion();
+  exigir(e.confirmada && e.fecha === hoyEnPanama(), 'si contesta otra cosa, se queda la de hoy');
+  exigir(
+    p.system.includes('AVISO DEL SISTEMA') && p.system.includes('media línea'),
+    'y el modelo recibe el aviso para decírselo',
+  );
+  exigir(
+    p.ultimo.includes('ya se la mandaste exactamente igual') &&
+      (await salidas()).length === 6 &&
+      (await ultimoSalido()) === 'Queda con la de hoy. ¿Cómo estuvo el clima?',
+    'la misma pregunta de la fecha, igualita, no sale dos veces seguidas',
+  );
 
   // ── un «sí» que contesta a otra cosa ────────────────────────────────────
   await empezar();
   await guionizar([texto('¿Quieres hacer el reporte diario?')]);
   await decir('Hola');
-  await esperarSalidas(5);
+  await esperarSalidas(7);
   await guionizar([texto('Dale.')]);
   await decir('Sí');
-  await esperarSalidas(6);
-  exigir((await fecha()) === undefined, 'un «sí» a otra pregunta no toca la fecha');
+  await esperarSalidas(8);
+  e = await estado();
+  exigir(e.fecha === undefined && !e.confirmada, 'un «sí» a otra pregunta no toca la fecha');
+
+  // ── «anoté» sin anotar ──────────────────────────────────────────────────
+  await guionizar([texto('Anoté lo de la limpieza.'), texto('¿Qué más se hizo?')]);
+  await decir('También limpiamos el acceso');
+  await esperarSalidas(9);
+  exigir(
+    (await ultimaPeticion()).ultimo.includes('no llamaste anotar'),
+    'una respuesta que dice «anoté» sin haber anotado vuelve al modelo',
+  );
+  exigir((await ultimoSalido()) === '¿Qué más se hizo?', 'y sale la respuesta corregida, no la otra');
+
+  // ── el mismo mensaje dos veces ──────────────────────────────────────────
+  await guionizar([texto('¿Qué más se hizo?'), texto('¿Algo más del trabajo de hoy?')]);
+  await decir('Mmm');
+  await esperarSalidas(10);
+  exigir(
+    (await ultimaPeticion()).ultimo.includes('exactamente lo que ya le mandaste'),
+    'una respuesta igual a la ultima que salio vuelve al modelo',
+  );
+  exigir((await ultimoSalido()) === '¿Algo más del trabajo de hoy?', 'y sale dicha de otra manera');
 
   await pool.end();
   console.log(fallos === 0 ? '\nTodo bien' : `\n${fallos} fallo(s)`);

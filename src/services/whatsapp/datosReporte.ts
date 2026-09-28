@@ -193,6 +193,9 @@ export function fusionar(
     const f = texto(parche.fecha);
     if (!f || !FECHA.test(f)) return { ok: false, motivo: 'La fecha va como 2026-09-17' };
     nuevo.fecha = f;
+    // Una fecha dicha por la persona es una fecha confirmada: la de hoy que
+    // pone el sistema al empezar sigue pendiente hasta que diga algo.
+    nuevo.preguntadas = [...new Set([...(nuevo.preguntadas ?? []), 'fecha'])];
   }
 
   if ('clima' in parche) {
@@ -400,9 +403,11 @@ export function faltantes(
 ): Seccion[] {
   const preguntadas = new Set(datos.preguntadas ?? []);
   const sinAreas = listas !== undefined && listas !== null && listas.areas.length === 0;
+  // La fecha la pone el sistema al empezar —hoy—, asi que tenerla no dice que
+  // la persona la haya visto: se sigue preguntando hasta que la confirme.
   return SECCIONES.filter(
     (s) =>
-      !contestada(datos, s.clave, fotos) &&
+      (s.clave === 'fecha' || !contestada(datos, s.clave, fotos)) &&
       !preguntadas.has(String(s.clave)) &&
       !(sinAreas && s.clave === 'areas'),
   );

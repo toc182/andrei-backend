@@ -126,5 +126,35 @@
       "En el área 2 vaciamos la losa",
       "Y aparte la cuadrilla limpió todo el acceso a la obra, eso no es de un área"
     ]
+  },
+  {
+    "nombre": "contesta la fecha con el trabajo",
+    "mensajes": [
+      "Ayúdame con el reporte",
+      "Hoy colocamos 6 zapatas en el área 1 y armamos acero",
+      "Nublado",
+      "No se perdieron horas",
+      "Eso es todo del trabajo"
+    ]
+  },
+  {
+    "nombre": "contesta el clima con la gente",
+    "mensajes": [
+      "Reporte diario",
+      "Sí",
+      "Éramos 2 albañiles y 6 ayudantes",
+      "Soleado",
+      "Vaciado de losa en el área 2"
+    ]
+  },
+  {
+    "nombre": "el reporte es de ayer",
+    "mensajes": [
+      "Ayúdame con el reporte",
+      "No, es de ayer",
+      "Soleado, sin horas perdidas",
+      "1",
+      "Relleno y compactación"
+    ]
   }
 ]

@@ -49,6 +49,9 @@ export interface Contexto {
   conversacion: Conversacion;
   /** Cuantas fotos lleva mandadas en esta conversacion. */
   fotos: number;
+  /** Algo que el sistema resolvio antes de este turno y el modelo tiene que
+   *  decirle a la persona (la fecha que se quedo en hoy). */
+  aviso?: string | null;
 }
 
 export interface Resultado {
@@ -166,48 +169,102 @@ export async function reportesAnteriores(
   return r.rows;
 }
 
+/** Sin mayusculas, tildes ni signos: como se compara lo que escribe la gente. */
+export const llano = (t: string | null | undefined): string =>
+  (t ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 /** Lo que cuenta como «sí, es de hoy» a la pregunta de la fecha. */
 const ES_DE_HOY = new Set([
   'si', 'sip', 'hoy', 'es de hoy', 'si es de hoy', 'si de hoy', 'si hoy', 'de hoy',
   'correcto', 'claro', 'ok', 'dale', 'asi es', 'exacto', 'afirmativo',
 ]);
 
+/** Lo que habla de OTRO dia: eso lo resuelve el modelo preguntando cual. */
+// «no» solo como respuesta —«no», «no es de hoy»—: «no se perdieron horas» no
+// habla de la fecha. Se mira sobre el texto ya llano(): sin tildes ni signos,
+// asi que «25/09» llega como «25 09».
+const OTRO_DIA =
+  /^no$|^no (es|fue|era)\b|^(el )?\d{1,2}( \d{1,2})?$|\b(otra fecha|otro dia|ayer|anteayer|antier|anoche|pasado|lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/;
+
 /**
- * Si lo ultimo que se le pregunto fue la fecha y contesto que si, la fecha
- * queda anotada ANTES de que piense el modelo.
+ * La respuesta a «¿El reporte es de hoy?», resuelta por el sistema antes de
+ * que piense el modelo.
  *
- * Con el boton «Sí» el modelo volvia a preguntar la fecha, igualita: se vio en
- * la tanda del 2026-09-28 y tambien con lo que ya estaba publicado. Que el sí
- * es de hoy no necesita criterio, asi que lo resuelve el sistema.
+ * El reporte ya empieza con la fecha de hoy (elegir_proyecto): la pregunta es
+ * para confirmarla, no para frenar. Asi:
+ * - «Sí» la confirma. Con el boton el modelo volvia a preguntar la fecha,
+ *   igualita (tanda del 2026-09-28).
+ * - Si contesta otra cosa —lo que hizo, el clima—, se queda la de hoy y el
+ *   modelo se lo dice en media linea: en la misma tanda insistio cinco veces
+ *   con la fecha y lo que le contaban se perdia (decision de Ivan, 2026-09-28).
+ * - «Otra fecha», «ayer», «el 25»… no se toca: el modelo pregunta cual.
  *
  * La pregunta de la fecha se reconoce porque es la unica con botones que sale
  * antes del borrador (la otra es «¿Deseas enviarlo?», que exige borrador).
+ * Devuelve lo que el modelo tiene que decirle, si hay algo.
  */
 export async function fechaContestada(
   ctx: Contexto,
   historial: MensajeGuardado[],
-): Promise<boolean> {
+): Promise<string | null> {
   const c = ctx.conversacion;
-  if (c.datos.fecha !== undefined || c.borradorEnviadoAt !== null) return false;
+  if ((c.datos.preguntadas ?? []).includes('fecha') || c.borradorEnviadoAt !== null) return null;
   let ultima = -1;
   historial.forEach((m, i) => {
     if (m.direccion === 'saliente') ultima = i;
   });
-  if (ultima < 0 || historial[ultima].tipo !== 'interactive') return false;
+  if (ultima < 0 || historial[ultima].tipo !== 'interactive') return null;
   const despues = historial.slice(ultima + 1).filter((m) => m.direccion === 'entrante');
-  if (despues.length !== 1) return false;
-  const dicho = (despues[0].texto ?? '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z ]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!ES_DE_HOY.has(dicho)) return false;
-  c.datos = { ...c.datos, fecha: hoyEnPanama() };
+  if (despues.length === 0) return null;
+
+  const dicho = llano(despues.map((m) => m.texto ?? '').join(' '));
+  const confirma = despues.length === 1 && ES_DE_HOY.has(dicho);
+  // Una foto o una nota de voz sin entender no contestan nada.
+  if (!confirma && (!dicho || OTRO_DIA.test(dicho))) return null;
+
+  c.datos = {
+    ...c.datos,
+    fecha: c.datos.fecha ?? hoyEnPanama(),
+    preguntadas: [...new Set([...(c.datos.preguntadas ?? []), 'fecha'])],
+  };
   await guardarConversacion(c.id, { datos: c.datos });
-  return true;
+  return confirma
+    ? null
+    : `No contestó la fecha: el reporte queda con la de hoy (${diaEnPalabras(c.datos.fecha!)}). ` +
+        'Díselo en media línea y anota lo que te contó.';
 }
+
+/**
+ * Lo ultimo que salio en esta conversacion, para no mandarlo otra vez igual.
+ *
+ * «Nunca mandas dos veces el mismo mensaje» estaba en las instrucciones y la
+ * tanda del 2026-09-28 lo vio romperse cinco veces seguidas con la fecha: lo
+ * comprueba el sistema.
+ */
+export async function ultimoMensaje(conversacionId: number): Promise<string> {
+  const r = await query<{ texto: string | null }>(
+    `SELECT texto FROM whatsapp_mensajes
+      WHERE conversacion_id = $1 AND direccion = 'saliente'
+      ORDER BY id DESC LIMIT 1`,
+    [conversacionId],
+  );
+  return llano(r.rows[0]?.texto);
+}
+
+const REPETIDA = {
+  ok: false,
+  contenido: {
+    error:
+      'Esa pregunta ya se la mandaste exactamente igual y no te contestó. Cámbiale la frase ' +
+      '(parámetro pregunta) y dile para qué la necesitas.',
+  },
+} as const;
 
 export const HERRAMIENTAS: Anthropic.Tool[] = [
   {
@@ -617,11 +674,9 @@ export async function ejecutarHerramienta(
       return { ok: false, contenido: { error: 'Esta persona no tiene ninguna obra donde reportar' } };
     }
     const pregunta = typeof input.pregunta === 'string' ? input.pregunta : null;
-    const salio = await responder(
-      ctx.conversacion.telefono,
-      preguntaDeLista(proyectos, pregunta, '¿De qué obra es el reporte?'),
-      ctx.conversacion.id,
-    );
+    const mensaje = preguntaDeLista(proyectos, pregunta, '¿De qué obra es el reporte?');
+    if (llano(mensaje) === (await ultimoMensaje(ctx.conversacion.id))) return REPETIDA;
+    const salio = await responder(ctx.conversacion.telefono, mensaje, ctx.conversacion.id);
     return salio
       ? {
           ok: true,
@@ -659,9 +714,15 @@ export async function ejecutarHerramienta(
     cache.listas = listas;
     ctx.conversacion.proyectoId = proyectoId;
     ctx.conversacion.modo = 'reporte_diario';
+    // El reporte empieza con la fecha de hoy: la pregunta de la fecha la
+    // confirma o la cambia, pero ya no frena nada (decision de Ivan, 2026-09-28).
+    if (ctx.conversacion.datos.fecha === undefined) {
+      ctx.conversacion.datos = { ...ctx.conversacion.datos, fecha: hoyEnPanama() };
+    }
     await guardarConversacion(ctx.conversacion.id, {
       proyectoId,
       modo: 'reporte_diario',
+      datos: ctx.conversacion.datos,
     });
     return {
       ok: true,
@@ -842,9 +903,11 @@ export async function ejecutarHerramienta(
   if (nombre === 'preguntar_fecha') {
     const hoy = hoyEnPanama();
     const suya = typeof input.pregunta === 'string' ? input.pregunta.trim() : '';
+    const mensaje = suya || `¿El reporte es de hoy, ${diaEnPalabras(hoy)}?`;
+    if (llano(mensaje) === (await ultimoMensaje(ctx.conversacion.id))) return REPETIDA;
     const salio = await responderBotones(
       ctx.conversacion.telefono,
-      suya || `¿El reporte es de hoy, ${diaEnPalabras(hoy)}?`,
+      mensaje,
       [
         { id: 'fecha_hoy', titulo: 'Sí' },
         { id: 'fecha_otra', titulo: 'Otra fecha' },
@@ -865,11 +928,9 @@ export async function ejecutarHerramienta(
   if (nombre === 'preguntar_clima') {
     const climas = CLIMAS.map((c, i) => ({ id: i + 1, nombre: c }));
     const suya = typeof input.pregunta === 'string' ? input.pregunta : null;
-    const salio = await responder(
-      ctx.conversacion.telefono,
-      preguntaDeLista(climas, suya, '¿Cómo estuvo el clima hoy?'),
-      ctx.conversacion.id,
-    );
+    const mensaje = preguntaDeLista(climas, suya, '¿Cómo estuvo el clima hoy?');
+    if (llano(mensaje) === (await ultimoMensaje(ctx.conversacion.id))) return REPETIDA;
+    const salio = await responder(ctx.conversacion.telefono, mensaje, ctx.conversacion.id);
     return salio
       ? {
           ok: true,
@@ -898,11 +959,9 @@ export async function ejecutarHerramienta(
       };
     }
     const pregunta = typeof input.pregunta === 'string' ? input.pregunta : null;
-    const salio = await responder(
-      ctx.conversacion.telefono,
-      preguntaDeAreas(listas.areas, pregunta),
-      ctx.conversacion.id,
-    );
+    const mensaje = preguntaDeAreas(listas.areas, pregunta);
+    if (llano(mensaje) === (await ultimoMensaje(ctx.conversacion.id))) return REPETIDA;
+    const salio = await responder(ctx.conversacion.telefono, mensaje, ctx.conversacion.id);
     return salio
       ? {
           ok: true,

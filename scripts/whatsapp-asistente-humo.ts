@@ -322,7 +322,9 @@ const main = async () => {
   };
   await guionizar([
     usar('agregar_equipo', { nombre: 'Retro excavadora' }),
-    texto('Ya está la Retroexcavadora en la lista, la anoto con esa.'),
+    // Sin decir que la anoto: no llamo anotar, y eso ahora el sistema se lo
+    // devuelve (whatsapp-fecha).
+    texto('Ya está la Retroexcavadora en la lista: es esa.'),
   ]);
   await decir('La retro excavadora trabajó 8 horas');
   await esperarRespuestas(6);

@@ -13,6 +13,7 @@ import {
   ejecutarHerramienta,
   hoyEnPanama,
   listasDe,
+  llano,
   reportesAnteriores,
   type Contexto,
 } from './herramientas.js';
@@ -76,6 +77,12 @@ COMO TRABAJAS
   botones («Sí» / «Otra fecha») y preguntar_clima manda los cuatro climas numerados. Lo
   que conteste —el numero— lo mandas tal cual en anotar. Despues preguntas en una linea si
   se perdieron horas y por que.
+- NINGUNA pregunta frena el reporte. El reporte ya trae la fecha de hoy; la pregunta de la
+  fecha solo la confirma. Si a la fecha o al clima te contesta otra cosa —lo que hizo, la
+  gente—, lo anotas en ese mismo turno y sigues; el clima lo vuelves a pedir UNA vez, con
+  otras palabras, y si aun falta se lo pides al final, antes de ofrecer el borrador.
+- Si dice que el reporte es de otro dia —«ayer», «el viernes», «el 25»—, anotas esa fecha.
+  Si solo dice «otra fecha», le preguntas cual.
 - Los grupos son: la fecha, el clima, las horas perdidas, el trabajo (en que
   areas y que se hizo en cada una), lo que salio mal (atrasos y novedades), la gente, las
   maquinas y sus horas, lo que llego a la obra, y las fotos.
@@ -86,6 +93,9 @@ COMO TRABAJAS
   todas las areas de una vez, repartelo tu.
 - Cuando te cuente varias cosas de golpe —pasa siempre con las notas de voz—, repartelas
   tu entre sus secciones y sigue por el grupo que quede. No le hagas repetir.
+- Lo que te cuenta se anota AHORA, con anotar, aunque no sea lo que le preguntaste. Nunca
+  digas «lo anoto despues» ni «cuando lleguemos ahi»: si dices que lo anotaste, tiene que
+  estar anotado.
 - Anota SOLO lo que dijo, con SUS palabras: si conto el trabajo en lista, cada renglon es
   un punto, tal cual. Solo corriges faltas de ortografia evidentes, y nunca cambias una
   palabra que no conoces —en cada obra hay nombres propios—.
@@ -213,6 +223,8 @@ ${JSON.stringify(dePagos)}`
     );
   }
 
+  if (ctx.aviso) partes.push(`AVISO DEL SISTEMA PARA ESTE TURNO: ${ctx.aviso}`);
+
   partes.push(
     `Lo que llevas anotado:\n${
       listas ? resumen(ctx.conversacion.datos, listas, ctx.fotos) : '(nada)'
@@ -283,6 +295,36 @@ export function comoMensajes(historial: MensajeGuardado[]): {
   return { mensajes, colgando };
 }
 
+/** Las herramientas que dejan algo guardado en el reporte. */
+const ANOTAN = new Set(['anotar', 'agregar_equipo', 'agregar_area', 'empezar_de_nuevo']);
+
+/** «anoté», «anotado», «lo anoto», «apunté»… sobre el texto ya llano(). */
+const DICE_QUE_ANOTA = /\b(anot|apunt)[a-z]*/;
+
+/**
+ * Lo que hay que corregirle a una respuesta antes de que salga, o null si
+ * puede salir.
+ */
+export function revisarRespuesta(
+  texto: string,
+  anotoEnElTurno: boolean,
+  ultimoEnviado: string,
+): string | null {
+  const dicho = llano(texto);
+  if (!dicho) return null;
+  if (dicho === ultimoEnviado) {
+    return 'Eso es exactamente lo que ya le mandaste y no te contestó. Dilo de otra manera.';
+  }
+  if (!anotoEnElTurno && DICE_QUE_ANOTA.test(dicho)) {
+    return (
+      'Dices que anotaste algo, pero en este turno no llamaste anotar. Si la persona te ' +
+      'contó algo que no está en lo anotado, anótalo ahora con anotar. Si ya estaba ' +
+      'anotado de antes, contesta lo mismo.'
+    );
+  }
+  return null;
+}
+
 /**
  * Un turno del asistente: lee lo que hay, usa sus herramientas y devuelve lo
  * que hay que contestarle a la persona.
@@ -316,6 +358,15 @@ export async function conversar(args: {
 
   const cache: { listas: ListasProyecto | null } = { listas: null };
   let texto = '';
+  // Las dos cosas que las instrucciones pedian y el modelo no cumplia (tanda
+  // del 2026-09-28), comprobadas aqui: decir «lo anoto» sin anotar —y lo que
+  // conto se perdia—, y mandar el mismo mensaje que ya mando. Una sola
+  // correccion por turno: si insiste, sale lo que diga.
+  const ultimoEnviado = llano(
+    [...historial].reverse().find((m) => m.direccion === 'saliente')?.texto,
+  );
+  let anotoEnElTurno = false;
+  let corregido = false;
 
   for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta += 1) {
     const respuesta = await cliente.messages.create({
@@ -350,7 +401,14 @@ export async function conversar(args: {
     const llamadas = respuesta.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
     );
-    if (llamadas.length === 0) break;
+    if (llamadas.length === 0) {
+      const correccion = corregido ? null : revisarRespuesta(texto, anotoEnElTurno, ultimoEnviado);
+      if (!correccion) break;
+      corregido = true;
+      mensajes.push({ role: 'assistant', content: respuesta.content });
+      mensajes.push({ role: 'user', content: `[Aviso del sistema, no de la persona] ${correccion}` });
+      continue;
+    }
 
     mensajes.push({ role: 'assistant', content: respuesta.content });
     const resultados: Anthropic.ToolResultBlockParam[] = [];
@@ -358,6 +416,7 @@ export async function conversar(args: {
     for (const llamada of llamadas) {
       const r = await ejecutarHerramienta(llamada.name, llamada.input, ctx, cache);
       if (r.ok && r.cierraTurno) preguntaHecha = true;
+      if (r.ok && ANOTAN.has(llamada.name)) anotoEnElTurno = true;
       // Una herramienta rechazada queda en el registro: es la unica manera de
       // ver desde fuera por que un reporte salio sin algo que la persona conto.
       if (!r.ok) {

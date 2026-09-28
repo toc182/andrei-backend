@@ -161,8 +161,8 @@ async function atender(p: Pendiente): Promise<void> {
     await transcribirNotasDeVoz(conversacion);
     const ctx = { usuario, conversacion, fotos: await fotosDe(conversacion.id) };
     const lo = await historial(conversacion.id);
-    await fechaContestada(ctx, lo);
-    const r = await conversar({ ctx, historial: lo });
+    const aviso = await fechaContestada(ctx, lo);
+    const r = await conversar({ ctx: { ...ctx, aviso }, historial: lo });
     const texto = r.texto.trim();
     if (texto) await responder(p.telefono, texto, conversacion.id);
     await marcarAtendidos(ids);
