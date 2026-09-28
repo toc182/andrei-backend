@@ -14,10 +14,7 @@ import { agregarALista } from '../../routes/proyectoListas.js';
 import { agregarArea } from '../../routes/proyectoAreas.js';
 import {
   parecidoEnLista,
-  preguntaDeLista,
   fusionar,
-  faltantes,
-  preguntaDeAreas,
   resumen,
   trabajoFlaco,
   CLIMAS,
@@ -31,9 +28,8 @@ import {
   conversacionViva,
   guardarConversacion,
   type Conversacion,
-  type MensajeGuardado,
 } from './conversacion.js';
-import { responder, responderBotones, responderDocumento } from './entrantes.js';
+import { responderBotones, responderDocumento } from './entrantes.js';
 import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal } from './borrador.js';
 import { ESTADOS, buscarSolicitudes, verSolicitud, type Filtros } from './solicitudes.js';
 
@@ -169,103 +165,6 @@ export async function reportesAnteriores(
   return r.rows;
 }
 
-/** Sin mayusculas, tildes ni signos: como se compara lo que escribe la gente. */
-export const llano = (t: string | null | undefined): string =>
-  (t ?? '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-/** Lo que cuenta como «sí, es de hoy» a la pregunta de la fecha. */
-const ES_DE_HOY = new Set([
-  'si', 'sip', 'hoy', 'es de hoy', 'si es de hoy', 'si de hoy', 'si hoy', 'de hoy',
-  'correcto', 'claro', 'ok', 'dale', 'asi es', 'exacto', 'afirmativo',
-]);
-
-/** Lo que habla de OTRO dia: eso lo resuelve el modelo preguntando cual. */
-// «no» solo como respuesta —«no», «no es de hoy»—: «no se perdieron horas» no
-// habla de la fecha. Se mira sobre el texto ya llano(): sin tildes ni signos,
-// asi que «25/09» llega como «25 09».
-const OTRO_DIA =
-  /^no$|^no (es|fue|era)\b|^(el )?\d{1,2}( \d{1,2})?$|\b(otra fecha|otro dia|ayer|anteayer|antier|anoche|pasado|lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/;
-
-/**
- * La respuesta a «¿El reporte es de hoy?», resuelta por el sistema antes de
- * que piense el modelo.
- *
- * El reporte ya empieza con la fecha de hoy (elegir_proyecto): la pregunta es
- * para confirmarla, no para frenar. Asi:
- * - «Sí» la confirma. Con el boton el modelo volvia a preguntar la fecha,
- *   igualita (tanda del 2026-09-28).
- * - Si contesta otra cosa —lo que hizo, el clima—, se queda la de hoy y el
- *   modelo se lo dice en media linea: en la misma tanda insistio cinco veces
- *   con la fecha y lo que le contaban se perdia (decision de Ivan, 2026-09-28).
- * - «Otra fecha», «ayer», «el 25»… no se toca: el modelo pregunta cual.
- *
- * La pregunta de la fecha se reconoce porque es la unica con botones que sale
- * antes del borrador (la otra es «¿Deseas enviarlo?», que exige borrador).
- * Devuelve lo que el modelo tiene que decirle, si hay algo.
- */
-export async function fechaContestada(
-  ctx: Contexto,
-  historial: MensajeGuardado[],
-): Promise<string | null> {
-  const c = ctx.conversacion;
-  if ((c.datos.preguntadas ?? []).includes('fecha') || c.borradorEnviadoAt !== null) return null;
-  let ultima = -1;
-  historial.forEach((m, i) => {
-    if (m.direccion === 'saliente') ultima = i;
-  });
-  if (ultima < 0 || historial[ultima].tipo !== 'interactive') return null;
-  const despues = historial.slice(ultima + 1).filter((m) => m.direccion === 'entrante');
-  if (despues.length === 0) return null;
-
-  const dicho = llano(despues.map((m) => m.texto ?? '').join(' '));
-  const confirma = despues.length === 1 && ES_DE_HOY.has(dicho);
-  // Una foto o una nota de voz sin entender no contestan nada.
-  if (!confirma && (!dicho || OTRO_DIA.test(dicho))) return null;
-
-  c.datos = {
-    ...c.datos,
-    fecha: c.datos.fecha ?? hoyEnPanama(),
-    preguntadas: [...new Set([...(c.datos.preguntadas ?? []), 'fecha'])],
-  };
-  await guardarConversacion(c.id, { datos: c.datos });
-  return confirma
-    ? null
-    : `No contestó la fecha: el reporte queda con la de hoy (${diaEnPalabras(c.datos.fecha!)}). ` +
-        'Díselo en media línea y anota lo que te contó.';
-}
-
-/**
- * Lo ultimo que salio en esta conversacion, para no mandarlo otra vez igual.
- *
- * «Nunca mandas dos veces el mismo mensaje» estaba en las instrucciones y la
- * tanda del 2026-09-28 lo vio romperse cinco veces seguidas con la fecha: lo
- * comprueba el sistema.
- */
-export async function ultimoMensaje(conversacionId: number): Promise<string> {
-  const r = await query<{ texto: string | null }>(
-    `SELECT texto FROM whatsapp_mensajes
-      WHERE conversacion_id = $1 AND direccion = 'saliente'
-      ORDER BY id DESC LIMIT 1`,
-    [conversacionId],
-  );
-  return llano(r.rows[0]?.texto);
-}
-
-const REPETIDA = {
-  ok: false,
-  contenido: {
-    error:
-      'Esa pregunta ya se la mandaste exactamente igual y no te contestó. Cámbiale la frase ' +
-      '(parámetro pregunta) y dile para qué la necesitas.',
-  },
-} as const;
-
 export const HERRAMIENTAS: Anthropic.Tool[] = [
   {
     name: 'ver_proyectos',
@@ -275,30 +174,21 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
-    name: 'preguntar_obras',
+    name: 'empezar_reporte',
     description:
-      'Le manda la lista de las obras donde puede reportar, numerada. La escribe el ' +
-      'sistema, no usted. Uselo cuando tenga varias y haya que preguntarle cual. Despues ' +
-      'de llamarlo no escriba nada mas en ese turno: la pregunta ya salio. Cuando conteste ' +
-      'con un numero, ese numero va en elegir_proyecto como numero_de_la_lista.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        pregunta: {
-          type: 'string',
-          description: 'La frase que va antes de la lista, sin nombrar obras',
-        },
-      },
-      additionalProperties: false,
-    },
+      'Empieza el reporte diario. Uselo cuando la persona quiera hacer el reporte, o cuando ' +
+      'escriba sin decir para que (un saludo). Si tiene una sola obra, queda elegida; si ' +
+      'tiene varias, el sistema le pregunta cual. Las preguntas del reporte las hace el ' +
+      'sistema despues de su mensaje: usted no las hace.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'elegir_proyecto',
     description:
-      'Fija el proyecto del reporte y devuelve sus listas (areas, puestos, equipos, ' +
-      'categorias de entrega) y sus ultimos reportes. Hay que llamarlo antes de anotar nada. ' +
-      'Si la persona contesto con un numero de la lista que mando preguntar_obras, manda ese ' +
-      'numero en numero_de_la_lista y NO adivines el proyecto_id: no son lo mismo.',
+      'Fija la obra del reporte cuando la persona la nombra, y devuelve sus listas (areas, ' +
+      'puestos, equipos, categorias de entrega) y sus ultimos reportes. Si contesto con un ' +
+      'numero de la lista de obras, manda ese numero en numero_de_la_lista y NO adivines el ' +
+      'proyecto_id: no son lo mismo.',
     input_schema: {
       type: 'object',
       properties: {
@@ -451,61 +341,6 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
     },
   },
   {
-    name: 'preguntar_fecha',
-    description:
-      'Le pregunta si el reporte es del dia de hoy, con dos botones: «Sí» y «Otra fecha». ' +
-      'Es lo PRIMERO que se pregunta. Los botones los pone el sistema; la frase la escribe ' +
-      'usted, y si tiene que volver a preguntar la cambia —no repita la misma frase dos ' +
-      'veces—. Despues de llamarlo no escriba nada mas en ese turno.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        pregunta: {
-          type: 'string',
-          description:
-            'La frase, con la fecha de hoy dentro. Por ejemplo «¿El reporte es de hoy, ' +
-            'domingo 27 de septiembre?»',
-        },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'preguntar_clima',
-    description:
-      'Le pregunta como estuvo el clima con los cuatro climas numerados. La lista la pone ' +
-      'el sistema y la frase la escribe usted; la persona contesta con el numero y usted lo ' +
-      'manda tal cual en anotar (clima acepta el numero). Despues de llamarlo no escriba ' +
-      'nada mas en ese turno.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        pregunta: { type: 'string', description: 'La frase que va antes de la lista' },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'preguntar_areas',
-    description:
-      'Le pregunta a la persona en que areas se trabajo. El mensaje sale con TODAS las areas ' +
-      'del proyecto, numeradas: la lista la pone el sistema, no usted. Uselo siempre que ' +
-      'tenga que preguntar por las areas, tambien cuando lo que contesto no calza con ' +
-      'ninguna. Despues de llamarlo no escriba nada mas en ese turno: la pregunta ya salio.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        pregunta: {
-          type: 'string',
-          description:
-            'La frase que va antes de la lista, sin nombrar ninguna area. Por ejemplo ' +
-            '«¿En qué áreas se trabajó hoy?», o «No encontré "pedestales". ¿Cuál de estas es?»',
-        },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
     name: 'mandar_borrador',
     description:
       'Arma el borrador con lo anotado y le manda a la persona el PDF por WhatsApp para que ' +
@@ -587,8 +422,32 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
   },
 ];
 
+/**
+ * Deja elegida la obra del reporte. Lo usan elegir_proyecto, empezar_reporte y
+ * el sistema cuando contesta con el numero de la lista.
+ *
+ * El reporte empieza con la fecha de hoy: la pregunta de la fecha la confirma o
+ * la cambia, pero no frena nada (decision de Ivan, 2026-09-28).
+ */
+export async function fijarObra(conversacion: Conversacion, proyectoId: number): Promise<void> {
+  conversacion.proyectoId = proyectoId;
+  conversacion.modo = 'reporte_diario';
+  if (conversacion.datos.fecha === undefined) {
+    conversacion.datos = { ...conversacion.datos, fecha: hoyEnPanama() };
+  }
+  await guardarConversacion(conversacion.id, {
+    proyectoId,
+    modo: 'reporte_diario',
+    datos: conversacion.datos,
+  });
+}
+
 /** El estado que se le devuelve al modelo despues de cada herramienta. */
-async function estado(ctx: Contexto, listas: ListasProyecto | null): Promise<unknown> {
+async function estado(
+  ctx: Contexto,
+  listas: ListasProyecto | null,
+  revisarTrabajo = false,
+): Promise<unknown> {
   const datos = ctx.conversacion.datos;
 
   // Una semana que ya tiene su reporte semanal enviado no admite diarios. El
@@ -613,7 +472,7 @@ async function estado(ctx: Contexto, listas: ListasProyecto | null): Promise<unk
     proyecto_id: ctx.conversacion.proyectoId,
     fecha_de_hoy: hoyEnPanama(),
     ...(cerrada ? { no_se_puede_reportar_esa_fecha: cerrada } : {}),
-    ...(trabajoFlaco(datos)
+    ...(revisarTrabajo
       ? {
           revisar_trabajo:
             'Lo que tienes anotado del trabajo ejecutado es muy corto para un reporte. ' +
@@ -624,15 +483,6 @@ async function estado(ctx: Contexto, listas: ListasProyecto | null): Promise<unk
     anotado: listas ? resumen(datos, listas, ctx.fotos) : null,
     datos,
     fotos: ctx.fotos,
-    // Agrupadas: lo de un mismo grupo se pregunta en un solo mensaje, y la
-    // respuesta se reparte entre sus secciones.
-    falta_preguntar: faltantes(datos, ctx.fotos, listas).map((s) => ({
-      seccion: s.clave,
-      nombre: s.nombre,
-      obligatoria: s.obligatoria,
-      grupo: s.grupo,
-    })),
-    grupo_que_toca: faltantes(datos, ctx.fotos, listas)[0]?.grupo ?? null,
   };
 }
 
@@ -668,27 +518,30 @@ export async function ejecutarHerramienta(
     };
   }
 
-  if (nombre === 'preguntar_obras') {
-    const proyectos = await proyectosDe(ctx.usuario);
-    if (proyectos.length === 0) {
+  if (nombre === 'empezar_reporte') {
+    const obras = await proyectosDe(ctx.usuario);
+    if (obras.length === 0) {
       return { ok: false, contenido: { error: 'Esta persona no tiene ninguna obra donde reportar' } };
     }
-    const pregunta = typeof input.pregunta === 'string' ? input.pregunta : null;
-    const mensaje = preguntaDeLista(proyectos, pregunta, '¿De qué obra es el reporte?');
-    if (llano(mensaje) === (await ultimoMensaje(ctx.conversacion.id))) return REPETIDA;
-    const salio = await responder(ctx.conversacion.telefono, mensaje, ctx.conversacion.id);
-    return salio
-      ? {
-          ok: true,
-          cierraTurno: true,
-          contenido: {
-            preguntado: 'La lista de obras salió numerada',
-            recuerde:
-              'Cuando conteste con un número, mándalo en elegir_proyecto como ' +
-              'numero_de_la_lista. Ese número es la posición en esta lista, no el id.',
-          },
-        }
-      : { ok: false, contenido: { error: 'No se pudo mandar la lista' } };
+    ctx.conversacion.modo = 'reporte_diario';
+    if (ctx.conversacion.proyectoId === null && obras.length === 1) {
+      await fijarObra(ctx.conversacion, obras[0].id);
+    } else {
+      await guardarConversacion(ctx.conversacion.id, { modo: 'reporte_diario' });
+    }
+    const listas = ctx.conversacion.proyectoId === null
+      ? null
+      : (cache.listas ?? (cache.listas = await listasDe(ctx.conversacion.proyectoId)));
+    return {
+      ok: true,
+      contenido: {
+        empezado:
+          ctx.conversacion.proyectoId === null
+            ? 'Tiene varias obras: el sistema le pregunta cuál después de tu mensaje.'
+            : 'Reporte empezado. El sistema hace las preguntas después de tu mensaje.',
+        ...(await estado(ctx, listas) as object),
+      },
+    };
   }
 
   if (nombre === 'elegir_proyecto') {
@@ -712,18 +565,7 @@ export async function ejecutarHerramienta(
     }
     const listas = await listasDe(proyectoId);
     cache.listas = listas;
-    ctx.conversacion.proyectoId = proyectoId;
-    ctx.conversacion.modo = 'reporte_diario';
-    // El reporte empieza con la fecha de hoy: la pregunta de la fecha la
-    // confirma o la cambia, pero ya no frena nada (decision de Ivan, 2026-09-28).
-    if (ctx.conversacion.datos.fecha === undefined) {
-      ctx.conversacion.datos = { ...ctx.conversacion.datos, fecha: hoyEnPanama() };
-    }
-    await guardarConversacion(ctx.conversacion.id, {
-      proyectoId,
-      modo: 'reporte_diario',
-      datos: ctx.conversacion.datos,
-    });
+    await fijarObra(ctx.conversacion, proyectoId);
     return {
       ok: true,
       contenido: {
@@ -748,9 +590,14 @@ export async function ejecutarHerramienta(
     if (!fusion.ok) {
       return { ok: false, contenido: { error: fusion.motivo, listas } };
     }
+    // El trabajo que quedo en una linea suelta se le lee UNA vez para que lo
+    // confirme (decision de Ivan del 2026-09-25); las tandas lo vieron
+    // preguntarlo otra vez en cada vuelta.
+    const revisar = trabajoFlaco(fusion.datos) && !fusion.datos.trabajoRevisado;
+    if (revisar) fusion.datos.trabajoRevisado = true;
     ctx.conversacion.datos = fusion.datos;
     await guardarConversacion(ctx.conversacion.id, { datos: fusion.datos });
-    return { ok: true, contenido: await estado(ctx, listas) };
+    return { ok: true, contenido: await estado(ctx, listas, revisar) };
   }
 
   if (nombre === 'empezar_de_nuevo') {
@@ -898,77 +745,6 @@ export async function ejecutarHerramienta(
           'áreas de la obra.',
       },
     };
-  }
-
-  if (nombre === 'preguntar_fecha') {
-    const hoy = hoyEnPanama();
-    const suya = typeof input.pregunta === 'string' ? input.pregunta.trim() : '';
-    const mensaje = suya || `¿El reporte es de hoy, ${diaEnPalabras(hoy)}?`;
-    if (llano(mensaje) === (await ultimoMensaje(ctx.conversacion.id))) return REPETIDA;
-    const salio = await responderBotones(
-      ctx.conversacion.telefono,
-      mensaje,
-      [
-        { id: 'fecha_hoy', titulo: 'Sí' },
-        { id: 'fecha_otra', titulo: 'Otra fecha' },
-      ],
-      ctx.conversacion.id,
-    );
-    return salio
-      ? {
-          ok: true,
-          cierraTurno: true,
-          contenido: {
-            preguntado: `La pregunta salió con los botones Sí y Otra fecha. Hoy es ${hoy}.`,
-          },
-        }
-      : { ok: false, contenido: { error: 'No se pudo mandar la pregunta' } };
-  }
-
-  if (nombre === 'preguntar_clima') {
-    const climas = CLIMAS.map((c, i) => ({ id: i + 1, nombre: c }));
-    const suya = typeof input.pregunta === 'string' ? input.pregunta : null;
-    const mensaje = preguntaDeLista(climas, suya, '¿Cómo estuvo el clima hoy?');
-    if (llano(mensaje) === (await ultimoMensaje(ctx.conversacion.id))) return REPETIDA;
-    const salio = await responder(ctx.conversacion.telefono, mensaje, ctx.conversacion.id);
-    return salio
-      ? {
-          ok: true,
-          cierraTurno: true,
-          contenido: {
-            preguntado: 'Los cuatro climas salieron numerados',
-            recuerde: 'Cuando conteste con un número, mándalo tal cual en anotar, en clima.',
-          },
-        }
-      : { ok: false, contenido: { error: 'No se pudo mandar la pregunta' } };
-  }
-
-  if (nombre === 'preguntar_areas') {
-    const proyectoId = ctx.conversacion.proyectoId;
-    if (proyectoId === null) {
-      return {
-        ok: false,
-        contenido: { error: 'Primero hay que elegir el proyecto con elegir_proyecto' },
-      };
-    }
-    const listas = cache.listas ?? (cache.listas = await listasDe(proyectoId));
-    if (listas.areas.length === 0) {
-      return {
-        ok: false,
-        contenido: { error: 'Este proyecto no tiene areas: no preguntes por ellas' },
-      };
-    }
-    const pregunta = typeof input.pregunta === 'string' ? input.pregunta : null;
-    const mensaje = preguntaDeAreas(listas.areas, pregunta);
-    if (llano(mensaje) === (await ultimoMensaje(ctx.conversacion.id))) return REPETIDA;
-    const salio = await responder(ctx.conversacion.telefono, mensaje, ctx.conversacion.id);
-    return salio
-      ? {
-          ok: true,
-          cierraTurno: true,
-          contenido: { preguntado: 'La pregunta salió con todas las áreas numeradas' },
-        }
-      : { ok: false, contenido: { error: 'No se pudo mandar la pregunta' } };
   }
 
   if (nombre === 'mandar_borrador') {

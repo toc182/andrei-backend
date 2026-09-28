@@ -129,6 +129,10 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
   after the person stops writing, never per message), borrador.ts (builds the
   draft with the SAME function the screen uses, its PDF with the BORRADOR stamp,
   and the send).
+  preguntasFijas.ts: the daily report's questions, their wording and order —
+  the SYSTEM asks them, the model only understands and records (Ivan,
+  2026-09-28); flujo.ts: what is resolved before the model («Sí», a list
+  number, «nada») and the question that goes out after it.
   solicitudes.ts is the ONLY place WhatsApp reads payment requests (questions
   only, nothing is approved or paid): same visibility as the screen, never bank
   data, and every count and total comes from the database, not the model.

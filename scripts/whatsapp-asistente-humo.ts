@@ -12,7 +12,8 @@
 // - el asistente elige proyecto y queda en modo reporte diario;
 // - lo que anota queda en la conversacion, validado contra las listas del
 //   proyecto: un area de otra obra se rechaza y el modelo se entera;
-// - la pregunta de las areas sale con todas las del proyecto, numeradas;
+// - si el modelo aclara algo, su pregunta sale sola (las preguntas del reporte
+//   las hace el sistema: whatsapp-fecha);
 // - una maquina que no esta en la lista se agrega, con su rastro, y sus horas
 //   se anotan en el mismo turno; una repetida con otra escritura no entra, y
 //   una parecida solo entra cuando la persona dijo que es otra;
@@ -242,24 +243,18 @@ const main = async () => {
     'el equipo del proyecto si se guarda',
   );
 
-  // ── la pregunta de las areas la arma el sistema, con todas ──────────────
-  // Sin nada guionizado detras: la pregunta cierra el turno y el modelo no se
-  // vuelve a llamar. Si se llamara, el guion vacio contestaria error.
-  await guionizar([usar('preguntar_areas', { pregunta: '¿En qué áreas se trabajó hoy?' })]);
-  const antesDeAreas = (await peticionesIa()).length;
+  // ── si el modelo aclara algo, su pregunta sale sola ─────────────────────
+  // Las preguntas del reporte —la lista de las areas incluida— las hace el
+  // sistema y se prueban en whatsapp-fecha. Aqui: un mensaje del modelo que es
+  // una pregunta no lleva otra detras.
+  await guionizar([texto('¿Cómo le dicen a esa área en la obra?')]);
   await decir('No sé bien cómo se llama el área');
   const cuarta = await esperarRespuestas(4);
-  const listaAreas = cuarta[3]?.texto ?? '';
+  await esperar(1000);
   exigir(
-    cuarta.length === 4 &&
-      listaAreas.startsWith('¿En qué áreas se trabajó hoy?') &&
-      areas.rows.every((a, i) => listaAreas.includes(`${i + 1}. ${a.nombre}`)),
-    'la pregunta de las areas sale con todas las del proyecto, numeradas',
-  );
-  await esperar(1500);
-  exigir(
-    (await enviados()).length === 4 && (await peticionesIa()).length - antesDeAreas === 1,
-    'y sale sola: la pregunta cierra el turno y el modelo no escribe nada detras',
+    cuarta.length === 4 && cuarta[3]?.texto === '¿Cómo le dicen a esa área en la obra?' &&
+      (await enviados()).length === 4,
+    'si el modelo aclara algo, su pregunta sale sola, sin otra detrás',
   );
 
   // ── una maquina que no esta en la lista se agrega ───────────────────────

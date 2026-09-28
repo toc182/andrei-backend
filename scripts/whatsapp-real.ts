@@ -50,7 +50,11 @@ async function main(): Promise<void> {
     ? [{ nombre: 'guion', mensajes: crudo as string[] }]
     : (crudo as { nombre: string; mensajes: string[] }[]);
 
-  console.log('Levantando base, servidor y «Meta» de mentira…');
+  console.log(
+    `Levantando base, servidor y «Meta» de mentira… (modelo: ${
+      process.env.ANTHROPIC_MODELO_WHATSAPP ?? 'claude-opus-5, el de Railway'
+    })`,
+  );
   const entorno = await crearEntorno(undefined, { iaDeVerdad: true });
   const meta = entorno.env.PRUEBAS_META!;
   const base = new Client({

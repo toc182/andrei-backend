@@ -16,7 +16,8 @@ import {
 import { responder } from './entrantes.js';
 import { marcarLeidoYEscribiendo } from './cliente.js';
 import { transcribirNotasDeVoz } from './transcripcion.js';
-import { fechaContestada, type Usuario } from './herramientas.js';
+import type { Usuario } from './herramientas.js';
+import { antesDelModelo, despuesDelModelo } from './flujo.js';
 
 /**
  * Lo que se espera a que la persona termine de escribir.
@@ -161,10 +162,14 @@ async function atender(p: Pendiente): Promise<void> {
     await transcribirNotasDeVoz(conversacion);
     const ctx = { usuario, conversacion, fotos: await fotosDe(conversacion.id) };
     const lo = await historial(conversacion.id);
-    const aviso = await fechaContestada(ctx, lo);
-    const r = await conversar({ ctx: { ...ctx, aviso }, historial: lo });
-    const texto = r.texto.trim();
-    if (texto) await responder(p.telefono, texto, conversacion.id);
+    // Lo que no necesita criterio —«Sí» a la fecha, un numero de la lista,
+    // «nada»— lo resuelve el sistema, y ese turno no llama al modelo.
+    const antes = await antesDelModelo(ctx, lo);
+    const r = antes.sinModelo
+      ? { texto: '', uso: { entrada: 0, salida: 0, cache: 0 }, herramientas: [], cerrado: false }
+      : await conversar({ ctx: Object.assign(ctx, { aviso: antes.aviso }), historial: lo });
+    // Lo que dijo el modelo y, detras, la pregunta que toca: la decide el sistema.
+    await despuesDelModelo(ctx, r);
     await marcarAtendidos(ids);
     console.log(
       `[whatsapp] ${usuario.nombre}: ${ids.length} mensaje(s) atendidos ` +

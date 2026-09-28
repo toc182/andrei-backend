@@ -93,6 +93,14 @@ export interface DatosReporte {
    * preguntado» se ven igual en los datos.
    */
   preguntadas?: string[];
+
+  // ── Solo del sistema: el modelo no los puede mandar (anotar solo acepta CAMPOS).
+  /** Cuantas veces se hizo cada pregunta fija (preguntasFijas.ts). */
+  veces?: Record<string, number>;
+  /** La ultima pregunta fija que salio: con eso se lee un «1» o un «nada». */
+  ultimaPregunta?: string | null;
+  /** Ya se le leyo el trabajo corto para que lo confirme: no se repite. */
+  trabajoRevisado?: boolean;
 }
 
 /** Las listas del proyecto contra las que se valida lo que dice la gente. */
