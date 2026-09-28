@@ -21,6 +21,7 @@
 import { query } from '../../database/config.js';
 import { loadUserPermissions } from '../../middleware/auth.js';
 import type { Usuario } from './herramientas.js';
+import { llano } from './preguntasFijas.js';
 
 /** Columnas de solicitudes_pago que no salen por WhatsApp. La prueba las busca
  *  en las consultas de este archivo. */
@@ -105,9 +106,69 @@ export interface Filtros {
   desde?: string;
   hasta?: string;
   esperando_mi_aprobacion?: boolean;
+  /** Nombre de un aprobador —«Lili», «Sergey»—: las pendientes que le toca
+   *  firmar AHORA (es el siguiente de la cadena). */
+  le_toca_a?: string;
+  /** Nombre de un aprobador: las pendientes que todavia no ha firmado, le toque
+   *  ya o mas adelante en la cadena. */
+  falta_firma_de?: string;
   urgentes?: boolean;
-  cuantas_mostrar?: number;
+  orden?: Orden;
 }
+
+/** Como van ordenadas. «Las tres mayores» es monto_mayor: el orden lo pone la
+ *  base, no el modelo mirando una lista. */
+export const ORDENES = {
+  recientes: 'sp.fecha DESC, sp.id DESC',
+  antiguas: 'sp.fecha ASC, sp.id ASC',
+  monto_mayor: 'sp.monto_total DESC, sp.id DESC',
+  monto_menor: 'sp.monto_total ASC, sp.id ASC',
+} as const;
+export type Orden = keyof typeof ORDENES;
+
+/** Cuantas filas se le dan al modelo como mucho. Los totales son siempre de
+ *  todas; este tope solo existe para que una pregunta sin filtro sobre anos de
+ *  pagos no se lleve la conversacion entera. */
+export const TOPE_FILAS = 300;
+
+/** Distancia entre dos palabras (cuantas letras hay que cambiar). */
+function distancia(a: string, b: string): number {
+  const fila = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = fila[0];
+    fila[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const arriba = fila[j];
+      fila[j] = Math.min(fila[j] + 1, fila[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = arriba;
+    }
+  }
+  return fila[b.length];
+}
+
+/**
+ * La persona de la que habla: «Lili» es Lilia Gonzalez, «Sergey» es Sergei
+ * Plotnikoff. Se busca entre los aprobadores de sus obras, sin tildes, por el
+ * principio de cada palabra o con una letra de diferencia.
+ */
+export function quienEs<T extends { nombre: string }>(dicho: string, gente: T[]): T[] {
+  const palabras = llano(dicho).split(' ').filter((w) => w.length >= 3);
+  if (palabras.length === 0) return [];
+  const parece = (w: string, v: string): boolean =>
+    (v.length >= 3 && (v.startsWith(w) || w.startsWith(v))) ||
+    (w.length >= 4 && v.length >= 4 && distancia(w, v) <= 1);
+  return gente.filter((g) => {
+    const suyas = llano(g.nombre).split(' ');
+    return palabras.every((w) => suyas.some((v) => parece(w, v)));
+  });
+}
+
+const ORDEN_DICHO: Record<Orden, string> = {
+  recientes: 'las más recientes primero',
+  antiguas: 'las más antiguas primero',
+  monto_mayor: 'de mayor a menor monto',
+  monto_menor: 'de menor a mayor monto',
+};
 
 type Respuesta = { ok: true; contenido: unknown } | { ok: false; error: string; extra?: unknown };
 
@@ -145,7 +206,12 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
     desde: typeof entrada.desde === 'string' ? entrada.desde : undefined,
     hasta: typeof entrada.hasta === 'string' ? entrada.hasta : undefined,
     esperando_mi_aprobacion: entrada.esperando_mi_aprobacion === true,
+    le_toca_a: typeof entrada.le_toca_a === 'string' ? entrada.le_toca_a : undefined,
+    falta_firma_de: typeof entrada.falta_firma_de === 'string' ? entrada.falta_firma_de : undefined,
     urgentes: entrada.urgentes === true,
+    orden: typeof entrada.orden === 'string' && entrada.orden in ORDENES
+      ? (entrada.orden as Orden)
+      : 'recientes',
   };
   const alcance = await alcanceDePagos(usuario);
   if (!alcance) {
@@ -216,6 +282,44 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
     donde.push(`sp.estado = 'pendiente' AND sig.user_id = ${p(usuario.id)}`);
   }
 
+  // Un aprobador dicho por su nombre. Lo resuelve el sistema entre los de sus
+  // obras: si no hay nadie o hay dos, se le dice al modelo para que pregunte.
+  if (f.le_toca_a || f.falta_firma_de) {
+    const aprobadores = await query<{ id: number; nombre: string }>(
+      `SELECT DISTINCT u.id, u.nombre
+         FROM proyecto_ajustes_aprobacion pas
+         JOIN users u ON u.id = pas.user_id
+        WHERE pas.activo = true AND ($1::boolean OR pas.proyecto_id = ANY($2::int[]))
+        ORDER BY u.nombre`,
+      [alcance.todos, alcance.ids],
+    );
+    for (const [clave, dicho] of [['le_toca_a', f.le_toca_a], ['falta_firma_de', f.falta_firma_de]] as const) {
+      if (!dicho) continue;
+      const son = quienEs(dicho, aprobadores.rows);
+      if (son.length !== 1) {
+        return {
+          ok: false,
+          error: son.length === 0
+            ? `«${dicho}» no es ninguno de los aprobadores de sus obras. Pregúntale a quién se refiere.`
+            : `«${dicho}» puede ser más de uno. Pregúntale cuál.`,
+          extra: { aprobadores: son.length ? son : aprobadores.rows },
+        };
+      }
+      const id = p(son[0].id);
+      donde.push(
+        clave === 'le_toca_a'
+          ? `sp.estado = 'pendiente' AND sig.user_id = ${id}`
+          : `sp.estado = 'pendiente'
+             AND EXISTS (SELECT 1 FROM proyecto_ajustes_aprobacion pa
+                          WHERE pa.proyecto_id = sp.proyecto_id AND pa.activo = true
+                            AND pa.user_id = ${id})
+             AND NOT EXISTS (SELECT 1 FROM solicitud_aprobaciones sa2
+                              WHERE sa2.solicitud_pago_id = sp.id AND sa2.user_id = ${id}
+                                AND sa2.accion = 'aprobado')`,
+      );
+    }
+  }
+
   // A quien le toca firmar una pendiente: el aprobador que sigue en la cadena
   // del proyecto, contando las firmas que ya tiene. Misma regla que aprobar.
   const desde = `
@@ -233,9 +337,7 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
     ) sig ON sp.estado = 'pendiente'
     WHERE ${donde.join(' AND ')}`;
 
-  const cuantas = Math.min(Math.max(Number(f.cuantas_mostrar) || 10, 1), 25);
-
-  const [total, porEstado, porProyecto, filas] = await Promise.all([
+  const [total, porEstado, porProyecto, porAprobador, filas] = await Promise.all([
     query<{ cantidad: string; monto: string }>(
       `SELECT COUNT(*)::text AS cantidad, COALESCE(SUM(sp.monto_total), 0)::text AS monto ${desde}`,
       params,
@@ -253,6 +355,14 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
         GROUP BY 1 ORDER BY SUM(sp.monto_total) DESC NULLS LAST`,
       params,
     ),
+    // De las pendientes, a quien le toca firmar ahora: «cuales le faltan a
+    // Sergey» sale de aqui sin que el modelo cuente nada.
+    query<{ nombre: string | null; cantidad: string; monto: string }>(
+      `SELECT sig.nombre, COUNT(*)::text AS cantidad, COALESCE(SUM(sp.monto_total), 0)::text AS monto
+         ${desde} AND sp.estado = 'pendiente'
+        GROUP BY sig.nombre ORDER BY COUNT(*) DESC`,
+      params,
+    ),
     query<{
       numero: string; proyecto: string | null; fecha: string; proveedor: string | null;
       concepto: string | null; que_se_compro: string | null; monto: string; estado: string;
@@ -263,10 +373,10 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
               COALESCE(NULLIF(pr.nombre_corto, ''), pr.nombre) AS proyecto,
               to_char(sp.fecha, 'YYYY-MM-DD') AS fecha,
               sp.proveedor,
-              LEFT(sp.observaciones, 120) AS concepto,
+              LEFT(sp.observaciones, 80) AS concepto,
               -- Lo que se compro, de las primeras lineas: muchas solicitudes no
               -- traen concepto, y «el cemento de 150 sacos» solo esta aqui.
-              (SELECT LEFT(string_agg(i.descripcion, '; ' ORDER BY i.orden, i.id), 160)
+              (SELECT LEFT(string_agg(i.descripcion, '; ' ORDER BY i.orden, i.id), 100)
                  FROM solicitud_pago_items i WHERE i.solicitud_pago_id = sp.id) AS que_se_compro,
               sp.monto_total::text AS monto,
               sp.estado,
@@ -275,11 +385,11 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
               (SELECT to_char(MAX(c.fecha_pago), 'YYYY-MM-DD') FROM comprobantes_pago c
                 WHERE c.solicitud_pago_id = sp.id) AS fecha_pago
          ${desde}
-        ORDER BY sp.fecha DESC, sp.id DESC
+        ORDER BY ${ORDENES[f.orden ?? 'recientes']}
         LIMIT $${params.length + 1}`,
-      // El limite va aparte: las otras tres consultas comparten `params` y no
-      // lo llevan.
-      [...params, cuantas],
+      // El limite va aparte: las otras consultas comparten `params` y no lo
+      // llevan. El orden sale de ORDENES, nunca de lo que mando el modelo.
+      [...params, TOPE_FILAS],
     ),
   ]);
 
@@ -303,6 +413,15 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
             })),
           }
         : {}),
+      ...(porAprobador.rows.length
+        ? {
+            pendientes_por_quien_firma_ahora: porAprobador.rows.map((r) => ({
+              le_toca_a: r.nombre ?? '(la obra no tiene aprobadores)',
+              cantidad: Number(r.cantidad),
+              monto: dinero(r.monto),
+            })),
+          }
+        : {}),
       solicitudes: filas.rows.map((r) => ({
         numero: r.numero,
         proyecto: r.proyecto,
@@ -316,7 +435,11 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
         ...(r.le_toca_a ? { le_toca_aprobar_a: r.le_toca_a } : {}),
         ...(r.fecha_pago ? { fecha_de_pago: r.fecha_pago } : {}),
       })),
-      mostradas: `${filas.rows.length} de ${cantidad}, las más recientes primero`,
+      mostradas:
+        filas.rows.length === cantidad
+          ? `todas (${cantidad}), ${ORDEN_DICHO[f.orden ?? 'recientes']}`
+          : `${filas.rows.length} de ${cantidad}, ${ORDEN_DICHO[f.orden ?? 'recientes']}. ` +
+            'Los totales son de todas; para ver las demás, filtra.',
     },
   };
 }
@@ -361,6 +484,25 @@ export async function verSolicitud(usuario: Usuario, numero: string): Promise<Re
     [buscado],
   );
   const sol = s.rows[0];
+  // «La 137»: sin el prefijo de la obra. Si entre las suyas hay una sola que
+  // termine asi, es esa; si hay varias, se le pregunta cual.
+  const soloNumero = /^(\d{1,4})([AM]?)$/.exec(buscado);
+  if (!sol && soloNumero) {
+    const parecidas = await query<{ numero: string; proyecto_id: number | null }>(
+      `SELECT numero, proyecto_id FROM solicitudes_pago
+        WHERE activo = true AND UPPER(numero) LIKE $1
+          AND ($2::boolean OR proyecto_id = ANY($3::int[]))`,
+      [`%-${soloNumero[1].padStart(3, '0')}${soloNumero[2]}`, alcance.todos, alcance.ids],
+    );
+    if (parecidas.rows.length > 1) {
+      return {
+        ok: false,
+        error: `Hay varias que terminan en ${buscado}: pregúntale cuál.`,
+        extra: { numeros: parecidas.rows.map((x) => x.numero) },
+      };
+    }
+    if (parecidas.rows.length === 1) return verSolicitud(usuario, parecidas.rows[0].numero);
+  }
   // Una que no puede ver se contesta igual que una que no existe: decirle «esa
   // existe pero no es tuya» ya es darle un dato.
   if (!sol || (!alcance.todos && (sol.proyecto_id === null || !alcance.ids.includes(sol.proyecto_id)))) {

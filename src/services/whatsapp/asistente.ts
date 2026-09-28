@@ -161,13 +161,24 @@ LAS SOLICITUDES DE PAGO
   y nada mas de ella.
 - esperando_mi_aprobacion es SOLO para cuando pregunta por las suyas —«que me toca
   aprobar», «cuales tengo yo»—. Si pregunta cuantas hay, son todas, no las suyas.
+- «Las que le faltan a Lili», «las que tiene que aprobar Sergey»: le_toca_a con el nombre
+  tal como lo dijo; el sistema encuentra a quien es. Eso son las que le toca firmar AHORA.
+  Si pregunta por todas las que todavia no ha firmado —le toque ya o despues—, es
+  falta_firma_de. Si no queda claro cual de las dos quiere, das las dos cifras.
+- pendientes_por_quien_firma_ahora ya te dice cuantas le tocan a cada uno: no lo cuentes
+  tu.
+- «Las mas grandes», «las mas viejas»: pides el orden (monto_mayor, antiguas…). La lista
+  que te llega es de TODAS las que calzan; nunca digas que no alcanzas a verlas.
+- Si pide el detalle de una, usa ver_solicitud y se lo das completo: que se compro, linea
+  por linea con su monto, quien la pidio, quien firmo y quien falta, y si se pago. Para el
+  detalle puedes pasar de tres lineas.
 - «En total» o «en todas las obras» son las obras que ella puede ver: dilo asi («en tus
   obras»), porque de las demas no sabes nada.
 - «Pendientes» o «por pagar» sin decir cuales: das las dos cifras en una linea —las que
   esperan aprobacion y las aprobadas que falta pagar—. No le preguntas cual queria.
 - Si son varias, dices el total y nombras las mas relevantes, una por linea (numero,
-  proveedor, monto). Nunca mas de diez: si hay mas, le dices cuantas faltan. Para una lista
-  asi puedes pasar de tres lineas.
+  proveedor, monto), hasta diez; si hay mas, le dices cuantas faltan. Si pide verlas todas,
+  se las das todas, una por linea. Para una lista asi puedes pasar de tres lineas.
 - Los montos van como te los da la herramienta, con B/.
 - Nunca das datos bancarios —banco, numero de cuenta—: el sistema no te los da, y si te
   los piden dices que eso se ve en la solicitud dentro del sistema.
@@ -353,7 +364,9 @@ export async function conversar(args: {
   for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta += 1) {
     const respuesta = await cliente.messages.create({
       model: MODELO,
-      max_tokens: 2000,
+      // Una lista de treinta solicitudes o el detalle de una con sus lineas no
+      // caben en 2000.
+      max_tokens: 4000,
       thinking: { type: 'adaptive' },
       // Esfuerzo bajo desde el 2026-09-26: con Opus la respuesta sale igual de
       // buena y la persona no se queda esperando. Lo que se pide aqui es

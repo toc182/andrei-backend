@@ -10,6 +10,11 @@
 //   calzan, no solo sobre las que se muestran;
 // - «esperando mi aprobacion» sigue la cadena de aprobadores del proyecto;
 // - no sale ningun dato bancario;
+// - «las que le faltan a Lili», «a Sergey»: el aprobador dicho a su manera lo
+//   encuentra el sistema, y la cuenta por aprobador la hace la base;
+// - la lista trae TODAS las que calzan (no 25), en el orden pedido: «las mas
+//   grandes» son de verdad las mas grandes;
+// - el detalle de una sale tambien pidiendola solo por su numero («la 1»);
 // - y por WhatsApp de verdad: el modelo recibe la lista de proyectos que la
 //   persona puede ver, llama a la herramienta y su respuesta sale.
 import { API } from './pruebas/contexto.js';
@@ -33,9 +38,10 @@ const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Lo que devuelven las funciones, en la forma en que se lee aqui.
 interface Busqueda {
   total: { cantidad: number; monto: string };
+  pendientes_por_quien_firma_ahora?: { le_toca_a: string; cantidad: number }[];
   por_estado: { estado: string; cantidad: number; monto: string }[];
   por_proyecto?: { proyecto: string; cantidad: number }[];
-  solicitudes: { numero: string; le_toca_aprobar_a?: string }[];
+  solicitudes: { numero: string; monto: string; le_toca_aprobar_a?: string }[];
 }
 const buscar = async (u: Usuario, f: object) => {
   const r = await buscarSolicitudes(u, f);
@@ -139,12 +145,6 @@ const main = async () => {
     'las cifras salen separadas: esperando aprobacion y aprobadas sin pagar',
   );
 
-  const pocas = await buscar(ingeniero, { cuantas_mostrar: 2 });
-  exigir(
-    pocas.ok && pocas.c.solicitudes.length === 2 && pocas.c.total.cantidad === 6,
-    'el total cuenta todas aunque se muestren dos',
-  );
-
   const ajenoPedido = await buscar(ingeniero, { proyecto_ids: [2] });
   exigir(!ajenoPedido.ok, 'si pide un proyecto que no es suyo, no recibe nada de el');
 
@@ -182,6 +182,71 @@ const main = async () => {
       delAdminMias.c.total.cantidad === 1 &&
       delAdminMias.c.solicitudes[0]?.numero === p1[1].numero,
     'al admin solo le toca la que ya firmo el primero de la cadena',
+  );
+
+  // ── por aprobador, dicho a su manera ─────────────────────────────────────
+  // Con nombres de verdad: «Lili» y «Sergey» tienen que dar con ellos.
+  await query("UPDATE users SET nombre = 'Lilia Gonzalez' WHERE id = $1", [firmante.id]);
+  await query("UPDATE users SET nombre = 'Sergei Plotnikoff' WHERE id = $1", [admin.id]);
+  const deLili = await buscar(ingeniero, { le_toca_a: 'Lili' });
+  exigir(
+    deLili.ok && deLili.c.total.cantidad === 2 &&
+      deLili.c.solicitudes.every((x) => x.le_toca_aprobar_a === 'Lilia Gonzalez'),
+    '«las que le faltan a Lili»: las dos que le toca firmar ahora a Lilia',
+  );
+  const deSergey = await buscar(ingeniero, { le_toca_a: 'Sergey' });
+  exigir(
+    deSergey.ok && deSergey.c.total.cantidad === 1 && deSergey.c.solicitudes[0]?.numero === p1[1].numero,
+    '«Sergey» es Sergei: la que ya firmó Lilia y ahora le toca a él',
+  );
+  const sinFirmaDeSergey = await buscar(ingeniero, { falta_firma_de: 'sergei' });
+  exigir(
+    sinFirmaDeSergey.ok && sinFirmaDeSergey.c.total.cantidad === 3,
+    'las que Sergei todavía no ha firmado, le toque ya o después: las tres pendientes',
+  );
+  const nadie = await buscar(ingeniero, { le_toca_a: 'Pedro' });
+  exigir(!nadie.ok, 'un nombre que no es de ningún aprobador se rechaza para que el modelo pregunte');
+  const pendientes = await buscar(ingeniero, { estados: ['pendiente'] });
+  const porQuien = Object.fromEntries(
+    (pendientes.ok ? pendientes.c.pendientes_por_quien_firma_ahora ?? [] : [])
+      .map((x) => [x.le_toca_a, x.cantidad]),
+  );
+  exigir(
+    JSON.stringify(porQuien) === JSON.stringify({ 'Lilia Gonzalez': 2, 'Sergei Plotnikoff': 1 }),
+    'la base cuenta cuántas le tocan a cada aprobador',
+    porQuien,
+  );
+
+  // ── todas, y en el orden pedido ─────────────────────────────────────────
+  // Treinta pagadas más: con el tope de antes (25) no se habrían visto todas.
+  for (let i = 1; i <= 30; i += 1) {
+    await query(
+      `INSERT INTO solicitudes_pago
+         (proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por, estado,
+          monto_total, subtotal, codigo_verificacion)
+       VALUES (1, $1, '2026-08-01', 'Proveedor viejo', $2, $2, 'pagada', $3, $3, $4)`,
+      [`PRU1-${100 + i}`, admin.id, i * 10, crypto.randomBytes(5).toString('hex').toUpperCase()],
+    );
+  }
+  const todas = await buscar(ingeniero, {});
+  exigir(
+    todas.ok && todas.c.total.cantidad === 36 && todas.c.solicitudes.length === 36,
+    'la lista trae todas las que calzan (36), no las 25 más recientes',
+    todas.ok ? [todas.c.total.cantidad, todas.c.solicitudes.length] : todas,
+  );
+  const grandes = await buscar(ingeniero, { orden: 'monto_mayor' });
+  exigir(
+    grandes.ok && grandes.c.solicitudes[0]?.monto === 'B/. 5,000.00' &&
+      grandes.c.solicitudes[1]?.monto === 'B/. 2,000.00',
+    '«las más grandes»: el orden lo pone la base',
+    grandes.ok ? grandes.c.solicitudes.slice(0, 3).map((x) => x.monto) : grandes,
+  );
+
+  // ── el detalle, pidiéndola solo por su número ───────────────────────────
+  const laUno = await verSolicitud(ingeniero, '1');
+  exigir(
+    laUno.ok && JSON.stringify(laUno.contenido).includes(p1[0].numero),
+    '«la 1» es la PRU1-001: el detalle sale aunque falte el prefijo',
   );
 
   // ── por WhatsApp de verdad ──────────────────────────────────────────────

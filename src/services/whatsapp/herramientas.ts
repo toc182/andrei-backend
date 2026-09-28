@@ -373,9 +373,10 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
     name: 'buscar_solicitudes',
     description:
       'Busca solicitudes de pago y devuelve cuantas son y cuanto suman —en total, por ' +
-      'estado y por proyecto—, ya calculado por el sistema, y las mas recientes. Los ' +
-      'totales son de TODAS las que calzan, no solo de las que se muestran. Solo ve lo que ' +
-      'la persona puede ver en el sistema. Sin filtros, busca en todas las suyas.',
+      'estado, por proyecto y, de las pendientes, por quien le toca firmar ahora—, ya ' +
+      'calculado por el sistema, y la lista de TODAS las que calzan (hasta 300) en el orden ' +
+      'pedido. Solo ve lo que la persona puede ver en el sistema. Sin filtros, busca en ' +
+      'todas las suyas.',
     input_schema: {
       type: 'object',
       properties: {
@@ -402,8 +403,24 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
           type: 'boolean',
           description: 'Solo las pendientes que le toca aprobar a la persona que escribe',
         },
+        le_toca_a: {
+          type: 'string',
+          description:
+            'Nombre de un aprobador, como lo dijo la persona («Lili», «Sergey»): las ' +
+            'pendientes que le toca firmar AHORA. El sistema encuentra a quien se refiere.',
+        },
+        falta_firma_de: {
+          type: 'string',
+          description:
+            'Nombre de un aprobador: las pendientes que todavia no ha firmado, le toque ya ' +
+            'o mas adelante en la cadena.',
+        },
         urgentes: { type: 'boolean' },
-        cuantas_mostrar: { type: 'integer', description: 'De 1 a 25; por defecto 10' },
+        orden: {
+          type: 'string',
+          enum: ['recientes', 'antiguas', 'monto_mayor', 'monto_menor'],
+          description: 'Por defecto recientes. «Las mas grandes» es monto_mayor.',
+        },
       },
       additionalProperties: false,
     },
@@ -411,8 +428,9 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
   {
     name: 'ver_solicitud',
     description:
-      'Una solicitud de pago entera por su numero (por ejemplo «ET-012»): que se compro, ' +
-      'quien la pidio, quien firmo, a quien le toca aprobar y cuando se pago.',
+      'Una solicitud de pago entera por su numero (por ejemplo «STAISA-137», o solo «137»): ' +
+      'que se compro linea por linea, quien la pidio, quien firmo, a quien le toca aprobar ' +
+      'y cuando se pago. Es lo que se usa cuando pide el detalle de una.',
     input_schema: {
       type: 'object',
       properties: { numero: { type: 'string' } },
@@ -866,7 +884,9 @@ export async function ejecutarHerramienta(
 
   if (nombre === 'ver_solicitud') {
     const r = await verSolicitud(ctx.usuario, typeof input.numero === 'string' ? input.numero : '');
-    return r.ok ? { ok: true, contenido: r.contenido } : { ok: false, contenido: { error: r.error } };
+    return r.ok
+      ? { ok: true, contenido: r.contenido }
+      : { ok: false, contenido: { error: r.error, ...(r.extra ? { detalle: r.extra } : {}) } };
   }
 
   return { ok: false, contenido: { error: `No existe la herramienta ${nombre}` } };

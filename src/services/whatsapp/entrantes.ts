@@ -263,13 +263,49 @@ async function mandar(
   return error === null;
 }
 
-/** Un mensaje de texto. Devuelve si salio. */
+/** Lo que cabe en un mensaje de WhatsApp: Meta rechaza un texto de mas de 4096. */
+const LARGO_MAXIMO = 3900;
+
+/**
+ * Parte un texto largo en mensajes que quepan, por los saltos de linea. Una
+ * lista de cuarenta solicitudes no cabe en uno solo, y sin partirla Meta la
+ * rechazaba entera.
+ */
+export function enTrozos(texto: string, maximo = LARGO_MAXIMO): string[] {
+  if (texto.length <= maximo) return [texto];
+  const trozos: string[] = [];
+  let actual = '';
+  for (const linea of texto.split('\n')) {
+    // Una linea sola mas larga que el maximo se corta a la fuerza.
+    const partes = linea.length > maximo
+      ? (linea.match(new RegExp(`.{1,${maximo}}`, 'gs')) ?? [linea])
+      : [linea];
+    for (const parte of partes) {
+      const junto = actual ? `${actual}\n${parte}` : parte;
+      if (junto.length > maximo && actual) {
+        trozos.push(actual);
+        actual = parte;
+      } else {
+        actual = junto;
+      }
+    }
+  }
+  if (actual) trozos.push(actual);
+  return trozos.map((t) => t.trim()).filter(Boolean);
+}
+
+/** Un mensaje de texto —o varios, si no cabe en uno—. Devuelve si salio todo. */
 export async function responder(
   telefono: string,
   texto: string,
   conversacionId?: number,
 ): Promise<boolean> {
-  return mandar(telefono, 'text', texto, () => enviarTexto(telefono, texto), conversacionId);
+  let todo = true;
+  for (const trozo of enTrozos(texto)) {
+    const salio = await mandar(telefono, 'text', trozo, () => enviarTexto(telefono, trozo), conversacionId);
+    todo = todo && salio;
+  }
+  return todo;
 }
 
 /** Una pregunta con botones para tocar. Devuelve si salio. */
