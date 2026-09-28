@@ -31,9 +31,11 @@ import {
   conversacionViva,
   guardarConversacion,
   type Conversacion,
+  type MensajeGuardado,
 } from './conversacion.js';
 import { responder, responderBotones, responderDocumento } from './entrantes.js';
 import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal } from './borrador.js';
+import { ESTADOS, buscarSolicitudes, verSolicitud, type Filtros } from './solicitudes.js';
 
 export interface Usuario {
   id: number;
@@ -162,6 +164,49 @@ export async function reportesAnteriores(
     [proyectoId, cuantos],
   );
   return r.rows;
+}
+
+/** Lo que cuenta como «sí, es de hoy» a la pregunta de la fecha. */
+const ES_DE_HOY = new Set([
+  'si', 'sip', 'hoy', 'es de hoy', 'si es de hoy', 'si de hoy', 'si hoy', 'de hoy',
+  'correcto', 'claro', 'ok', 'dale', 'asi es', 'exacto', 'afirmativo',
+]);
+
+/**
+ * Si lo ultimo que se le pregunto fue la fecha y contesto que si, la fecha
+ * queda anotada ANTES de que piense el modelo.
+ *
+ * Con el boton «Sí» el modelo volvia a preguntar la fecha, igualita: se vio en
+ * la tanda del 2026-09-28 y tambien con lo que ya estaba publicado. Que el sí
+ * es de hoy no necesita criterio, asi que lo resuelve el sistema.
+ *
+ * La pregunta de la fecha se reconoce porque es la unica con botones que sale
+ * antes del borrador (la otra es «¿Deseas enviarlo?», que exige borrador).
+ */
+export async function fechaContestada(
+  ctx: Contexto,
+  historial: MensajeGuardado[],
+): Promise<boolean> {
+  const c = ctx.conversacion;
+  if (c.datos.fecha !== undefined || c.borradorEnviadoAt !== null) return false;
+  let ultima = -1;
+  historial.forEach((m, i) => {
+    if (m.direccion === 'saliente') ultima = i;
+  });
+  if (ultima < 0 || historial[ultima].tipo !== 'interactive') return false;
+  const despues = historial.slice(ultima + 1).filter((m) => m.direccion === 'entrante');
+  if (despues.length !== 1) return false;
+  const dicho = (despues[0].texto ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!ES_DE_HOY.has(dicho)) return false;
+  c.datos = { ...c.datos, fecha: hoyEnPanama() };
+  await guardarConversacion(c.id, { datos: c.datos });
+  return true;
 }
 
 export const HERRAMIENTAS: Anthropic.Tool[] = [
@@ -431,6 +476,57 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
       'Lo que lleva anotado el reporte, cuantas fotos hay y que secciones faltan por ' +
       'preguntar. Uselo si duda de si ya pregunto algo.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'buscar_solicitudes',
+    description:
+      'Busca solicitudes de pago y devuelve cuantas son y cuanto suman —en total, por ' +
+      'estado y por proyecto—, ya calculado por el sistema, y las mas recientes. Los ' +
+      'totales son de TODAS las que calzan, no solo de las que se muestran. Solo ve lo que ' +
+      'la persona puede ver en el sistema. Sin filtros, busca en todas las suyas.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        proyecto_ids: {
+          type: 'array',
+          items: { type: 'integer' },
+          description: 'Los ids de la lista de proyectos de pagos que tienes en el contexto',
+        },
+        estados: {
+          type: 'array',
+          items: { type: 'string', enum: Object.keys(ESTADOS) },
+          description:
+            'pagada trae TODO lo ya pagado (tambien facturadas y cajas menudas pagadas). ' +
+            'pendiente = esperando aprobacion; aprobada = aprobada, falta pagarla',
+        },
+        proveedor: { type: 'string', description: 'Parte del nombre del proveedor' },
+        texto: {
+          type: 'string',
+          description: 'Una palabra de lo que se compro: busca en el concepto y en las lineas',
+        },
+        desde: { type: 'string', description: 'Fecha de la solicitud, AAAA-MM-DD' },
+        hasta: { type: 'string', description: 'Fecha de la solicitud, AAAA-MM-DD' },
+        esperando_mi_aprobacion: {
+          type: 'boolean',
+          description: 'Solo las pendientes que le toca aprobar a la persona que escribe',
+        },
+        urgentes: { type: 'boolean' },
+        cuantas_mostrar: { type: 'integer', description: 'De 1 a 25; por defecto 10' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ver_solicitud',
+    description:
+      'Una solicitud de pago entera por su numero (por ejemplo «ET-012»): que se compro, ' +
+      'quien la pidio, quien firmo, a quien le toca aprobar y cuando se pago.',
+    input_schema: {
+      type: 'object',
+      properties: { numero: { type: 'string' } },
+      required: ['numero'],
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -924,6 +1020,18 @@ export async function ejecutarHerramienta(
       ? null
       : (cache.listas ?? (cache.listas = await listasDe(proyectoId)));
     return { ok: true, contenido: await estado(ctx, listas) };
+  }
+
+  if (nombre === 'buscar_solicitudes') {
+    const r = await buscarSolicitudes(ctx.usuario, input as Filtros);
+    return r.ok
+      ? { ok: true, contenido: r.contenido }
+      : { ok: false, contenido: { error: r.error, ...(r.extra ? { detalle: r.extra } : {}) } };
+  }
+
+  if (nombre === 'ver_solicitud') {
+    const r = await verSolicitud(ctx.usuario, typeof input.numero === 'string' ? input.numero : '');
+    return r.ok ? { ok: true, contenido: r.contenido } : { ok: false, contenido: { error: r.error } };
   }
 
   return { ok: false, contenido: { error: `No existe la herramienta ${nombre}` } };

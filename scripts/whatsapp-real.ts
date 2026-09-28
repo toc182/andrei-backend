@@ -80,6 +80,81 @@ async function main(): Promise<void> {
       [userId],
     );
 
+    // Para las preguntas de pagos: ve solicitudes, solo del proyecto 1, y es el
+    // primero en la cadena de aprobacion de ese proyecto. El proyecto 2 tiene
+    // las suyas, que esta persona NO puede ver: la tanda mira que no se cuelen.
+    await base.query(
+      'UPDATE user_permissions SET solicitudes_ver = true WHERE user_id = $1',
+      [userId],
+    );
+    const admin = (await base.query<{ id: number }>(
+      "SELECT id FROM users WHERE rol = 'admin' ORDER BY id LIMIT 1",
+    )).rows[0].id;
+    await base.query(
+      `INSERT INTO proyecto_ajustes_aprobacion (proyecto_id, user_id, orden, activo)
+       VALUES (1, $1, 1, true), (1, $2, 2, true)`,
+      [userId, admin],
+    );
+    const solicitudes: [number, string, string, string, number, string, string][] = [
+      // proyecto, numero, fecha, proveedor, monto, estado, que se compro
+      [1, 'PRU1-001', '2026-09-01', 'Cementos del Istmo', 1250, 'pagada', 'Cemento gris tipo I, 100 sacos'],
+      [1, 'PRU1-002', '2026-09-03', 'Acero Panamá', 8430.5, 'facturada', 'Varilla #4 y #5'],
+      [1, 'PRU1-003', '2026-09-10', 'Alquileres Río', 2100, 'pagada', 'Alquiler de retroexcavadora, 2 semanas'],
+      [1, 'PRU1-004', '2026-09-15', 'Acero Panamá', 5320, 'aprobada', 'Varilla #6'],
+      [1, 'PRU1-005', '2026-09-18', 'Ferretería Norte', 412.75, 'aprobada', 'Clavos, alambre de amarre'],
+      [1, 'PRU1-006', '2026-09-22', 'Cementos del Istmo', 1875, 'pendiente', 'Cemento gris tipo I, 150 sacos'],
+      [1, 'PRU1-007', '2026-09-24', 'Transportes Coclé', 650, 'pendiente', 'Acarreo de material selecto'],
+      [1, 'PRU1-008', '2026-09-25', 'Ferretería Norte', 95.4, 'pendiente', 'Discos de corte'],
+      [1, 'PRU1-009', '2026-09-26', 'Madera y Formaletas', 3200, 'rechazada', 'Plywood para formaleta'],
+      [2, 'PRU2-001', '2026-09-20', 'Proveedor del Otro Proyecto', 45000, 'pendiente', 'Tubería'],
+      [2, 'PRU2-002', '2026-09-21', 'Proveedor del Otro Proyecto', 12000, 'aprobada', 'Válvulas'],
+    ];
+    for (const [proyecto, numero, fecha, proveedor, monto, estado, que] of solicitudes) {
+      const s = await base.query<{ id: number }>(
+        `INSERT INTO solicitudes_pago
+           (proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por, estado,
+            subtotal, monto_total, beneficiario, banco, numero_cuenta, codigo_verificacion,
+            urgente)
+         VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $7, $4, 'Banco General', '04-99-01-123456-7', $8, $9)
+         RETURNING id`,
+        [proyecto, numero, fecha, proveedor, admin, estado, monto,
+          crypto.randomBytes(5).toString('hex').toUpperCase(), numero === 'PRU1-007'],
+      );
+      await base.query(
+        `INSERT INTO solicitud_pago_items
+           (solicitud_pago_id, cantidad, unidad, descripcion, precio_unitario, precio_total, orden)
+         VALUES ($1, 1, 'global', $2, $3, $3, 1)`,
+        [s.rows[0].id, que, monto],
+      );
+      if (['pagada', 'facturada'].includes(estado)) {
+        await base.query(
+          `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por)
+           VALUES ($1, $2::date + 3, $3)`,
+          [s.rows[0].id, fecha, admin],
+        );
+      }
+      if (estado === 'rechazada') {
+        await base.query(
+          `INSERT INTO solicitud_aprobaciones (solicitud_pago_id, user_id, orden, accion, comentario)
+           VALUES ($1, $2, 1, 'rechazado', 'Falta la cotización')`,
+          [s.rows[0].id, userId],
+        );
+      }
+      if (estado === 'aprobada' && proyecto === 1) {
+        await base.query(
+          `INSERT INTO solicitud_aprobaciones (solicitud_pago_id, user_id, orden, accion)
+           VALUES ($1, $2, 1, 'aprobado'), ($1, $3, 2, 'aprobado')`,
+          [s.rows[0].id, userId, admin],
+        );
+      }
+    }
+    // La PRU1-008 ya la firmo esta persona: ahora le toca al admin, no a ella.
+    await base.query(
+      `INSERT INTO solicitud_aprobaciones (solicitud_pago_id, user_id, orden, accion)
+       SELECT id, $1, 1, 'aprobado' FROM solicitudes_pago WHERE numero = 'PRU1-008'`,
+      [userId],
+    );
+
     let n = 0;
     const decir = async (texto: string): Promise<void> => {
       const sobre = {

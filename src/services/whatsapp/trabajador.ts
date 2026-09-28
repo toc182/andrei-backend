@@ -16,7 +16,7 @@ import {
 import { responder } from './entrantes.js';
 import { marcarLeidoYEscribiendo } from './cliente.js';
 import { transcribirNotasDeVoz } from './transcripcion.js';
-import type { Usuario } from './herramientas.js';
+import { fechaContestada, type Usuario } from './herramientas.js';
 
 /**
  * Lo que se espera a que la persona termine de escribir.
@@ -160,7 +160,9 @@ async function atender(p: Pendiente): Promise<void> {
     // Las notas de voz se leen antes de pensar nada: el asistente no oye, lee.
     await transcribirNotasDeVoz(conversacion);
     const ctx = { usuario, conversacion, fotos: await fotosDe(conversacion.id) };
-    const r = await conversar({ ctx, historial: await historial(conversacion.id) });
+    const lo = await historial(conversacion.id);
+    await fechaContestada(ctx, lo);
+    const r = await conversar({ ctx, historial: lo });
     const texto = r.texto.trim();
     if (texto) await responder(p.telefono, texto, conversacion.id);
     await marcarAtendidos(ids);

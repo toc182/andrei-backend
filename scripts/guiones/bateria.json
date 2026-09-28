@@ -41,7 +41,7 @@
       "xd",
       "jajaja no nada",
       "ok ahora sí, reporte diario de hoy",
-      "1",
+      "Sí",
       "Excavación para la fundación"
     ]
   },
@@ -58,7 +58,7 @@
     "mensajes": [
       "Reporte diario",
       "Mándame el borrador",
-      "1",
+      "Sí",
       "Relleno y compactación",
       "Ahora sí mándame el borrador"
     ]
@@ -89,7 +89,7 @@
     "nombre": "cambia de obra a la mitad",
     "mensajes": [
       "Reporte diario",
-      "1",
+      "Sí",
       "Vaciado de pedestales",
       "Espera, este reporte no es de esta obra, es de otra",
       "Sí, empecemos de nuevo"
@@ -101,7 +101,7 @@
       "¿Cuánto llevamos gastado en esta obra?",
       "¿Y cuántas solicitudes de pago hay pendientes?",
       "Bueno, entonces hagamos el reporte diario de hoy",
-      "1",
+      "Sí",
       "Encofrado de muros"
     ]
   },

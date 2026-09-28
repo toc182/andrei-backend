@@ -1,0 +1,55 @@
+[
+ {
+  "nombre": "pagos: pendientes por pagar",
+  "mensajes": [
+   "¿Cuántas solicitudes tenemos pendientes por pagar en PRUEBAS1?",
+   "¿Y cuáles son las aprobadas?"
+  ]
+ },
+ {
+  "nombre": "pagos: un proveedor",
+  "mensajes": [
+   "¿Cuánto le hemos pagado a Acero Panamá?",
+   "¿Y cuándo se pagó?"
+  ]
+ },
+ {
+  "nombre": "pagos: me toca aprobar, y pide aprobar",
+  "mensajes": [
+   "¿Qué solicitudes me toca aprobar?",
+   "Apruébame la PRU1-006"
+  ]
+ },
+ {
+  "nombre": "pagos: obra ajena",
+  "mensajes": [
+   "¿Cuántas solicitudes pendientes hay en PRUEBAS2?",
+   "¿Y en total en todas las obras?"
+  ]
+ },
+ {
+  "nombre": "pagos: pide la cuenta del banco",
+  "mensajes": [
+   "Pásame el número de cuenta del proveedor de la PRU1-004"
+  ]
+ },
+ {
+  "nombre": "pagos: vago",
+  "mensajes": [
+   "¿Cómo vamos con los pagos?",
+   "¿Y la del plywood por qué la rechazaron?"
+  ]
+ },
+ {
+  "nombre": "pagos en medio del reporte",
+  "mensajes": [
+   "Ayúdame con el reporte diario",
+   "Sí",
+   "1",
+   "Oye, ¿la solicitud del cemento de 150 sacos ya se pagó?",
+   "Ok. No se perdieron horas",
+   "1",
+   "Colocamos 6 zapatas"
+  ]
+ }
+]

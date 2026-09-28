@@ -129,6 +129,9 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
   after the person stops writing, never per message), borrador.ts (builds the
   draft with the SAME function the screen uses, its PDF with the BORRADOR stamp,
   and the send).
+  solicitudes.ts is the ONLY place WhatsApp reads payment requests (questions
+  only, nothing is approved or paid): same visibility as the screen, never bank
+  data, and every count and total comes from the database, not the model.
   Keys are optional: without them WhatsApp simply does not exist for this
   server. Nothing is ever sent without the person having seen the draft first —
   that rule lives in code (herramientas.ts), not in the model's instructions.
