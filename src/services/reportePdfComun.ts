@@ -10,10 +10,13 @@
  * se vean como los que la empresa ya emite.
  */
 
+import crypto from 'crypto';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import puppeteer, { Browser } from 'puppeteer';
-import type { LaunchOptions } from 'puppeteer';
+import type { HTTPRequest, LaunchOptions, Page } from 'puppeteer';
 import sharp from 'sharp';
 import { downloadFile, uploadFile } from './storage.js';
 
@@ -45,6 +48,9 @@ export function esc(s: string): string {
  * La rejilla imprime dos fotos por fila en papel carta: cada una ocupa unas
  * 3.6 pulgadas, asi que 1400px son casi 400 puntos por pulgada. Subir de ahi
  * no se ve en el papel, solo pesa.
+ *
+ * El techo es por el correo, no por el navegador: el PDF sale adjunto, y los
+ * buzones rechazan los adjuntos grandes.
  */
 const FOTO_LADO_MAX = 1400;
 const FOTOS_PESO_MAX = 12 * 1024 * 1024;
@@ -125,11 +131,15 @@ export function pieDeFoto(numero: number, leyenda: string | null): string {
  * firmada de R2 obligaria al navegador sin ventana a salir a buscarla, y esas
  * direcciones ademas vencen. Se traen los bytes y se meten en el documento.
  *
- * Y se reducen antes de meterlos, que es lo que rompio en produccion el
- * 2026-09-10. Una foto de celular pesa unos 2 MB, y setContent no aguanta una
- * cadena enorme: pasado cierto punto no tarda mas, se cuelga y no vuelve, hasta
- * que Puppeteer se rinde a los 30 segundos. Medido: 8 fotos a tamano original
- * (20 MB) salen en 2 s, 12 fotos (31 MB) no salen ni en 180 s.
+ * Y se reducen antes de meterlos: una foto de celular pesa unos 2 MB, y veinte
+ * de ellas harian un PDF de 40 MB que ningun correo acepta. Reducidas, 20 fotos
+ * son unos 9 MB y en el papel se ven igual.
+ *
+ * Historia: el 2026-09-10 esta reduccion nacio por otra razon, un cuelgue.
+ * setContent se atascaba con cadenas grandes (8 fotos originales, 20 MB,
+ * salian en 2 s; 12 fotos, 31 MB, no salian ni en 180 s), y el 2026-09-28 el
+ * mismo cuelgue volvio con 8.5 MB en Railway. Ese cuelgue ya no depende del
+ * peso: aPdf abre el HTML desde un archivo (ver abrirPapel).
  */
 export async function incrustarFotos(
   fotos: FotoDelReporte[],
@@ -204,8 +214,9 @@ export async function incrustarFotos(
     }
 
     // Techo de peso. Con la reduccion funcionando nunca se alcanza: 20 fotos
-    // pesan unos 9 MB. Es la red por si sharp falla, para no volver al cuelgue:
-    // vale mas un reporte que avisa que le faltan fotos que uno que no sale.
+    // pesan unos 9 MB. Es la red por si sharp falla y entran originales: el PDF
+    // va adjunto por correo, y uno de 40 MB lo rechazan los buzones. Vale mas un
+    // reporte que avisa que le faltan fotos que uno que no llega.
     const src = `data:${mime};base64,${bytes.toString('base64')}`;
     if (peso + src.length > FOTOS_PESO_MAX) {
       omitidas++;
@@ -275,13 +286,91 @@ export function logoPinellas(dirname: string): string {
  * `pieIzquierda` es lo que va abajo a la izquierda en cada hoja («Pinellas —
  * Reporte semanal de obra»); a la derecha siempre va la paginación.
  */
+/** Cuánto se le espera a la página y a sus fotos antes de darla por atascada. */
+const ESPERA_PAGINA_MS = 45_000;
+
+/** Una promesa con tope: si no llega a tiempo, sale `enVezDe`. */
+function conTope<T>(p: Promise<T>, ms: number, enVezDe: T): Promise<T> {
+  return Promise.race([p, new Promise<T>((r) => setTimeout(() => r(enVezDe), ms))]);
+}
+
+// Lo que se le pregunta a la página. Van como texto porque corren dentro del
+// navegador, no en Node, y este proyecto no compila con los tipos del DOM.
+const FOTOS_CARGADAS = 'Array.from(document.images).every((i) => i.complete)';
+const FOTOS_DECODIFICADAS =
+  'Promise.all(Array.from(document.images).map((i) => i.decode().catch(() => undefined)))';
+const ESTADO_PAGINA = `(() => {
+  const imgs = Array.from(document.images);
+  return {
+    readyState: document.readyState,
+    fotos: imgs.length,
+    sinTerminar: imgs.flatMap((i, n) => (i.complete ? [] : [n + 1])),
+    rotas: imgs.flatMap((i, n) => (i.complete && i.naturalWidth === 0 ? [n + 1] : [])),
+  };
+})()`;
+
+/**
+ * Abre el papel en el navegador y espera a que esté listo para imprimirse.
+ *
+ * El HTML se escribe en un archivo y el navegador lo abre, en vez de pasárselo
+ * como una cadena con setContent. El 2026-09-28 el semanal RS-PBR-260921 (8.5
+ * MB, 15 fotos) no salió nunca en Railway: setContent se quedó esperando 30 s
+ * con el procesador parado, mientras en cualquier otra máquina tardaba 1 s. Es
+ * el mismo cuelgue que el 2026-09-10 (ver incrustarFotos): setContent mete la
+ * cadena entera por la conexión con el navegador y la escribe con
+ * document.write, y pasado cierto tamaño se atasca. Un archivo lo lee el
+ * navegador por su cuenta, como cualquier página, sin ese paso.
+ *
+ * Y no se espera a que la red «se quede quieta» (networkidle0): todo va dentro
+ * del HTML, así que no hay red que esperar. Se espera a que la página cargue y a
+ * que cada foto esté decodificada, que es lo que de verdad importa.
+ *
+ * Si no se cumple, se deja en el registro qué faltaba —estado de la página,
+ * qué fotos no terminaron, qué peticiones seguían abiertas— para que la
+ * próxima vez haya una causa y no suposiciones.
+ */
+async function abrirPapel(page: Page, html: string): Promise<void> {
+  const abiertas = new Set<HTTPRequest>();
+  page.on('request', (r) => abiertas.add(r));
+  page.on('requestfinished', (r) => abiertas.delete(r));
+  page.on('requestfailed', (r) => abiertas.delete(r));
+
+  const archivo = path.join(os.tmpdir(), `papel-${crypto.randomUUID()}.html`);
+  await fs.promises.writeFile(archivo, html, 'utf8');
+  const inicio = Date.now();
+  let paso = 'abrir el documento';
+  try {
+    await page.goto(pathToFileURL(archivo).href, { waitUntil: 'load', timeout: ESPERA_PAGINA_MS });
+    paso = 'cargar las fotos';
+    const resto = Math.max(ESPERA_PAGINA_MS - (Date.now() - inicio), 5_000);
+    await page.waitForFunction(FOTOS_CARGADAS, { timeout: resto, polling: 100 });
+    paso = 'decodificar las fotos';
+    await page.evaluate(FOTOS_DECODIFICADAS);
+  } catch (err) {
+    const estado = await conTope<unknown>(
+      page.evaluate(ESTADO_PAGINA).catch((e: unknown) => ({ noSePudoLeer: String(e) })),
+      5_000,
+      { noSePudoLeer: 'la página no contestó en 5 s' },
+    );
+    const pendientes = [...abiertas].map((r) => `${r.resourceType()} ${r.url().slice(0, 60)}`);
+    console.error(
+      `[reportePdf] la página no quedó lista (al ${paso}, ${Date.now() - inicio} ms, ${(html.length / 1024 / 1024).toFixed(1)} MB):`,
+      JSON.stringify(estado),
+      `peticiones abiertas: ${pendientes.length ? pendientes.join(' | ') : 'ninguna'}`,
+    );
+    throw err;
+  } finally {
+    await fs.promises.unlink(archivo).catch(() => undefined);
+  }
+}
+
 export async function aPdf(html: string, pieIzquierda: string): Promise<Buffer> {
   let browser: Browser | undefined;
   try {
     browser = await puppeteer.launch(configPuppeteer());
     const page = await browser.newPage();
     const tRender = Date.now();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await abrirPapel(page, html);
     const pdf = await page.pdf({
       format: 'letter',
       printBackground: true,
