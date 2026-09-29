@@ -53,6 +53,7 @@ const PRUEBAS: Record<string, string> = {
   'whatsapp-voz': 'whatsapp-voz-humo.ts',
   'whatsapp-solicitudes': 'whatsapp-solicitudes-humo.ts',
   'whatsapp-fecha': 'whatsapp-fecha-humo.ts',
+  'whatsapp-equipos': 'whatsapp-equipos-humo.ts',
 };
 
 async function main(): Promise<void> {

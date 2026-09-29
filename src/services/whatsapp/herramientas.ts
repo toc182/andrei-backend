@@ -31,7 +31,8 @@ import {
 } from './conversacion.js';
 import { responderBotones, responderDocumento } from './entrantes.js';
 import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal } from './borrador.js';
-import { ESTADOS, buscarSolicitudes, verSolicitud, type Filtros } from './solicitudes.js';
+import { ESTADOS, buscarSolicitudes, quienEs, verSolicitud, type Filtros } from './solicitudes.js';
+import { leerNombrePropio } from '../consorcioProyecto.js';
 
 export interface Usuario {
   id: number;
@@ -111,7 +112,7 @@ export async function proyectosDe(usuario: Usuario): Promise<{ id: number; nombr
 
 /** Las listas con las que se llena el reporte de ese proyecto. */
 export async function listasDe(proyectoId: number): Promise<ListasProyecto> {
-  const [areas, puestos, equipos, categorias] = await Promise.all([
+  const [areas, puestos, equipos, categorias, empresas, propio] = await Promise.all([
     query<{ id: number; nombre: string }>(
       'SELECT id, nombre FROM proyecto_areas WHERE proyecto_id = $1 AND activo = true ORDER BY orden, id',
       [proyectoId],
@@ -124,20 +125,32 @@ export async function listasDe(proyectoId: number): Promise<ListasProyecto> {
         ORDER BY p.orden, p.id`,
       [proyectoId],
     ),
-    query<{ id: number; nombre: string }>(
-      'SELECT id, nombre FROM proyecto_equipos WHERE proyecto_id = $1 AND activo = true ORDER BY orden, id',
+    // Con su dueno: empresa null es la cuadrilla propia (mig 176).
+    query<{ id: number; nombre: string; empresa: string | null; empresa_id: number | null }>(
+      `SELECT q.id, q.nombre, e.nombre AS empresa, q.empresa_id
+         FROM proyecto_equipos q
+         LEFT JOIN proyecto_empresas e ON e.id = q.empresa_id
+        WHERE q.proyecto_id = $1 AND q.activo = true
+        ORDER BY q.orden, q.id`,
       [proyectoId],
     ),
     query<{ id: number; nombre: string }>(
       'SELECT id, nombre FROM proyecto_entrega_categorias WHERE proyecto_id = $1 AND activo = true ORDER BY orden, id',
       [proyectoId],
     ),
+    query<{ id: number; nombre: string }>(
+      'SELECT id, nombre FROM proyecto_empresas WHERE proyecto_id = $1 AND activo = true ORDER BY id',
+      [proyectoId],
+    ),
+    leerNombrePropio(proyectoId),
   ]);
   return {
     areas: areas.rows,
     puestos: puestos.rows,
     equipos: equipos.rows,
     categorias: categorias.rows,
+    empresas: empresas.rows,
+    propio,
   };
 }
 
@@ -298,13 +311,19 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
     description:
       'Agrega una maquina a la lista de equipos del proyecto cuando la persona nombra una ' +
       'que no esta. Devuelve su equipo_id para anotarla despues con anotar. Va con el nombre ' +
-      'completo («Retroexcavadora», no «la retro»). Si se parece a una que ya esta, no la ' +
-      'agrega y te dice cual: preguntale a la persona si es esa. Si la persona ya te dijo que ' +
-      'es otra maquina, vuelve a llamarlo con es_otra.',
+      'completo («Retroexcavadora», no «la retro»). Si la persona dijo de quien es («la retro ' +
+      'de Rodsa»), manda esa empresa como la dijo; si no lo dijo, va sin empresa y queda de la ' +
+      'cuadrilla propia. Si se parece a una que ya esta de ese mismo dueno, no la agrega y te ' +
+      'dice cual: preguntale a la persona si es esa. Si la persona ya te dijo que es otra ' +
+      'maquina, vuelve a llamarlo con es_otra.',
     input_schema: {
       type: 'object',
       properties: {
         nombre: { type: 'string' },
+        empresa: {
+          type: 'string',
+          description: 'De quien es, tal como lo dijo la persona. Solo si lo dijo.',
+        },
         es_otra: {
           type: 'boolean',
           description:
@@ -664,7 +683,42 @@ export async function ejecutarHerramienta(
     }
 
     const listas = cache.listas ?? (cache.listas = await listasDe(proyectoId));
-    const parecido = parecidoEnLista(maquina, listas.equipos);
+
+    // De quien es: la empresa que dijo, entre las de la obra; si no dijo
+    // ninguna, la cuadrilla propia (decision de Ivan del 2026-09-28).
+    let empresaId: number | null = null;
+    let deQuien = listas.propio ?? 'la cuadrilla propia';
+    const dicha = typeof input.empresa === 'string' ? input.empresa.trim() : '';
+    if (dicha) {
+      const empresas = listas.empresas ?? [];
+      const son = quienEs(dicha, empresas);
+      const esPropia = quienEs(dicha, [{ nombre: listas.propio ?? 'Pinellas' }]).length > 0;
+      if (son.length === 1) {
+        empresaId = son[0].id;
+        deQuien = son[0].nombre;
+      } else if (son.length > 1) {
+        return {
+          ok: false,
+          contenido: { error: `«${dicha}» puede ser más de una empresa: pregúntale cuál.`, empresas: son },
+        };
+      } else if (!esPropia) {
+        return {
+          ok: false,
+          contenido: {
+            error:
+              `«${dicha}» no es una de las empresas de la obra. Pregúntale de quién es; las ` +
+              'que hay son estas, o la cuadrilla propia.',
+            empresas,
+            propio: listas.propio,
+          },
+        };
+      }
+    }
+
+    // Lo que se parece se busca solo entre las de ese mismo dueno: la retro
+    // propia y la de un subcontratista son dos maquinas.
+    const delMismo = listas.equipos.filter((e) => (e.empresa_id ?? null) === empresaId);
+    const parecido = parecidoEnLista(maquina, delMismo);
     if (parecido?.igual) {
       return {
         ok: false,
@@ -686,17 +740,17 @@ export async function ejecutarHerramienta(
       };
     }
 
-    const agregado = await agregarALista(proyectoId, 'equipos', maquina, null, ctx.usuario.id);
+    const agregado = await agregarALista(proyectoId, 'equipos', maquina, empresaId, ctx.usuario.id);
     if (!agregado.ok) return { ok: false, contenido: { error: agregado.message } };
     // La lista cambio: lo que se anote en este mismo turno se valida contra la nueva.
     cache.listas = await listasDe(proyectoId);
     return {
       ok: true,
       contenido: {
-        agregado: { equipo_id: agregado.fila.id, nombre: agregado.fila.nombre },
+        agregado: { equipo_id: agregado.fila.id, nombre: agregado.fila.nombre, de: deQuien },
         recuerde:
           'Anótala con anotar, con sus horas, y dile a la persona en una línea que la ' +
-          'agregaste a los equipos de la obra.',
+          `agregaste a los equipos de la obra${empresaId === null ? '' : `, como de ${deQuien}`}.`,
       },
     };
   }

@@ -113,6 +113,14 @@ COMO SE ANOTA
   preguntale si la agregas con ese nombre. Cuando diga que si, agregar_area.
 - Una maquina que no esta en la lista se agrega sin preguntar, con su nombre completo, y
   se lo dices en una linea. Si se parece a una que ya esta, preguntale cual es.
+- LAS MAQUINAS TIENEN DUENO: en la lista cada una trae su empresa; empresa null es de la
+  cuadrilla propia (propio en las listas). Puede haber dos con el mismo nombre de dueños
+  distintos: si te nombra una de esas y no dice de quien es, preguntale cual. Si dice de
+  quien es («la retro de Rodsa»), anotas la de ese dueño.
+- Una maquina nueva va de la empresa que dijo (agregar_equipo con empresa); si no dijo de
+  quien es, va sin empresa y queda de la cuadrilla propia. No se lo preguntes.
+- Cuando le confirmes una maquina que no es de la cuadrilla propia, di de quien es («la
+  retro de RODSA, 6 horas»).
 - Cuando las herramientas digan revisar_trabajo, el trabajo ejecutado quedo en una linea
   suelta: leeselo y preguntale si asi lo quiere o si quiere agregar algo.
 - Las notas de voz te llegan pasadas a texto, marcadas con [nota de voz]: son lo que dijo.

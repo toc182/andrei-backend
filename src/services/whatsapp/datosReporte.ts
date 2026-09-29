@@ -107,8 +107,15 @@ export interface DatosReporte {
 export interface ListasProyecto {
   areas: { id: number; nombre: string }[];
   puestos: { id: number; nombre: string; empresa: string | null }[];
-  equipos: { id: number; nombre: string }[];
+  /** empresa null = de la cuadrilla propia (Pinellas, o el consorcio). Cada
+   *  cuadrilla tiene las suyas: puede haber dos «Retroexcavadora» (mig 176). */
+  equipos: { id: number; nombre: string; empresa?: string | null; empresa_id?: number | null }[];
   categorias: { id: number; nombre: string }[];
+  /** Las empresas de la obra (las mismas de Personal), para decir de quien es
+   *  una maquina nueva. */
+  empresas?: { id: number; nombre: string }[];
+  /** Como se llama la cuadrilla propia: «Pinellas» o el nombre del consorcio. */
+  propio?: string;
 }
 
 const texto = (x: unknown): string | null => {
@@ -549,7 +556,12 @@ export function resumen(
   if (datos.equipos?.length) {
     const maquinas = datos.equipos
       .filter((e) => e.horas > 0 || e.unidades > 0)
-      .map((e) => `${nombre(listas.equipos, e.equipoId)} ${e.horas} h`);
+      .map((e) => {
+        // De quien es, cuando no es de la cuadrilla propia: con dos «Retro»
+        // en la obra, «Retro 6 h» no dice cual.
+        const empresa = listas.equipos.find((x) => x.id === e.equipoId)?.empresa;
+        return `${nombre(listas.equipos, e.equipoId)}${empresa ? ` (${empresa})` : ''} ${e.horas} h`;
+      });
     if (maquinas.length) lineas.push(`Equipo: ${maquinas.join(', ')}`);
   }
   if (datos.entregas?.length) {
