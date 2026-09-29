@@ -4,8 +4,9 @@
  *
  * Decisión de Ivan del 2026-09-28: en el reporte terminado, Personal y Equipo
  * van como tabla con una columna por empresa, y arriba de cada columna unas
- * siglas con la clave debajo. Las siglas «por ahora» son las primeras letras
- * de las tres primeras palabras del nombre; se definirán mejor después.
+ * siglas con la clave debajo. Las siglas son las tres primeras letras del
+ * nombre (decisión de Ivan del 2026-09-29; antes eran las iniciales de las
+ * tres primeras palabras, y «Consorcio Aguas de Santa Isabel» salía CAD).
  *
  * Se calculan aquí, una sola vez, para que la pantalla y el PDF digan las
  * mismas: la pantalla las recibe hechas con el reporte.
@@ -19,18 +20,14 @@ export interface ColumnaEmpresa {
 }
 
 /**
- * Las siglas de un nombre: la primera letra de cada una de sus tres primeras
- * palabras («Hermanos Rodríguez, S.A.» → HRS). Un nombre de una sola palabra
- * daría una letra suelta que no se reconoce, así que lleva sus tres primeras
- * letras («Pinellas» → PIN).
+ * Las siglas de un nombre: sus tres primeras letras, sin contar espacios ni
+ * signos («Consorcio Aguas de Santa Isabel» → CON, «Hermanos Rodríguez, S.A.»
+ * → HER).
  */
 export function siglaDe(nombre: string): string {
-  const palabras = nombre.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  if (palabras.length === 0) return '?';
-  const sigla = palabras.length === 1
-    ? palabras[0].slice(0, 3)
-    : palabras.slice(0, 3).map((p) => p[0]).join('');
-  return sigla.toLocaleUpperCase('es');
+  const letras = nombre.replace(/[^\p{L}\p{N}]+/gu, '');
+  if (!letras) return '?';
+  return letras.slice(0, 3).toLocaleUpperCase('es');
 }
 
 /**
@@ -39,7 +36,7 @@ export function siglaDe(nombre: string): string {
  * proyecto). Las mismas columnas sirven para las dos tablas, así que las
  * siglas no cambian de una a otra.
  *
- * Dos empresas con las mismas siglas se distinguen con un número: HRS, HRS2.
+ * Dos empresas con las mismas siglas se distinguen con un número: CON, CON2.
  */
 export function columnasEmpresas(
   nombrePropio: string,

@@ -12,14 +12,12 @@ function ok(cond: boolean, label: string) {
 }
 
 // ---- las siglas de un nombre ----
-ok(siglaDe('Consorcio Playa Blanca') === 'CPB', 'tres palabras: sus iniciales');
-ok(siglaDe('Hermanos Rodríguez, S.A.') === 'HRS', 'la coma y los puntos no cuentan como letras');
-ok(siglaDe('Electromecánica del Istmo') === 'EDI', 'las palabras cortas cuentan');
-ok(siglaDe('Constructora Hermanos Rodríguez y Asociados') === 'CHR', 'solo las tres primeras palabras');
-ok(siglaDe('Aceros Panamá') === 'AP', 'dos palabras: dos letras');
-ok(siglaDe('Pinellas') === 'PIN', 'una sola palabra: sus tres primeras letras');
-ok(siglaDe('Toc') === 'TOC', 'una palabra corta sale entera');
-ok(siglaDe('Ñandú Obras') === 'ÑO', 'la Ñ se queda');
+ok(siglaDe('Consorcio Aguas de Santa Isabel') === 'CON', 'las tres primeras letras');
+ok(siglaDe('Hermanos Rodríguez, S.A.') === 'HER', 'en mayúsculas');
+ok(siglaDe('RODSA') === 'ROD', 'un nombre en mayúsculas igual');
+ok(siglaDe('A.B. Obras') === 'ABO', 'los puntos y espacios no cuentan como letras');
+ok(siglaDe('Toc') === 'TOC', 'un nombre corto sale entero');
+ok(siglaDe('Ñandú Obras') === 'ÑAN', 'la Ñ se queda');
 ok(siglaDe('  ') === '?', 'sin nombre no revienta');
 
 // ---- las columnas del reporte ----
@@ -30,7 +28,7 @@ ok(siglaDe('  ') === '?', 'sin nombre no revienta');
     { empresa_id: 8, empresa_nombre: 'Hermanos Rodríguez, S.A.' },
     { empresa_id: 3, empresa_nombre: 'Electromecánica del Istmo' },
   ]);
-  ok(cols.map((c) => c.sigla).join(',') === 'CPB,HRS,EDI',
+  ok(cols.map((c) => c.sigla).join(',') === 'CON,HER,ELE',
     'el propio primero, luego las empresas en el orden de las filas, sin repetir');
   ok(cols[0].empresa_id === null && cols[0].nombre === 'Consorcio Playa Blanca',
     'el propio lleva el nombre que se le pasa');
@@ -38,10 +36,10 @@ ok(siglaDe('  ') === '?', 'sin nombre no revienta');
 {
   const cols = columnasEmpresas('Pinellas', [
     { empresa_id: 1, empresa_nombre: 'Hermanos Rodríguez, S.A.' },
-    { empresa_id: 2, empresa_nombre: 'Hidráulica Río Sur' },
+    { empresa_id: 2, empresa_nombre: 'Hermes Ingeniería' },
     { empresa_id: 4, empresa_nombre: 'Herrería Real Santeña' },
   ]);
-  ok(cols.map((c) => c.sigla).join(',') === 'HRS,HRS2,HRS3',
+  ok(cols.map((c) => c.sigla).join(',') === 'HER,HER2,HER3',
     'siglas repetidas se distinguen con un número');
   ok(!cols.some((c) => c.empresa_id === null),
     'sin filas del propio, el propio no es columna');

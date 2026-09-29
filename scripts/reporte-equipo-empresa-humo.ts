@@ -78,7 +78,7 @@ const main = async () => {
   const det = await pedir('GET', `/proyecto-reportes/${P}/${id}`);
   const d = det.cuerpo?.data;
   const siglas = (d?.columnas ?? []).map((x: { sigla: string }) => x.sigla).join(',');
-  c(siglas === 'PIN,HRS', `el detalle trae las columnas con sus siglas (trajo ${siglas})`);
+  c(siglas === 'PIN,HER', `el detalle trae las columnas con sus siglas (trajo ${siglas})`);
   const maquinas = d?.equipos ?? [];
   c(maquinas.length === 2, 'el detalle trae las dos retroexcavadoras');
   c(maquinas[0]?.empresa_id === null && maquinas[1]?.empresa_id === empId,
