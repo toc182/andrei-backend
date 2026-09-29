@@ -33,6 +33,16 @@ import { responderBotones, responderDocumento } from './entrantes.js';
 import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal } from './borrador.js';
 import { ESTADOS, buscarSolicitudes, quienEs, verSolicitud, type Filtros } from './solicitudes.js';
 import { leerNombrePropio } from '../consorcioProyecto.js';
+import { sendEmail } from '../emailService.js';
+import {
+  AGRUPAR,
+  COLUMNAS,
+  TIPO_EXCEL,
+  armarTabla,
+  nombreDeTabla,
+  tablaEnExcel,
+  tablaEnPdf,
+} from './tablaSolicitudes.js';
 
 export interface Usuario {
   id: number;
@@ -177,6 +187,51 @@ export async function reportesAnteriores(
   );
   return r.rows;
 }
+
+/** Los filtros de las solicitudes: los mismos para contestar y para la tabla. */
+const FILTROS_SOLICITUDES: Record<string, unknown> = {
+  proyecto_ids: {
+    type: 'array',
+    items: { type: 'integer' },
+    description: 'Los ids de la lista de proyectos de pagos que tienes en el contexto',
+  },
+  estados: {
+    type: 'array',
+    items: { type: 'string', enum: Object.keys(ESTADOS) },
+    description:
+      'pagada trae TODO lo ya pagado (tambien facturadas y cajas menudas pagadas). ' +
+      'pendiente = esperando aprobacion; aprobada = aprobada, falta pagarla',
+  },
+  proveedor: { type: 'string', description: 'Parte del nombre del proveedor' },
+  texto: {
+    type: 'string',
+    description: 'Una palabra de lo que se compro: busca en el concepto y en las lineas',
+  },
+  desde: { type: 'string', description: 'Fecha de la solicitud, AAAA-MM-DD' },
+  hasta: { type: 'string', description: 'Fecha de la solicitud, AAAA-MM-DD' },
+  esperando_mi_aprobacion: {
+    type: 'boolean',
+    description: 'Solo las pendientes que le toca aprobar a la persona que escribe',
+  },
+  le_toca_a: {
+    type: 'string',
+    description:
+      'Nombre de un aprobador, como lo dijo la persona («Lili», «Sergey»): las ' +
+      'pendientes que le toca firmar AHORA. El sistema encuentra a quien se refiere.',
+  },
+  falta_firma_de: {
+    type: 'string',
+    description:
+      'Nombre de un aprobador: las pendientes que todavia no ha firmado, le toque ya ' +
+      'o mas adelante en la cadena.',
+  },
+  urgentes: { type: 'boolean' },
+  orden: {
+    type: 'string',
+    enum: ['recientes', 'antiguas', 'monto_mayor', 'monto_menor'],
+    description: 'Por defecto recientes. «Las mas grandes» es monto_mayor.',
+  },
+};
 
 export const HERRAMIENTAS: Anthropic.Tool[] = [
   {
@@ -398,49 +453,43 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
       'todas las suyas.',
     input_schema: {
       type: 'object',
+      properties: FILTROS_SOLICITUDES,
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'mandar_tabla',
+    description:
+      'Arma una tabla de solicitudes de pago en PDF o en Excel y se la manda a la persona por ' +
+      'WhatsApp o a SU correo (el que tiene en el sistema; a ningun otro). Usalo cuando pida ' +
+      'un resumen, una tabla, un Excel o un PDF. Las filas, subtotales y total los saca el ' +
+      'sistema; arriba del archivo va dicho el filtro que usaste. Mismos filtros que ' +
+      'buscar_solicitudes.',
+    input_schema: {
+      type: 'object',
       properties: {
-        proyecto_ids: {
+        ...FILTROS_SOLICITUDES,
+        columnas: {
           type: 'array',
-          items: { type: 'integer' },
-          description: 'Los ids de la lista de proyectos de pagos que tienes en el contexto',
-        },
-        estados: {
-          type: 'array',
-          items: { type: 'string', enum: Object.keys(ESTADOS) },
+          items: { type: 'string', enum: Object.keys(COLUMNAS) },
           description:
-            'pagada trae TODO lo ya pagado (tambien facturadas y cajas menudas pagadas). ' +
-            'pendiente = esperando aprobacion; aprobada = aprobada, falta pagarla',
+            'Las que pidio; si no dijo, se ponen numero, obra, fecha, proveedor y estado. ' +
+            'El monto va siempre.',
         },
-        proveedor: { type: 'string', description: 'Parte del nombre del proveedor' },
-        texto: {
+        agrupar_por: {
           type: 'string',
-          description: 'Una palabra de lo que se compro: busca en el concepto y en las lineas',
+          enum: Object.keys(AGRUPAR),
+          description: 'Solo si lo pidio («por obra», «con subtotales por proveedor»).',
         },
-        desde: { type: 'string', description: 'Fecha de la solicitud, AAAA-MM-DD' },
-        hasta: { type: 'string', description: 'Fecha de la solicitud, AAAA-MM-DD' },
-        esperando_mi_aprobacion: {
-          type: 'boolean',
-          description: 'Solo las pendientes que le toca aprobar a la persona que escribe',
-        },
-        le_toca_a: {
+        formato: { type: 'string', enum: ['pdf', 'excel'] },
+        enviar_por: {
           type: 'string',
-          description:
-            'Nombre de un aprobador, como lo dijo la persona («Lili», «Sergey»): las ' +
-            'pendientes que le toca firmar AHORA. El sistema encuentra a quien se refiere.',
+          enum: ['whatsapp', 'correo'],
+          description: 'Por defecto whatsapp. correo va a SU correo, nunca a otro.',
         },
-        falta_firma_de: {
-          type: 'string',
-          description:
-            'Nombre de un aprobador: las pendientes que todavia no ha firmado, le toque ya ' +
-            'o mas adelante en la cadena.',
-        },
-        urgentes: { type: 'boolean' },
-        orden: {
-          type: 'string',
-          enum: ['recientes', 'antiguas', 'monto_mayor', 'monto_menor'],
-          description: 'Por defecto recientes. «Las mas grandes» es monto_mayor.',
-        },
+        titulo: { type: 'string', description: 'Corto, si hace falta: «Pendientes de Santa Isabel»' },
       },
+      required: ['formato'],
       additionalProperties: false,
     },
   },
@@ -934,6 +983,60 @@ export async function ejecutarHerramienta(
     return r.ok
       ? { ok: true, contenido: r.contenido }
       : { ok: false, contenido: { error: r.error, ...(r.extra ? { detalle: r.extra } : {}) } };
+  }
+
+  if (nombre === 'mandar_tabla') {
+    const formato = input.formato === 'excel' ? 'excel' : 'pdf';
+    const porCorreo = input.enviar_por === 'correo';
+    const armada = await armarTabla(ctx.usuario, {
+      filtros: input as Filtros,
+      columnas: Array.isArray(input.columnas) ? input.columnas.map(String) : undefined,
+      agrupar_por: typeof input.agrupar_por === 'string' ? input.agrupar_por : undefined,
+      titulo: typeof input.titulo === 'string' ? input.titulo : undefined,
+    });
+    if (!armada.ok) {
+      return { ok: false, contenido: { error: armada.error, ...(armada.extra ? { detalle: armada.extra } : {}) } };
+    }
+    const t = armada.tabla;
+    const archivo = {
+      nombre: nombreDeTabla(formato),
+      datos: formato === 'excel' ? await tablaEnExcel(t) : await tablaEnPdf(t),
+      tipoMime: formato === 'excel' ? TIPO_EXCEL : 'application/pdf',
+    };
+    const resumenDeTabla = { filas: t.total.cantidad, filtro: t.filtro };
+
+    if (porCorreo) {
+      // Solo a SU correo, el que tiene en el sistema: una direccion dictada por
+      // WhatsApp podria sacar la informacion de la empresa por error.
+      const correo = (
+        await query<{ email: string | null }>('SELECT email FROM users WHERE id = $1', [ctx.usuario.id])
+      ).rows[0]?.email;
+      if (!correo) {
+        return { ok: false, contenido: { error: 'Esta persona no tiene correo en el sistema: mándasela por WhatsApp.' } };
+      }
+      try {
+        await sendEmail(
+          correo,
+          `${t.titulo} (${t.corte})`,
+          `<p>${t.titulo}. Filtro: ${t.filtro}. ${t.total.cantidad} solicitudes.</p>` +
+            '<p>Lo pediste por WhatsApp al asistente de Pinellas.</p>',
+          [{ filename: archivo.nombre, content: archivo.datos }],
+        );
+      } catch (e) {
+        return { ok: false, contenido: { error: `El correo no salió: ${(e as Error).message}` } };
+      }
+      return { ok: true, contenido: { enviado: `a ${correo}`, ...resumenDeTabla } };
+    }
+
+    const salio = await responderDocumento(
+      ctx.conversacion.telefono,
+      archivo,
+      t.titulo,
+      ctx.conversacion.id,
+    );
+    return salio
+      ? { ok: true, contenido: { enviado: 'por WhatsApp', ...resumenDeTabla } }
+      : { ok: false, contenido: { error: 'WhatsApp no aceptó el archivo; inténtalo otra vez' } };
   }
 
   if (nombre === 'ver_solicitud') {

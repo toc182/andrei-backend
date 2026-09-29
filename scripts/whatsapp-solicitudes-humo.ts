@@ -15,6 +15,9 @@
 // - la lista trae TODAS las que calzan (no 25), en el orden pedido: «las mas
 //   grandes» son de verdad las mas grandes;
 // - el detalle de una sale tambien pidiendola solo por su numero («la 1»);
+// - la tabla en Excel o PDF: filas, subtotales y total de la base, con el
+//   filtro dicho arriba, sin datos bancarios; por WhatsApp como archivo, y por
+//   correo SOLO a la direccion que la persona tiene en el sistema;
 // - y por WhatsApp de verdad: el modelo recibe la lista de proyectos que la
 //   persona puede ver, llama a la herramienta y su respuesta sale.
 import { API } from './pruebas/contexto.js';
@@ -22,7 +25,10 @@ import { SECRETOS_PRUEBA } from './pruebas/entorno.js';
 import crypto from 'crypto';
 import { query, pool } from '../src/database/config.js';
 import { buscarSolicitudes, verSolicitud } from '../src/services/whatsapp/solicitudes.js';
-import type { Usuario } from '../src/services/whatsapp/herramientas.js';
+import { ejecutarHerramienta, type Usuario } from '../src/services/whatsapp/herramientas.js';
+import { conversacionViva } from '../src/services/whatsapp/conversacion.js';
+import { armarTabla, tablaEnExcel, tablaEnPdf } from '../src/services/whatsapp/tablaSolicitudes.js';
+import ExcelJS from 'exceljs';
 
 const META = process.env.PRUEBAS_META ?? '';
 const WEBHOOK = `${API}/whatsapp/webhook`;
@@ -311,6 +317,82 @@ const main = async () => {
     resultado.includes('B/. 3,600.50') && !resultado.includes('Secreto'),
     'la herramienta corre de verdad y el modelo recibe los totales, sin datos bancarios',
   );
+
+  // ── la tabla ────────────────────────────────────────────────────────────
+  const armada = await armarTabla(ingeniero, {
+    filtros: { estados: ['pendiente'] },
+    columnas: ['numero', 'proveedor', 'le_toca_a'],
+    agrupar_por: 'aprobador',
+    titulo: 'Pendientes',
+  });
+  const tabla = armada.ok ? armada.tabla : null;
+  exigir(
+    tabla !== null && tabla.total.cantidad === 3 && tabla.total.monto === 600.5 &&
+      tabla.filtro.includes('esperando aprobación'),
+    'la tabla trae las tres pendientes de su obra, el total de la base y el filtro dicho',
+    tabla && { total: tabla.total, filtro: tabla.filtro },
+  );
+  const subtotales = Object.fromEntries((tabla?.grupos ?? []).map((g) => [g.nombre, [g.cantidad, g.subtotal]]));
+  exigir(
+    JSON.stringify(subtotales) === JSON.stringify({ 'Lilia Gonzalez': [2, 400], 'Sergei Plotnikoff': [1, 200.5] }),
+    'agrupada por aprobador, con el subtotal de cada uno sacado de la base',
+    subtotales,
+  );
+
+  if (tabla) {
+    const libro = new ExcelJS.Workbook();
+    await libro.xlsx.load(await tablaEnExcel(tabla));
+    const celdas: unknown[] = [];
+    libro.getWorksheet('Solicitudes')!.eachRow((fila) => fila.eachCell((c) => celdas.push(c.value)));
+    const texto = JSON.stringify(celdas);
+    exigir(
+      texto.includes('Pendientes') && texto.includes('Monto') && celdas.includes(600.5) &&
+        texto.includes('Subtotal Lilia Gonzalez (2)'),
+      'el Excel lleva el título, las columnas, los subtotales y el total como número',
+    );
+    exigir(!/Secreto|0400999888777/.test(texto), 'el Excel no lleva datos bancarios');
+    const pdf = await tablaEnPdf(tabla);
+    exigir(pdf.subarray(0, 4).toString() === '%PDF' && pdf.length > 1000, 'el PDF sale armado');
+  }
+
+  // Por la herramienta, como la usa el asistente.
+  const conversacion = await conversacionViva(NUMERO, ingeniero.id);
+  const ctx = { usuario: ingeniero, conversacion, fotos: 0 };
+  const antesDeTabla = ((await (await fetch(`${META}/_prueba/enviados`)).json()) as unknown[]).length;
+  const porWhatsapp = await ejecutarHerramienta(
+    'mandar_tabla',
+    { estados: ['pendiente', 'aprobada'], formato: 'excel' },
+    ctx,
+    { listas: null },
+  );
+  const tras = (await (await fetch(`${META}/_prueba/enviados`)).json()) as {
+    tipo: string; archivo?: { nombre: string; bytes: number };
+  }[];
+  exigir(
+    porWhatsapp.ok && tras.length === antesDeTabla + 1 && tras.at(-1)?.tipo === 'document' &&
+      Boolean(tras.at(-1)?.archivo?.nombre.endsWith('.xlsx')),
+    'por WhatsApp sale como archivo de Excel',
+    { resultado: porWhatsapp.contenido, ultimo: tras.at(-1) },
+  );
+  const porCorreo = await ejecutarHerramienta(
+    'mandar_tabla',
+    { estados: ['pendiente'], formato: 'pdf', enviar_por: 'correo', correo: 'alguien@otra-empresa.com' },
+    ctx,
+    { listas: null },
+  );
+  exigir(
+    porCorreo.ok && JSON.stringify(porCorreo.contenido).includes('aprobador1@pruebas.local') &&
+      !JSON.stringify(porCorreo.contenido).includes('otra-empresa'),
+    'por correo va SOLO a su dirección del sistema, aunque le dicten otra',
+    porCorreo.contenido,
+  );
+  const tablaAjena = await ejecutarHerramienta(
+    'mandar_tabla',
+    { proyecto_ids: [2], formato: 'pdf' },
+    ctx,
+    { listas: null },
+  );
+  exigir(!tablaAjena.ok, 'una tabla de una obra que no es suya no se arma');
 
   await pool.end();
   console.log(fallos === 0 ? '\nTodo bien' : `\n${fallos} fallo(s)`);

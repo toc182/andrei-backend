@@ -186,13 +186,31 @@ const SIN_ACENTOS = (col: string): string => `translate(lower(${col}), 'áéíó
 const sinAcentos = (t: string): string =>
   t.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
+/** Una consulta ya armada: lo mismo sirve para contestar y para la tabla. */
+export interface Consulta {
+  ok: true;
+  f: Filtros;
+  /** FROM … WHERE …, con el siguiente aprobador (sig) al lado. */
+  desde: string;
+  params: unknown[];
+  /** Los filtros dichos como los entiende la persona: «Santa Isabel», «le toca
+   *  firmar a Sergei Plotnikoff». Van arriba de la tabla. */
+  descripcion: string[];
+}
+type Rechazo = Extract<Respuesta, { ok: false }>;
+
+const fechaDicha = (iso: string): string => iso.split('-').reverse().join('/');
+
 /**
- * Busca solicitudes y devuelve lo que pide una pregunta: cuantas son, cuanto
- * suman —en total, por estado y por proyecto— y las primeras de la lista.
- *
- * Los totales son de TODAS las que calzan, no solo de las que se muestran.
+ * Arma la consulta de solicitudes a partir de lo que pidio el modelo, con los
+ * permisos de la persona. La usan buscarSolicitudes (la respuesta por escrito)
+ * y la tabla (el archivo): las dos ven exactamente lo mismo.
  */
-export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Promise<Respuesta> {
+export async function consultaDeSolicitudes(
+  usuario: Usuario,
+  entrada: Filtros,
+): Promise<Consulta | Rechazo> {
+  const descripcion: string[] = [];
   // Lo que manda el modelo se revisa en su forma antes de usarlo: un texto
   // donde iba una lista no puede tumbar la consulta.
   const f: Filtros = {
@@ -242,6 +260,12 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
       }
     }
     donde.push(`sp.proyecto_id = ANY(${p(ids)}::int[])`);
+    const obras = await query<{ nombre: string }>(
+      `SELECT COALESCE(NULLIF(nombre_corto, ''), nombre) AS nombre FROM proyectos
+        WHERE id = ANY($1::int[]) ORDER BY nombre`,
+      [ids],
+    );
+    descripcion.push(obras.rows.map((o) => o.nombre).join(', '));
   }
 
   if (f.estados?.length) {
@@ -253,13 +277,18 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
       ? [...new Set([...f.estados, ...YA_PAGADA])]
       : f.estados;
     donde.push(`sp.estado = ANY(${p(estados)}::text[])`);
+    descripcion.push(
+      f.estados.map((e) => (e === 'pagada' ? 'pagadas' : ESTADOS[e as Estado])).join(' o '),
+    );
   }
 
   if (f.proveedor?.trim()) {
     donde.push(`${SIN_ACENTOS('sp.proveedor')} LIKE ${p(`%${sinAcentos(f.proveedor)}%`)}`);
+    descripcion.push(`proveedor «${f.proveedor.trim()}»`);
   }
 
   if (f.texto?.trim()) {
+    descripcion.push(`que digan «${f.texto.trim()}»`);
     const t = p(`%${sinAcentos(f.texto)}%`);
     donde.push(
       `(${SIN_ACENTOS('sp.observaciones')} LIKE ${t} OR EXISTS (
@@ -275,11 +304,16 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
     if (v === undefined) continue;
     if (!FECHA.test(v)) return { ok: false, error: `${clave} va como AAAA-MM-DD` };
     donde.push(`sp.fecha ${op} ${p(v)}::date`);
+    descripcion.push(`${clave} el ${fechaDicha(v)}`);
   }
 
-  if (f.urgentes) donde.push('sp.urgente = true');
+  if (f.urgentes) {
+    donde.push('sp.urgente = true');
+    descripcion.push('urgentes');
+  }
   if (f.esperando_mi_aprobacion) {
     donde.push(`sp.estado = 'pendiente' AND sig.user_id = ${p(usuario.id)}`);
+    descripcion.push(`le toca firmar a ${usuario.nombre}`);
   }
 
   // Un aprobador dicho por su nombre. Lo resuelve el sistema entre los de sus
@@ -306,6 +340,9 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
         };
       }
       const id = p(son[0].id);
+      descripcion.push(
+        clave === 'le_toca_a' ? `le toca firmar a ${son[0].nombre}` : `falta la firma de ${son[0].nombre}`,
+      );
       donde.push(
         clave === 'le_toca_a'
           ? `sp.estado = 'pendiente' AND sig.user_id = ${id}`
@@ -336,6 +373,21 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
        LIMIT 1
     ) sig ON sp.estado = 'pendiente'
     WHERE ${donde.join(' AND ')}`;
+
+  if (descripcion.length === 0) descripcion.push('todas las que puedes ver');
+  return { ok: true, f, desde, params, descripcion };
+}
+
+/**
+ * Busca solicitudes y devuelve lo que pide una pregunta: cuantas son, cuanto
+ * suman —en total, por estado, por proyecto y por quien firma— y la lista.
+ *
+ * Los totales son de TODAS las que calzan, no solo de las que se muestran.
+ */
+export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Promise<Respuesta> {
+  const consulta = await consultaDeSolicitudes(usuario, entrada);
+  if (!consulta.ok) return consulta;
+  const { f, desde, params } = consulta;
 
   const [total, porEstado, porProyecto, porAprobador, filas] = await Promise.all([
     query<{ cantidad: string; monto: string }>(

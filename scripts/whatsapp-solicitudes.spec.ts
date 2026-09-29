@@ -19,10 +19,10 @@ const ok = (bien: boolean, que: string): void => {
 };
 
 const aqui = dirname(fileURLToPath(import.meta.url));
-const fuente = readFileSync(
-  join(aqui, '..', 'src', 'services', 'whatsapp', 'solicitudes.ts'),
-  'utf8',
-);
+// Las dos: lo que se contesta y lo que se manda en tabla.
+const fuente = ['solicitudes.ts', 'tablaSolicitudes.ts']
+  .map((f) => readFileSync(join(aqui, '..', 'src', 'services', 'whatsapp', f), 'utf8'))
+  .join('\n');
 
 // Las consultas van en plantillas con acento grave; los comentarios y la lista
 // de columnas prohibidas, no. Asi la prueba mira solo el SQL.

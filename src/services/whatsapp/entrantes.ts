@@ -327,7 +327,7 @@ export async function responderBotones(
 /** Un archivo —el PDF del reporte—. Devuelve si salio. */
 export async function responderDocumento(
   telefono: string,
-  archivo: { nombre: string; datos: Buffer },
+  archivo: { nombre: string; datos: Buffer; tipoMime?: string },
   pie: string,
   conversacionId?: number,
 ): Promise<boolean> {
