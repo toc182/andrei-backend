@@ -20,6 +20,15 @@
 import { query } from '../database/config.js';
 import { diasDeLaSemana, domingoDe, lunesDe } from './reporteSemana.js';
 
+/**
+ * Como se llama una maquina en el semanal: su nombre, y si es de un
+ * subcontratista, tambien de quien es. La retroexcavadora del consorcio y la de
+ * Hermanos Rodriguez se llaman igual; sin esto se sumarian en una sola fila.
+ * La del bloque propio va sola, como siempre. Pide `q` = proyecto_equipos y
+ * `qe` = LEFT JOIN proyecto_empresas de esa maquina.
+ */
+export const NOMBRE_EQUIPO_SQL = `q.nombre || COALESCE(' — ' || qe.nombre, '')`;
+
 export interface DiaDeLaSemana {
   fecha: string;
   /** El reporte diario de ese día; null si no hay. */
@@ -129,13 +138,14 @@ async function resumenComparable(
   const total = num(r.rows[0]?.total);
 
   const eq = await query<{ nombre: string; horas: string }>(
-    `SELECT q.nombre, COALESCE(SUM(e.horas), 0)::text AS horas
+    `SELECT ${NOMBRE_EQUIPO_SQL} AS nombre, COALESCE(SUM(e.horas), 0)::text AS horas
        FROM proyecto_reportes r
        JOIN proyecto_reporte_equipos e ON e.reporte_id = r.id
        JOIN proyecto_equipos q ON q.id = e.equipo_id
+       LEFT JOIN proyecto_empresas qe ON qe.id = q.empresa_id
       WHERE r.proyecto_id = $1 AND r.activo = true AND r.completo = true
         AND r.fecha BETWEEN $2::date AND $2::date + 6
-      GROUP BY q.nombre`,
+      GROUP BY 1`,
     [proyectoId, lunes],
   );
 
@@ -239,14 +249,18 @@ export async function datosDeLaSemana(
 
   // ---- equipo ----
   const equipoRows = await query<{ nombre: string; fecha: Date; horas: string; orden: number }>(
-    `SELECT q.nombre, r.fecha, SUM(e.horas)::text AS horas, MIN(q.orden) AS orden
+    // Las del bloque propio primero y luego las de cada empresa, como en el
+    // reporte diario.
+    `SELECT ${NOMBRE_EQUIPO_SQL} AS nombre, r.fecha, SUM(e.horas)::text AS horas,
+            MIN(q.orden) AS orden
        FROM proyecto_reportes r
        JOIN proyecto_reporte_equipos e ON e.reporte_id = r.id
        JOIN proyecto_equipos q ON q.id = e.equipo_id
+       LEFT JOIN proyecto_empresas qe ON qe.id = q.empresa_id
       WHERE r.proyecto_id = $1 AND r.activo = true AND r.completo = true
         AND r.fecha BETWEEN $2 AND $3
-      GROUP BY q.nombre, r.fecha
-      ORDER BY MIN(q.orden), q.nombre`,
+      GROUP BY 1, r.fecha
+      ORDER BY MIN(qe.orden) NULLS FIRST, MIN(q.orden), 1`,
     [proyectoId, lunes, domingo],
   );
   const porEquipo = new Map<string, Map<string, number>>();

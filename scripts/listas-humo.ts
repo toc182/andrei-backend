@@ -88,12 +88,31 @@ const main = async () => {
     (x: { empresa_id: number | null }) => x.empresa_id === null);
   comprobar(propios.length === 5, 'el bloque propio sigue con sus 5 (4 fijos + Timekeeper)');
 
-  // 9. quitar la empresa se lleva sus puestos
+  // 9. cada maquina tiene dueño: las que ya habia son del bloque propio, y el
+  //    propio y una empresa pueden tener cada uno la suya con el mismo nombre
+  comprobar(d.equipos.every((x: { empresa_id: number | null }) => x.empresa_id === null),
+    'las maquinas que ya habia son del bloque propio');
+  const retroPropia = await pedir('POST', `/${P}/equipos`, { nombre: 'Retro QA' });
+  const retroEmpresa = await pedir('POST', `/${P}/equipos`, { nombre: 'Retro QA', empresa_id: empId });
+  comprobar(retroPropia.estado === 201 && retroPropia.cuerpo.data.empresa_id === null,
+    'una maquina sin empresa queda en el bloque propio');
+  comprobar(retroEmpresa.estado === 201 && retroEmpresa.cuerpo.data.empresa_id === empId,
+    'la misma maquina se agrega aparte a la empresa');
+  const retroRepetida = await pedir('POST', `/${P}/equipos`, { nombre: 'retro qa', empresa_id: empId });
+  comprobar(retroRepetida.estado === 409, 'repetida dentro de la misma empresa devuelve 409');
+  const ajena = await pedir('POST', `/${P}/equipos`, { nombre: 'Grua QA', empresa_id: 999999 });
+  comprobar(ajena.estado === 400, 'una empresa que no es del proyecto devuelve 400');
+
+  // 10. quitar la empresa se lleva sus puestos y sus maquinas, no las del propio
   await pedir('DELETE', `/${P}/empresas/${empId}`);
   const tras3 = await pedir('GET', `/${P}`);
   const quedan = tras3.cuerpo.data.puestos.filter(
     (x: { empresa_id: number | null }) => x.empresa_id === empId);
   comprobar(quedan.length === 0, 'quitar la empresa se lleva sus puestos');
+  const maquinas = tras3.cuerpo.data.equipos.filter(
+    (x: { nombre: string }) => x.nombre === 'Retro QA');
+  comprobar(maquinas.length === 1 && maquinas[0].empresa_id === null,
+    'quitar la empresa se lleva sus maquinas y deja la del propio');
 
   console.log(`${ok} pasaron, ${fallo} fallaron`);
   await pool.end();

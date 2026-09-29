@@ -51,6 +51,7 @@ import {
   consorcioDelProyecto,
   nombrePropio,
 } from '../services/consorcioProyecto.js';
+import { columnasEmpresas } from '../services/siglasEmpresas.js';
 import { sendEmail } from '../services/emailService.js';
 import {
   encolarEnvio,
@@ -611,6 +612,12 @@ async function guardarFilas(
   }
 }
 
+/** Una fila de Personal o de Equipo: de la cuadrilla propia (null) o de esa empresa. */
+type FilaDeCuadrilla = QueryResultRow & {
+  empresa_id: number | null;
+  empresa_nombre: string | null;
+};
+
 /**
  * Las filas de Personal, Equipo y Entregas de un reporte, ya con sus nombres.
  *
@@ -631,11 +638,13 @@ async function leerFilas(reporteId: number | string, consultar: Consultar = conP
       [reporteId],
     ),
     consultar(
-      `SELECT re.equipo_id, re.unidades, re.horas, q.nombre
+      `SELECT re.equipo_id, re.unidades, re.horas, q.nombre, q.empresa_id,
+              e.nombre AS empresa_nombre
          FROM proyecto_reporte_equipos re
          JOIN proyecto_equipos q ON q.id = re.equipo_id
+         LEFT JOIN proyecto_empresas e ON e.id = q.empresa_id
         WHERE re.reporte_id = $1
-        ORDER BY q.orden, q.id`,
+        ORDER BY e.orden NULLS FIRST, e.id NULLS FIRST, q.orden, q.id`,
       [reporteId],
     ),
     consultar(
@@ -649,8 +658,8 @@ async function leerFilas(reporteId: number | string, consultar: Consultar = conP
     ),
   ]);
   return {
-    personal: personal.rows,
-    equipos: equipos.rows,
+    personal: personal.rows as FilaDeCuadrilla[],
+    equipos: equipos.rows as FilaDeCuadrilla[],
     entregas: entregas.rows,
   };
 }
@@ -678,7 +687,7 @@ function paraComparar(filas: {
     })),
     equipos: filas.equipos.map((f) => ({
       clave: `equipo:${String(f.equipo_id)}`,
-      label: String(f.nombre),
+      label: conEmpresa(f),
       valor: `${Number(f.unidades)} u · ${Number(f.horas)} h`,
     })),
     entregas: filas.entregas.map((f) => ({
@@ -1116,14 +1125,19 @@ router.get(
       contratista: string | null;
     };
     const autorId = fila.creado_por;
+    // Como se llama la cuadrilla propia: Pinellas, o el consorcio.
+    const propio = nombrePropio(consorcioDelProyecto({ es_consorcio, contratista }));
+    const partes = await leerPartesDelReporte(req.params.id);
 
     res.json({
       success: true,
       data: {
         ...fila,
-        // Como se llama la cuadrilla propia: Pinellas, o el consorcio.
-        nombre_propio: nombrePropio(consorcioDelProyecto({ es_consorcio, contratista })),
-        ...(await leerPartesDelReporte(req.params.id)),
+        nombre_propio: propio,
+        ...partes,
+        // Las columnas de las tablas de Personal y Equipo, con sus siglas: las
+        // mismas que salen en el PDF.
+        columnas: columnasEmpresas(propio, [...partes.personal, ...partes.equipos]),
         correcciones: await leerCorrecciones(req.params.id),
         // Para que la pantalla no ofrezca "Editar" donde la API va a negarlo.
         puede_editar: puedeCorregir(req, autorId),
@@ -1704,17 +1718,21 @@ export async function buildReportePdfInput(
     personalCalificado: Number(row.personal_calificado),
     ayudantes: Number(row.ayudantes),
     equipo: row.equipo ?? [],
-    personal: (filas.personal as Record<string, unknown>[]).map((f) => ({
+    personal: filas.personal.map((f) => ({
       nombre: String(f.nombre),
-      empresa: f.empresa_nombre === null || f.empresa_nombre === undefined
-        ? null : String(f.empresa_nombre),
+      empresaId: f.empresa_id,
       cantidad: Number(f.cantidad),
     })),
-    equipos: (filas.equipos as Record<string, unknown>[]).map((f) => ({
+    equipos: filas.equipos.map((f) => ({
       nombre: String(f.nombre),
+      empresaId: f.empresa_id,
       unidades: Number(f.unidades),
       horas: Number(f.horas),
     })),
+    columnas: columnasEmpresas(
+      nombrePropio(consorcioDelProyecto(row)),
+      [...filas.personal, ...filas.equipos],
+    ),
     entregas: (filas.entregas as Record<string, unknown>[]).map((f) => ({
       categoria: String(f.categoria),
       descripcion: String(f.descripcion),

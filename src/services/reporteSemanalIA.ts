@@ -19,6 +19,7 @@ import { jsonSchemaOutputFormat } from '@anthropic-ai/sdk/helpers/json-schema';
 import { estaConfigurado, obtenerCliente } from './asistentePagos/cliente.js';
 import { query } from '../database/config.js';
 import { diasDeLaSemana, domingoDe } from './reporteSemana.js';
+import { NOMBRE_EQUIPO_SQL } from './reporteSemanalDatos.js';
 import {
   agruparTrabajos,
   trabajosComoTexto,
@@ -173,10 +174,11 @@ export async function diariosDeLaSemana(proyectoId: number, lunes: string): Prom
       [ids],
     ),
     query<{ reporte_id: number; nombre: string; horas: string }>(
-      `SELECT q.reporte_id, eq.nombre, q.horas
-         FROM proyecto_reporte_equipos q
-         JOIN proyecto_equipos eq ON eq.id = q.equipo_id
-        WHERE q.reporte_id = ANY($1) AND q.horas > 0`,
+      `SELECT re.reporte_id, ${NOMBRE_EQUIPO_SQL} AS nombre, re.horas
+         FROM proyecto_reporte_equipos re
+         JOIN proyecto_equipos q ON q.id = re.equipo_id
+         LEFT JOIN proyecto_empresas qe ON qe.id = q.empresa_id
+        WHERE re.reporte_id = ANY($1) AND re.horas > 0`,
       [ids],
     ),
     query<{ reporte_id: number; descripcion: string; cantidad: string | null; unidad: string | null }>(

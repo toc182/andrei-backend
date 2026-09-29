@@ -20,12 +20,56 @@ import {
 import { nombreEmisor, nombrePropio, type Consorcio } from './consorcioProyecto.js';
 import type { CambioLegible, Trozo } from './reporteCambios.js';
 import { agruparTrabajos, type TrabajoGuardado } from './reporteTrabajos.js';
+import type { ColumnaEmpresa } from './siglasEmpresas.js';
 
 // Las piezas comunes se siguen pudiendo importar desde aqui: rutas y pruebas
 // las piden a este modulo desde antes de que existiera el reporte semanal.
 export { claveReducida, reducirFoto, pieDeFoto, HORA_PANAMA } from './reportePdfComun.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ---------------------------------------------------------------------------
+// Las tablas de Personal y Equipo por cuadrilla
+// ---------------------------------------------------------------------------
+
+/** Una fila de Personal o Equipo con la cuadrilla a la que pertenece. */
+type FilaCuadrilla = { nombre: string; empresaId: number | null };
+
+/**
+ * Las filas de la tabla: un nombre, y lo de cada cuadrilla bajo ese nombre.
+ * Los «Ayudantes» del propio y los de un subcontratista son una sola fila con
+ * un número en cada columna.
+ */
+function porNombre<F extends FilaCuadrilla>(filas: F[]) {
+  const nombres: string[] = [];
+  const celdas = new Map<string, F>();
+  for (const f of filas) {
+    if (!nombres.includes(f.nombre)) nombres.push(f.nombre);
+    celdas.set(`${f.nombre}|${f.empresaId ?? 'propio'}`, f);
+  }
+  return {
+    nombres,
+    de: (nombre: string, c: ColumnaEmpresa) =>
+      celdas.get(`${nombre}|${c.empresa_id ?? 'propio'}`),
+  };
+}
+
+/** Solo las cuadrillas que tienen filas en esta tabla. */
+const conFilas = (columnas: ColumnaEmpresa[], filas: FilaCuadrilla[]) =>
+  columnas.filter((c) => filas.some((f) => f.empresaId === c.empresa_id));
+
+/** Una casilla de número; el cero es una raya tenue, para que se lea lo que hay. */
+const celda = (v: number, clase = '') =>
+  `<td class="n${v ? '' : ' cero'}${clase ? ` ${clase}` : ''}">${v || '–'}</td>`;
+
+/** Qué quiere decir cada sigla, debajo de la tabla. */
+function clave(columnas: ColumnaEmpresa[], extra = ''): string {
+  const siglas = columnas.length > 1
+    ? columnas.map((c) => `<span><b>${esc(c.sigla)}</b> ${esc(c.nombre)}</span>`).join('')
+    : '';
+  if (!siglas && !extra) return '';
+  return `<div class="clave">${extra ? `<span>${extra}</span>` : ''}${siglas}</div>`;
+}
 
 // Las marcas de Correcciones, en rojo y verde apagados. Ivan los pidió así: el
 // tachado y el subrayado son los que dicen qué pasó; el color solo acompaña, y
@@ -56,8 +100,13 @@ export interface ReportePdfInput {
   equipo: string[];
   // Las filas. Un reporte de antes del cambio las trae vacias y se imprime
   // con los dos numeros de arriba, que se quedaron en su sitio.
-  personal: { nombre: string; empresa: string | null; cantidad: number }[];
-  equipos: { nombre: string; unidades: number; horas: number }[];
+  personal: { nombre: string; empresaId: number | null; cantidad: number }[];
+  equipos: { nombre: string; empresaId: number | null; unidades: number; horas: number }[];
+  /**
+   * Las cuadrillas con filas en este reporte, con sus siglas: las columnas de
+   * las tablas de Personal y Equipo. Las mismas que ve la pantalla.
+   */
+  columnas: ColumnaEmpresa[];
   entregas: {
     categoria: string; descripcion: string;
     cantidad: number | null; unidad: string | null; notas: string | null;
@@ -174,6 +223,11 @@ export function armarHtml(
 
   // Las filas en cero no se imprimen: es la regla acordada. Un reporte con
   // veinte puestos posibles y cuatro usados imprime cuatro lineas.
+  //
+  // Personal y Equipo van como tabla con una columna por cuadrilla (decision
+  // de Ivan del 2026-09-28): arriba las siglas, debajo la clave. En Equipo cada
+  // cuadrilla lleva U y H separadas por una raya. La pantalla dice lo mismo
+  // (TablasCuadrillas.tsx); con una sola cuadrilla no hay siglas ni clave.
   const bloquePersonal = (r: ReportePdfInput): string => {
     if (r.personal.length === 0) {
       // Un reporte de antes del cambio: se imprime como se imprimia.
@@ -187,25 +241,29 @@ export function armarHtml(
         </div></div></div>`;
     }
 
-    const grupos = [...new Set(r.personal.map((f) => f.empresa))];
-    const total = r.personal.reduce((n, f) => n + f.cantidad, 0);
-    const cuerpoGrupos = grupos
-      .map((g) => {
-        const filas = r.personal
-          .filter((f) => f.empresa === g)
-          .map((f) => `<tr><td>${esc(f.nombre)}</td><td class="n">${f.cantidad}</td></tr>`)
-          .join('');
-        // El nombre del bloque solo aparece cuando hay con quien confundirlo.
-        const titulo = grupos.length > 1
-          ? `<div class="grupo">${esc(g ?? nombrePropio(r.consorcio))}</div>`
-          : '';
-        return `<div>${titulo}<table class="filas">${filas}</table></div>`;
-      })
+    const columnas = conFilas(r.columnas, r.personal);
+    const varias = columnas.length > 1;
+    const { nombres, de } = porNombre(r.personal);
+    const cantidad = (n: string, c: ColumnaEmpresa) => de(n, c)?.cantidad ?? 0;
+    const totalFila = (n: string) => columnas.reduce((s, c) => s + cantidad(n, c), 0);
+    const totalColumna = (c: ColumnaEmpresa) => nombres.reduce((s, n) => s + cantidad(n, c), 0);
+    const total = nombres.reduce((s, n) => s + totalFila(n), 0);
+
+    const cabeza = `<tr><th></th>${
+      varias ? columnas.map((c) => `<th class="n">${esc(c.sigla)}</th>`).join('') : ''
+    }<th class="n${varias ? ' tot' : ''}">${varias ? 'Total' : 'Cantidad'}</th></tr>`;
+    const filas = nombres
+      .map((n) => `<tr><td>${esc(n)}</td>${
+        varias ? columnas.map((c) => celda(cantidad(n, c))).join('') : ''
+      }${celda(totalFila(n), varias ? 'tot' : '')}</tr>`)
       .join('');
+    const suma = `<tr class="suma-fila"><td>Total en obra</td>${
+      varias ? columnas.map((c) => `<td class="n">${totalColumna(c)}</td>`).join('') : ''
+    }<td class="n${varias ? ' tot' : ''}">${total}</td></tr>`;
 
     return `<div class="sect"><div class="sect-h">Personal</div><div class="sect-b">
-      ${cuerpoGrupos}
-      <div class="suma"><span>Total en obra</span><b>${total}</b></div>
+      <table class="cuadrillas"><thead>${cabeza}</thead><tbody>${filas}${suma}</tbody></table>
+      ${clave(columnas)}
     </div></div>`;
   };
 
@@ -216,13 +274,31 @@ export function armarHtml(
       return `<div class="sect"><div class="sect-h">Equipo</div><div class="sect-b">
         <div class="prose"><p>${esc(r.equipo.join(' · '))}</p></div></div></div>`;
     }
-    const filasEquipo = r.equipos
-      .map((f) => `<tr><td>${esc(f.nombre)}</td>
-                       <td class="n">${f.unidades} u</td>
-                       <td class="n">${f.horas} h</td></tr>`)
+
+    const columnas = conFilas(r.columnas, r.equipos);
+    const varias = columnas.length > 1;
+    const raya = varias ? ' raya' : '';
+    const { nombres, de } = porNombre(r.equipos);
+
+    const siglas = varias
+      ? `<tr><th></th>${columnas
+        .map((c) => `<th class="c raya" colspan="2">${esc(c.sigla)}</th>`).join('')}</tr>`
+      : '';
+    const uh = `<tr class="uh"><th></th>${columnas
+      .map(() => `<th class="n${raya}">U</th><th class="n">H</th>`).join('')}</tr>`;
+    const filas = nombres
+      .map((n) => `<tr><td>${esc(n)}</td>${columnas
+        .map((c) => {
+          const f = de(n, c);
+          return celda(f?.unidades ?? 0, raya.trim()) + celda(f?.horas ?? 0);
+        })
+        .join('')}</tr>`)
       .join('');
+
     return `<div class="sect"><div class="sect-h">Equipo</div><div class="sect-b">
-      <table class="filas">${filasEquipo}</table></div></div>`;
+      <table class="cuadrillas"><thead>${siglas}${uh}</thead><tbody>${filas}</tbody></table>
+      ${clave(columnas, '<b>U</b> unidades · <b>H</b> horas')}
+    </div></div>`;
   };
 
   const bloqueEntregas = (r: ReportePdfInput): string => {
@@ -391,11 +467,22 @@ export function armarHtml(
        12px: 24 + 12 = 36, que sigue siendo multiplo de 4. */
     .filas .cat { color:${GRAY}; font-size:11px; line-height:16px; }
     .filas .nota { display:block; color:${GRAY}; font-size:11px; line-height:12px; }
-    .grupo { font-size:10px; line-height:12px; font-weight:700; letter-spacing:.09em;
-             text-transform:uppercase; color:${NAVY}; padding-top:12px; }
-    .suma { display:flex; justify-content:space-between; border-top:1px solid ${RULE};
-            margin-top:4px; padding-top:8px; font-size:12.5px; line-height:16px; }
-    .suma b { font-size:14px; }
+    /* Personal y Equipo por cuadrilla. Mismas filas de 24px que .filas. */
+    .cuadrillas { width:100%; border-collapse:collapse; font-size:12.5px; }
+    .cuadrillas th { font-size:10px; line-height:12px; font-weight:700; color:${NAVY};
+                     padding:0 5px 4px; border-bottom:1px solid ${RULE}; }
+    .cuadrillas th.c { text-align:center; border-bottom:0; padding-bottom:2px; }
+    .cuadrillas .uh th { color:${GRAY}; }
+    .cuadrillas td { padding:4px 5px; line-height:16px; border-bottom:1px solid ${RULE}; }
+    .cuadrillas td:first-child, .cuadrillas th:first-child { padding-left:0; text-align:left; }
+    .cuadrillas .n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .cuadrillas .cero { color:${RULE}; }
+    .cuadrillas .tot { background:${LIGHT_BG}; }
+    .cuadrillas .raya { border-left:1px solid ${RULE}; }
+    .cuadrillas .suma-fila td { font-weight:700; border-top:1px solid ${GRAY}; border-bottom:0; }
+    .clave { display:flex; flex-wrap:wrap; gap:2px 10px; margin-top:6px;
+             font-size:10px; line-height:12px; color:${GRAY}; }
+    .clave b { color:${NAVY}; }
     .fixes { width:100%; border-collapse:collapse; font-size:11.5px; line-height:15px; margin-top:10px; }
     .fixes td { padding:5px 9px; border:1px solid ${RULE}; vertical-align:top; }
     /* width:1% y sin cortes: la columna mide lo que mide la fecha. */

@@ -13,10 +13,10 @@
  *     el mismo nombre y el PDF mostraría la línea dos veces.
  *   - Baja lógica, nunca borrado: los reportes ya guardados siguen apuntando.
  *
- * Los puestos son el caso especial: `empresa_id` nulo es el bloque propio
- * (Pinellas, o el consorcio en un proyecto en consorcio) y con valor es el de
- * esa empresa. Cada bloque es dueño de sus
- * puestos, así que quitar uno del bloque propio no toca los de una empresa.
+ * Los puestos y los equipos son el caso especial: `empresa_id` nulo es el
+ * bloque propio (Pinellas, o el consorcio en un proyecto en consorcio) y con
+ * valor es el de esa empresa. Cada bloque es dueño de sus puestos y de sus
+ * máquinas, así que quitar uno del bloque propio no toca los de una empresa.
  */
 
 import { Router, Request, Response } from 'express';
@@ -70,7 +70,7 @@ function leerNombre(req: Request): string {
   return String((req.body as { nombre?: unknown })?.nombre ?? '').trim();
 }
 
-/** empresa_id solo lo usan los puestos; en las demás listas se ignora. */
+/** empresa_id solo lo usan los puestos y los equipos; en las demás listas se ignora. */
 function leerEmpresaId(req: Request): number | null {
   const v = (req.body as { empresa_id?: unknown })?.empresa_id;
   if (v === undefined || v === null || v === '') return null;
@@ -127,7 +127,9 @@ async function leerLista(
 ): Promise<FilaLista[]> {
   const columnas = tabla === 'proyecto_puestos'
     ? 'id, proyecto_id, empresa_id, nombre, orden, fijo, activo'
-    : 'id, proyecto_id, nombre, orden, activo';
+    : tabla === 'proyecto_equipos'
+      ? 'id, proyecto_id, empresa_id, nombre, orden, activo'
+      : 'id, proyecto_id, nombre, orden, activo';
   const r = await query<FilaLista>(
     `SELECT ${columnas} FROM ${tabla}
       WHERE proyecto_id = $1 AND activo = true
@@ -193,15 +195,26 @@ export async function agregarALista(
   const nombre = nombreCrudo.trim();
   if (!nombre) return { ok: false, status: 400, message: 'El nombre es obligatorio' };
 
-  const esPuesto = conf.tabla === 'proyecto_puestos';
-  const empresaId = esPuesto ? empresaIdCrudo : null;
+  const porBloque = conf.tabla === 'proyecto_puestos' || conf.tabla === 'proyecto_equipos';
+  const empresaId = porBloque ? empresaIdCrudo : null;
 
-  // El bloque al que pertenece: para los puestos, la empresa (o el propio);
-  // para las demás listas, el proyecto entero.
-  const filtroBloque = esPuesto
+  // Una empresa de otro proyecto, o una que ya se quitó, no puede ser dueña.
+  if (empresaId !== null) {
+    const empresa = await query(
+      'SELECT 1 FROM proyecto_empresas WHERE id = $1 AND proyecto_id = $2 AND activo = true',
+      [empresaId, proyectoId],
+    );
+    if (empresa.rows.length === 0) {
+      return { ok: false, status: 400, message: 'Esa empresa no está en este proyecto' };
+    }
+  }
+
+  // El bloque al que pertenece: para puestos y equipos, la empresa (o el
+  // propio); para las demás listas, el proyecto entero.
+  const filtroBloque = porBloque
     ? 'AND COALESCE(empresa_id, 0) = COALESCE($3::int, 0)'
     : '';
-  const params: unknown[] = esPuesto
+  const params: unknown[] = porBloque
     ? [proyectoId, nombre, empresaId]
     : [proyectoId, nombre];
 
@@ -238,10 +251,10 @@ export async function agregarALista(
       `SELECT COALESCE(MAX(orden), 0) + 1 AS next FROM ${conf.tabla} WHERE proyecto_id = $1`,
       [proyectoId],
     );
-    const r = esPuesto
+    const r = porBloque
       ? await query<FilaLista>(
-        `INSERT INTO proyecto_puestos (proyecto_id, empresa_id, nombre, orden, fijo, creado_por)
-         VALUES ($1, $2, $3, $4, FALSE, $5) RETURNING *`,
+        `INSERT INTO ${conf.tabla} (proyecto_id, empresa_id, nombre, orden, creado_por)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
         [proyectoId, empresaId, nombre, orden.rows[0].next, usuarioId],
       )
       : await query<FilaLista>(
@@ -251,7 +264,7 @@ export async function agregarALista(
       );
     fila = r.rows[0];
     await registrarAudit(usuarioId, 'crear', conf.entidad, fila.id, {
-      proyecto_id: Number(proyectoId), nombre,
+      proyecto_id: Number(proyectoId), nombre, ...(porBloque && { empresa_id: empresaId }),
     });
   }
 
@@ -330,10 +343,15 @@ router.delete(
       return;
     }
 
-    // Quitar una empresa se lleva sus puestos: son suyos, no del proyecto.
+    // Quitar una empresa se lleva sus puestos y sus máquinas: son suyos, no
+    // del proyecto.
     if (conf.tabla === 'proyecto_empresas') {
       await query(
         'UPDATE proyecto_puestos SET activo = false WHERE empresa_id = $1',
+        [req.params.id],
+      );
+      await query(
+        'UPDATE proyecto_equipos SET activo = false WHERE empresa_id = $1',
         [req.params.id],
       );
     }
