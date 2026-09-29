@@ -287,8 +287,11 @@ const main = async () => {
       ...base, fotos: fotos.map((f) => ({ ...f, leyenda: null })),
     }));
     console.log(`${nombre} por hoja (la primera trae el logo): con leyendas ${con.join(' ')} · sin ${sin.join(' ')}`);
-    // La primera hoja es la del texto, que aqui es corto: las fotos empiezan en la segunda.
-    const deFotos = con.slice(1);
+    // Las fotos empiezan debajo del texto si queda espacio (decision de Ivan del
+    // 2026-09-29, al quitar el hueco en blanco del PDF), asi que la primera
+    // hoja trae unas pocas y la ultima las que sobren. Las de en medio son las
+    // que tienen que ir llenas.
+    const deFotos = con.slice(1, -1);
     c(deFotos.length > 0 && deFotos.every((n) => n === porPagina),
       `cada hoja de fotos lleva ${porPagina} ${nombre} con la leyenda mas larga (${con.join(' ')})`);
     c(JSON.stringify(con) === JSON.stringify(sin),

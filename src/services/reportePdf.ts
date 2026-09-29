@@ -233,7 +233,7 @@ export function armarHtml(
       // Un reporte de antes del cambio: se imprime como se imprimia.
       const total = r.personalCalificado + r.ayudantes;
       if (total === 0) return '';
-      return `<div class="sect"><div class="sect-h">Personal</div><div class="sect-b">
+      return `<div class="sect entera"><div class="sect-h">Personal</div><div class="sect-b">
         <div class="cols">
           <div><div class="k">Personal calificado</div><div class="v">${r.personalCalificado}</div></div>
           <div><div class="k">Ayudantes</div><div class="v">${r.ayudantes}</div></div>
@@ -395,11 +395,19 @@ export function armarHtml(
             background:${LIGHT_BG}; }
     .meta td { border:1px solid ${RULE}; padding:8px 12px; width:33.33%;
                vertical-align:top; }
-    .k { font-size:9.5px; line-height:12px; font-weight:700; letter-spacing:.07em;
+    .k { break-after:avoid; font-size:9.5px; line-height:12px; font-weight:700; letter-spacing:.07em;
          text-transform:uppercase; color:${GRAY}; }
     .v { font-size:12.5px; line-height:16px; font-weight:700; }
-    .sect { margin-top:16px; page-break-inside:avoid; }
-    .sect-h { font-size:10.5px; line-height:12px; font-weight:700; letter-spacing:.11em;
+    /* Una seccion larga SI se parte entre hojas. Antes ninguna se partia, y
+       cuando «Resumen del dia» no cabia en lo que quedaba de la primera hoja
+       saltaba entera a la segunda y dejaba tres cuartos de hoja en blanco
+       (Santa Isabel, 28-sep-2026, que Ivan señalo). Lo que no se parte es lo
+       chico: cada fila, cada foto, y las secciones .entera como Clima.
+       Un titulo nunca se queda solo al pie de una hoja: va pegado a lo que
+       le sigue. */
+    .sect { margin-top:16px; }
+    .sect.entera { break-inside:avoid; }
+    .sect-h { break-after:avoid; font-size:10.5px; line-height:12px; font-weight:700; letter-spacing:.11em;
               text-transform:uppercase; color:#fff; background:${NAVY};
               padding:6px 9px; border-radius:2px; }
     .sect-b { padding:12px 2px 0; }
@@ -413,9 +421,14 @@ export function armarHtml(
     .parte { margin-top:14px; }
     .parte:first-child { margin-top:0; }
     .parte .k { margin-bottom:6px; }
+    .parte p, .prose p { orphans:3; widows:3; }
     .parte p { margin:0; font-size:13px; line-height:20px; white-space:pre-wrap; }
     table.areas { width:100%; border-collapse:collapse; }
-    table.areas tr { page-break-inside:avoid; }
+    /* Un area SI se parte entre hojas, con al menos tres renglones a cada
+       lado. Si no se partiera, un area larga —un ingeniero escribe todo el
+       frente en un solo punto— saltaria entera a la hoja siguiente y
+       volveria a dejar el hueco en blanco. */
+    .puntos li { orphans:3; widows:3; }
     table.areas td { border:1px solid ${RULE}; padding:6px 10px; vertical-align:top;
                      font-size:13px; line-height:20px; }
     table.areas td.area { width:30%; background:${LIGHT_BG}; font-weight:700; }
@@ -459,6 +472,7 @@ export function armarHtml(
     /* Fila de 24px: 16 de interlineado y 4 arriba y abajo. Multiplo de 4, que
        es lo que mantiene cada raya en una coordenada entera. */
     .filas { width:100%; border-collapse:collapse; font-size:12.5px; }
+    .filas tr, .cuadrillas tr, .fixes tr { break-inside:avoid; }
     .filas td { padding:4px 0; line-height:16px; border-bottom:1px solid ${RULE}; }
     .filas tr:last-child td { border-bottom:0; }
     .filas .n { text-align:right; width:64px; font-variant-numeric:tabular-nums; }
@@ -518,7 +532,7 @@ export function armarHtml(
       <td><div class="k">Fecha</div><div class="v">${esc(d.fechaCorta)}</div></td>
     </tr></table>
 
-    <div class="sect"><div class="sect-h">Clima</div><div class="sect-b"><div class="cols">
+    <div class="sect entera"><div class="sect-h">Clima</div><div class="sect-b"><div class="cols">
       <div><div class="k">Clima</div><div class="v">${esc(d.clima)}</div></div>
       <div><div class="k">Horas perdidas</div><div class="v">${horas}</div></div>
       <div class="ancho"><div class="k">Motivo</div>

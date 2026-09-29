@@ -369,16 +369,20 @@ export function armarHtmlSemanal(d: ReporteSemanalPdfInput, fotos: FotoIncrustad
     h1 { font-size:17px; line-height:24px; color:${NAVY}; margin:16px 0 0; }
     .meta { margin-top:16px; width:100%; border-collapse:collapse; background:${LIGHT_BG}; }
     .meta td { border:1px solid ${RULE}; padding:8px 12px; width:33.33%; vertical-align:top; }
-    .k { font-size:9.5px; line-height:12px; font-weight:700; letter-spacing:.07em;
+    .k { break-after:avoid; font-size:9.5px; line-height:12px; font-weight:700; letter-spacing:.07em;
          text-transform:uppercase; color:${GRAY}; }
     .v { font-size:12.5px; line-height:16px; font-weight:700; }
-    .sect { margin-top:16px; page-break-inside:avoid; }
-    .sect-h { font-size:10.5px; line-height:12px; font-weight:700; letter-spacing:.11em;
+    /* Igual que en el diario (reportePdf.ts): una seccion larga SI se parte
+       entre hojas, para que no salte entera y deje media hoja en blanco. Lo
+       que no se parte es cada fila y cada foto, y un titulo nunca se queda
+       solo al pie de una hoja. */
+    .sect { margin-top:16px; }
+    .sect-h { break-after:avoid; font-size:10.5px; line-height:12px; font-weight:700; letter-spacing:.11em;
               text-transform:uppercase; color:#fff; background:${NAVY};
               padding:6px 9px; border-radius:2px; }
     .sect-b { padding:12px 2px 0; }
     .sub { font-size:11px; line-height:16px; color:${GRAY}; margin:0 0 8px; }
-    .prosa { margin:0; font-size:13px; line-height:20px; white-space:pre-wrap; }
+    .prosa { orphans:3; widows:3; margin:0; font-size:13px; line-height:20px; white-space:pre-wrap; }
     .bloque + .bloque { margin-top:12px; }
     .bloque .k { margin-bottom:4px; }
 
@@ -388,6 +392,8 @@ export function armarHtmlSemanal(d: ReporteSemanalPdfInput, fotos: FotoIncrustad
             text-transform:uppercase; color:${GRAY}; text-align:left;
             padding:0 0 6px; border-bottom:1px solid #cbd5e0; white-space:nowrap; }
     .t th.n { text-align:right; }
+    .t tr, .fixes tr { break-inside:avoid; }
+    .t tr.grp { break-after:avoid; }
     .t td { padding:4px 0; line-height:16px; border-bottom:1px solid ${RULE}; vertical-align:top; }
     .t tr:last-child td { border-bottom:0; }
     .t .n { text-align:right; font-variant-numeric:tabular-nums; }
