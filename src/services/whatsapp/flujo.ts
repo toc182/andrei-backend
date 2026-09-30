@@ -17,6 +17,7 @@ import { guardarConversacion } from './conversacion.js';
 import { responder, responderBotones } from './entrantes.js';
 import { enMinuscula, resolverRespuesta, siguientePregunta } from './preguntasFijas.js';
 import { semanaCerrada } from '../semanaCerrada.js';
+import { FOTOS_MAX } from '../reportePdfComun.js';
 
 /** Las herramientas de pagos: si se usaron, se vuelve al reporte con aviso. */
 const DE_PAGOS = new Set(['buscar_solicitudes', 'ver_solicitud']);
@@ -45,9 +46,17 @@ export async function antesDelModelo(
   historial: MensajeGuardado[],
 ): Promise<{ sinModelo: boolean; aviso: string | null }> {
   const c = ctx.conversacion;
-  const nada = { sinModelo: false, aviso: null };
-  if (c.modo !== 'reporte_diario' || c.borradorEnviadoAt !== null) return nada;
   const dichos = loQueDijo(historial);
+
+  // Llegaron fotos y ya pasan del tope: se le dice en este mismo turno, una
+  // vez, que las de despues de la 40 no entran (Ivan, 2026-09-30).
+  const llegaronFotos = dichos.some((m) => m.tipo === 'image' || m.tipo === 'document');
+  const avisoFotos = c.modo === 'reporte_diario' && llegaronFotos && ctx.fotos > FOTOS_MAX
+    ? `Ya van ${ctx.fotos} fotos y al reporte entran solo las primeras ${FOTOS_MAX}: ` +
+      `las otras ${ctx.fotos - FOTOS_MAX} no. Díselo en una línea.`
+    : null;
+  const nada = { sinModelo: false, aviso: avisoFotos };
+  if (c.modo !== 'reporte_diario' || c.borradorEnviadoAt !== null) return nada;
   if (dichos.length === 0) return nada;
 
   const hoy = hoyEnPanama();
@@ -69,8 +78,8 @@ export async function antesDelModelo(
     await guardarConversacion(c.id, { datos: c.datos });
   }
   return r.tipo === 'resuelta'
-    ? { sinModelo: true, aviso: null }
-    : { sinModelo: false, aviso: r.aviso };
+    ? { sinModelo: avisoFotos === null, aviso: avisoFotos }
+    : { sinModelo: false, aviso: [r.aviso, avisoFotos].filter(Boolean).join(' ') };
 }
 
 /**

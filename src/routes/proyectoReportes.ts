@@ -46,6 +46,7 @@ import {
   HORA_PANAMA,
   type ReportePdfInput,
 } from '../services/reportePdf.js';
+import { FOTOS_MAX } from '../services/reportePdfComun.js';
 import {
   ES_CONSORCIO_SQL,
   consorcioDelProyecto,
@@ -2327,6 +2328,18 @@ async function reporteParaFotos(
   return r.rows[0] ?? null;
 }
 
+/** Cuantas fotos tiene ya un reporte. */
+async function fotosDelReporte(reporteId: string): Promise<number> {
+  const r = await query<{ n: number }>(
+    'SELECT COUNT(*)::int AS n FROM proyecto_reporte_fotos WHERE reporte_id = $1',
+    [reporteId],
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
+const mensajeTopeFotos = (tiene: number): string =>
+  `El reporte lleva como máximo ${FOTOS_MAX} fotos y ya tiene ${tiene}.`;
+
 // POST /api/proyecto-reportes/:proyectoId/:id/fotos
 router.post(
   '/:proyectoId/:id/fotos',
@@ -2360,6 +2373,14 @@ router.post(
         success: false,
         message: mensajeSemanaCerrada(cerrada, 'a sus reportes diarios ya no se les agregan fotos'),
       });
+      return;
+    }
+
+    // Cuarenta fotos como mucho (Ivan, 2026-09-30). Se mira antes de subir nada
+    // a R2, y otra vez dentro de la transaccion por si entraron dos a la vez.
+    const yaTiene = await fotosDelReporte(req.params.id);
+    if (yaTiene + files.length > FOTOS_MAX) {
+      res.status(409).json({ success: false, message: mensajeTopeFotos(yaTiene) });
       return;
     }
 
@@ -2426,6 +2447,20 @@ router.post(
       if (estado.rows.length === 0) {
         await client.query('ROLLBACK');
         res.status(404).json({ success: false, message: 'Reporte no encontrado' });
+        return;
+      }
+
+      const cuantas = await client.query<{ n: number }>(
+        'SELECT COUNT(*)::int AS n FROM proyecto_reporte_fotos WHERE reporte_id = $1',
+        [req.params.id],
+      );
+      if (cuantas.rows[0].n + subidas.length > FOTOS_MAX) {
+        await client.query('ROLLBACK');
+        for (const { key } of subidas) {
+          void deleteFile(key).catch(() => undefined);
+          void deleteFile(claveReducida(key)).catch(() => undefined);
+        }
+        res.status(409).json({ success: false, message: mensajeTopeFotos(cuantas.rows[0].n) });
         return;
       }
 

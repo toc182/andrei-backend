@@ -49,11 +49,28 @@ export function esc(s: string): string {
  * 3.6 pulgadas, asi que 1400px son casi 400 puntos por pulgada. Subir de ahi
  * no se ve en el papel, solo pesa.
  *
- * El techo es por el correo, no por el navegador: el PDF sale adjunto, y los
- * buzones rechazan los adjuntos grandes.
+ * El techo es por el correo, no por el navegador: el PDF sale adjunto, y Gmail
+ * y la mayoria de los buzones rechazan un correo de mas de 25 MB; adjunto, el
+ * PDF crece un tercio. 20 MB de base64 son unos 15 MB de fotos, y eso cabe.
+ * Hasta el 2026-09-30 era 12 (unos 9 MB): el reporte de Cesar de 40 fotos
+ * salio con 27, y Ivan decidio subirlo y poner un tope de fotos.
  */
 const FOTO_LADO_MAX = 1400;
-const FOTOS_PESO_MAX = 12 * 1024 * 1024;
+const FOTOS_PESO_MAX = 20 * 1024 * 1024;
+
+/** Cuantas fotos lleva un reporte diario como mucho (Ivan, 2026-09-30). La
+ *  pantalla, WhatsApp y el servidor usan este mismo numero; en el frontend es
+ *  FOTOS_MAX de ReporteForm.tsx. */
+export const FOTOS_MAX = 40;
+
+/** Si las fotos no caben en el techo, se aprietan todas —mas pequenas y con
+ *  menos calidad— en vez de dejar alguna fuera. Por orden, hasta que quepan. */
+const APRETADAS = [
+  { lado: 1100, calidad: 72 },
+  { lado: 900, calidad: 65 },
+] as const;
+
+const base64Largo = (bytes: number): number => Math.ceil(bytes / 3) * 4 + 30;
 
 /**
  * Donde vive la copia reducida de una foto, derivada de la clave del original.
@@ -175,6 +192,7 @@ export async function incrustarFotos(
   }
   msBajar = Date.now() - t0;
 
+  const juntas: { bytes: Buffer; mime: string; indice: number; leyenda: string | null }[] = [];
   for (const [indice, f] of fotos.entries()) {
     let bytes: Buffer | null = reducidas[indice];
     let mime = 'image/jpeg';
@@ -212,12 +230,36 @@ export async function incrustarFotos(
       }
       msReducir += Date.now() - t2;
     }
+    juntas.push({ bytes, mime, indice, leyenda: f.leyenda ?? null });
+  }
 
-    // Techo de peso. Con la reduccion funcionando nunca se alcanza: 20 fotos
-    // pesan unos 9 MB. Es la red por si sharp falla y entran originales: el PDF
-    // va adjunto por correo, y uno de 40 MB lo rechazan los buzones. Vale mas un
-    // reporte que avisa que le faltan fotos que uno que no llega.
-    const src = `data:${mime};base64,${bytes.toString('base64')}`;
+  // Si no caben, se aprietan TODAS antes que dejar alguna fuera: un reporte
+  // con 40 fotos un poco mas chicas dice mas que uno al que le faltan 13.
+  const pesoDe = () => juntas.reduce((a, x) => a + base64Largo(x.bytes.length), 0);
+  for (const paso of APRETADAS) {
+    if (pesoDe() <= FOTOS_PESO_MAX) break;
+    const t3 = Date.now();
+    for (const x of juntas) {
+      try {
+        x.bytes = await sharp(x.bytes)
+          .rotate()
+          .resize(paso.lado, paso.lado, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: paso.calidad })
+          .toBuffer();
+        x.mime = 'image/jpeg';
+      } catch {
+        // Si una no se deja apretar, sigue como estaba.
+      }
+    }
+    msReducir += Date.now() - t3;
+    console.log(`[reportePdf] fotos apretadas a ${paso.lado}px: ${(pesoDe() / 1024 / 1024).toFixed(1)} MB`);
+  }
+
+  for (const x of juntas) {
+    // Techo de peso. Con las fotos apretadas no deberia alcanzarse nunca: es la
+    // red por si sharp falla y entran originales. Vale mas un reporte que
+    // avisa que le faltan fotos que uno que no llega.
+    const src = `data:${x.mime};base64,${x.bytes.toString('base64')}`;
     if (peso + src.length > FOTOS_PESO_MAX) {
       omitidas++;
       continue;
@@ -227,9 +269,9 @@ export async function incrustarFotos(
     // todas se llaman «image.jpg», y eso no le dice nada a quien lee.
     lista.push({
       src,
-      numero: indice + 1,
-      leyenda: f.leyenda ?? null,
-      horizontal: await esHorizontal(bytes),
+      numero: x.indice + 1,
+      leyenda: x.leyenda,
+      horizontal: await esHorizontal(x.bytes),
     });
   }
 

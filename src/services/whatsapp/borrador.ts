@@ -13,6 +13,7 @@ import {
   crearBorradorDeReporte,
 } from '../../routes/proyectoReportes.js';
 import { encolarEnvio } from '../reporteEnvio.js';
+import { FOTOS_MAX } from '../reportePdfComun.js';
 import { generateReportePDF } from '../reportePdf.js';
 import { registrarAudit } from '../auditLog.js';
 import { obligatoriasQueFaltan, type DatosReporte } from './datosReporte.js';
@@ -109,7 +110,9 @@ export async function armarBorrador(
   );
   if (!creado.ok) return creado;
 
-  const fotos = await fotosDeLaConversacion(conversacion.id);
+  // Las primeras FOTOS_MAX: las demas no entran al reporte, y el asistente ya
+  // se lo dijo a la persona cuando llegaron (flujo.ts).
+  const fotos = (await fotosDeLaConversacion(conversacion.id)).slice(0, FOTOS_MAX);
   for (const [i, f] of fotos.entries()) {
     await query(
       `INSERT INTO proyecto_reporte_fotos
