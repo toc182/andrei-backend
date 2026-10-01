@@ -33,6 +33,7 @@ import { responderBotones, responderDocumento } from './entrantes.js';
 import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal } from './borrador.js';
 import { ESTADOS, buscarSolicitudes, quienEs, verSolicitud, type Filtros } from './solicitudes.js';
 import { leerNombrePropio } from '../consorcioProyecto.js';
+import { buscarReportes, verReporte, type FiltrosReportes } from './reportes.js';
 import { sendEmail } from '../emailService.js';
 import {
   AGRUPAR,
@@ -490,6 +491,57 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
         titulo: { type: 'string', description: 'Corto, si hace falta: «Pendientes de Santa Isabel»' },
       },
       required: ['formato'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'buscar_reportes',
+    description:
+      'Consulta los reportes diarios YA ENVIADOS (no el que se esta llenando): cuantos son y ' +
+      'sus totales calculados por el sistema —clima, horas perdidas, gente por dia y por ' +
+      'puesto, horas por maquina, lo que llego—. Con palabras, busca en TODO lo escrito de ' +
+      'todos los reportes del periodo (trabajo, atrasos, novedades, entregas, leyendas) y ' +
+      'devuelve la frase de cada uno donde aparece, con su fecha: es lo que se usa para ' +
+      '«cuando instalamos las tuberias». Sin palabras, devuelve la lista de los reportes.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        proyecto_ids: {
+          type: 'array',
+          items: { type: 'integer' },
+          description: 'Ids de la lista de obras de reportes del contexto; sin esto, todas las suyas',
+        },
+        desde: { type: 'string', description: 'AAAA-MM-DD' },
+        hasta: { type: 'string', description: 'AAAA-MM-DD' },
+        palabras: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Basta con que aparezca una. Pon las variantes de como lo dirian en obra: ' +
+            '«tuberia», «tubo», «pvc»; la raiz sirve para singular y plural («tuber»).',
+        },
+        area: { type: 'string', description: 'Nombre del area, como lo dijo la persona' },
+        con_atrasos: { type: 'boolean' },
+        con_horas_perdidas: { type: 'boolean' },
+        clima: { type: 'string', enum: ['Soleado', 'Nublado', 'Lluvia parcial', 'Lluvia todo el día'] },
+        orden: { type: 'string', enum: ['recientes', 'antiguos'] },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'ver_reporte',
+    description:
+      'Un reporte diario enviado, entero: por su numero («RD-PBR-260930») o por la obra y la ' +
+      'fecha. Trabajo por area, atrasos, novedades, gente, maquinas, lo que llego y las ' +
+      'leyendas de las fotos.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        numero: { type: 'string' },
+        proyecto_id: { type: 'integer' },
+        fecha: { type: 'string', description: 'AAAA-MM-DD' },
+      },
       additionalProperties: false,
     },
   },
@@ -983,6 +1035,22 @@ export async function ejecutarHerramienta(
     return r.ok
       ? { ok: true, contenido: r.contenido }
       : { ok: false, contenido: { error: r.error, ...(r.extra ? { detalle: r.extra } : {}) } };
+  }
+
+  if (nombre === 'buscar_reportes') {
+    const r = await buscarReportes(ctx.usuario, input as FiltrosReportes);
+    return r.ok
+      ? { ok: true, contenido: r.contenido }
+      : { ok: false, contenido: { error: r.error, ...(r.extra ? { detalle: r.extra } : {}) } };
+  }
+
+  if (nombre === 'ver_reporte') {
+    const r = await verReporte(ctx.usuario, {
+      numero: typeof input.numero === 'string' ? input.numero : undefined,
+      proyecto_id: input.proyecto_id === undefined ? undefined : Number(input.proyecto_id),
+      fecha: typeof input.fecha === 'string' ? input.fecha : undefined,
+    });
+    return r.ok ? { ok: true, contenido: r.contenido } : { ok: false, contenido: { error: r.error } };
   }
 
   if (nombre === 'mandar_tabla') {
