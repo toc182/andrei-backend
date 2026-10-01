@@ -29,6 +29,19 @@ import { antesDelModelo, despuesDelModelo } from './flujo.js';
  */
 const ESPERA_MS = Number(process.env.WHATSAPP_ESPERA_MS ?? 3000);
 
+/**
+ * Lo que se espera cuando lo unico que llego es un mensaje que WhatsApp no deja
+ * leer («unsupported»).
+ *
+ * Al mandar varias fotos juntas, WhatsApp a veces manda primero uno de esos y
+ * las fotos unos segundos despues: a Cesar el 30/09 y a Ivan el 28/09, tres o
+ * cuatro segundos. Con la espera normal el asistente contestaba a ese mensaje
+ * vacio antes de que llegaran las fotos —«quedo pendiente de las fotos» con las
+ * fotos entrando—. Ahora ese mensaje solo espera a lo que venga detras; si no
+ * viene nada en este rato, se atiende igual.
+ */
+const ESPERA_ILEGIBLE_MS = Number(process.env.WHATSAPP_ILEGIBLE_MS ?? 10_000);
+
 /** Cada cuanto se mira si hay algo que atender. */
 const TIC_MS = Number(process.env.WHATSAPP_TIC_MS ?? 2000);
 
@@ -53,8 +66,10 @@ async function numerosPendientes(): Promise<Pendiente[]> {
         AND user_id IS NOT NULL
         AND intentos < $2
       GROUP BY telefono
-     HAVING max(created_at) < CURRENT_TIMESTAMP - ($1 || ' milliseconds')::interval`,
-    [String(ESPERA_MS), MAX_INTENTOS],
+     HAVING max(created_at) < CURRENT_TIMESTAMP - ($1 || ' milliseconds')::interval
+        AND (bool_or(tipo <> 'unsupported')
+             OR max(created_at) < CURRENT_TIMESTAMP - ($3 || ' milliseconds')::interval)`,
+    [String(ESPERA_MS), MAX_INTENTOS, String(ESPERA_ILEGIBLE_MS)],
   );
   return r.rows;
 }
@@ -166,7 +181,7 @@ async function atender(p: Pendiente): Promise<void> {
     // «nada»— lo resuelve el sistema, y ese turno no llama al modelo.
     const antes = await antesDelModelo(ctx, lo);
     const r = antes.sinModelo
-      ? { texto: '', uso: { entrada: 0, salida: 0, cache: 0 }, herramientas: [], cerrado: false }
+      ? { texto: antes.texto ?? '', uso: { entrada: 0, salida: 0, cache: 0 }, herramientas: [], cerrado: false }
       : await conversar({ ctx: Object.assign(ctx, { aviso: antes.aviso }), historial: lo });
     // Lo que dijo el modelo y, detras, la pregunta que toca: la decide el sistema.
     await despuesDelModelo(ctx, r);

@@ -22,6 +22,9 @@ import { FOTOS_MAX } from '../reportePdfComun.js';
 /** Las herramientas de pagos: si se usaron, se vuelve al reporte con aviso. */
 const DE_PAGOS = new Set(['buscar_solicitudes', 'ver_solicitud']);
 
+/** Lo que cuenta como foto, igual que en fotosDe (conversacion.ts). */
+const ES_FOTO = new Set(['image', 'document']);
+
 /** Lo que cabe en el cuerpo de un mensaje con botones (Meta admite 1024). */
 const CUERPO_CON_BOTONES = 1000;
 
@@ -44,20 +47,35 @@ function loQueDijo(historial: MensajeGuardado[]): MensajeGuardado[] {
 export async function antesDelModelo(
   ctx: Contexto,
   historial: MensajeGuardado[],
-): Promise<{ sinModelo: boolean; aviso: string | null }> {
+): Promise<{ sinModelo: boolean; aviso: string | null; texto?: string }> {
   const c = ctx.conversacion;
   const dichos = loQueDijo(historial);
 
   // Llegaron fotos y ya pasan del tope: se le dice en este mismo turno, una
   // vez, que las de despues de la 40 no entran (Ivan, 2026-09-30).
-  const llegaronFotos = dichos.some((m) => m.tipo === 'image' || m.tipo === 'document');
-  const avisoFotos = c.modo === 'reporte_diario' && llegaronFotos && ctx.fotos > FOTOS_MAX
+  const llegaronFotos = dichos.some((m) => ES_FOTO.has(m.tipo));
+  const pasanDelTope = c.modo === 'reporte_diario' && llegaronFotos && ctx.fotos > FOTOS_MAX;
+  const avisoFotos = pasanDelTope
     ? `Ya van ${ctx.fotos} fotos y al reporte entran solo las primeras ${FOTOS_MAX}: ` +
       `las otras ${ctx.fotos - FOTOS_MAX} no. Díselo en una línea.`
     : null;
   const nada = { sinModelo: false, aviso: avisoFotos };
   if (c.modo !== 'reporte_diario' || c.borradorEnviadoAt !== null) return nada;
   if (dichos.length === 0) return nada;
+
+  // Solo fotos: no hay nada que entender —el pie de cada una ya es su leyenda
+  // (borrador.ts)—, asi que contesta el sistema y detras sale la pregunta que
+  // toca, con sus botones. Con el modelo de por medio, el 28/09 ofrecio el
+  // borrador con sus palabras y los botones no salieron (Ivan, 2026-10-01).
+  const fotosDelTurno = dichos.filter((m) => ES_FOTO.has(m.tipo)).length;
+  if (fotosDelTurno > 0 && dichos.every((m) => ES_FOTO.has(m.tipo) || m.tipo === 'unsupported')) {
+    const recibidas = fotosDelTurno === 1 ? 'Recibí la foto.' : `Recibí ${fotosDelTurno} fotos.`;
+    const tope = pasanDelTope
+      ? ` Ya van ${ctx.fotos} y al reporte entran solo las primeras ${FOTOS_MAX}: las otras ` +
+        `${ctx.fotos - FOTOS_MAX} no.`
+      : '';
+    return { sinModelo: true, aviso: null, texto: recibidas + tope };
+  }
 
   const hoy = hoyEnPanama();
   const r = resolverRespuesta({

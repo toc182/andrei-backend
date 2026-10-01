@@ -155,18 +155,28 @@ const main = async () => {
   await decir('Ayúdame con el reporte diario: vaciamos la losa del nivel 2, día soleado');
   await esperarSalidos(1);
 
+  // ── la foto ─────────────────────────────────────────────────────────────
+  // Un turno de solo fotos lo contesta el sistema, sin el modelo (flujo.ts,
+  // 2026-10-01): por eso aqui no se guioniza nada.
+  await entregar({
+    type: 'image',
+    image: { id: media.mediaId, mime_type: 'image/jpeg', caption: 'Losa nivel 2' },
+  });
+  const trasFoto = await esperarSalidos(2);
+  exigir(
+    trasFoto.length === 2 && Boolean(trasFoto[1].texto?.startsWith('Recibí la foto.')),
+    'la foto sola la contesta el sistema',
+  );
+
   // ── no se puede enviar sin borrador ─────────────────────────────────────
   await guionizar([
     usar('enviar_reporte', {}),
     texto('Todavía no puedo enviarlo: primero te mando el borrador.'),
   ]);
-  await entregar({
-    type: 'image',
-    image: { id: media.mediaId, mime_type: 'image/jpeg', caption: 'Losa nivel 2' },
-  });
-  const trasIntento = await esperarSalidos(2);
+  await decir('Envíalo ya');
+  const trasIntento = await esperarSalidos(3);
   exigir(
-    trasIntento.length === 2 && Boolean(trasIntento[1].texto?.includes('borrador')),
+    trasIntento.length === 3 && Boolean(trasIntento[2].texto?.includes('borrador')),
     'sin borrador a la vista, enviar_reporte no envia nada',
   );
   const sinNumero = await query<{ n: string }>(
@@ -177,7 +187,7 @@ const main = async () => {
   // ── el borrador ─────────────────────────────────────────────────────────
   await guionizar([usar('mandar_borrador', {}), texto('Ahí tienes el borrador.')]);
   await decir('Mándame el borrador');
-  const conBorrador = await esperarSalidos(4);
+  const conBorrador = await esperarSalidos(5);
   const documento = conBorrador.find((s) => s.tipo === 'document');
   exigir(
     documento !== undefined && (documento.archivo?.bytes ?? 0) > 5000,
@@ -213,7 +223,7 @@ const main = async () => {
     texto('Corregido, ahí va de nuevo.'),
   ]);
   await decir('Agrega que vino el inspector');
-  await esperarSalidos(6);
+  await esperarSalidos(7);
   const vivos = await query<{ n: string }>(
     `SELECT count(*)::text AS n FROM proyecto_reportes
       WHERE proyecto_id = 1 AND activo = true AND completo = false`,
@@ -223,7 +233,7 @@ const main = async () => {
   // ── la pregunta con botones ─────────────────────────────────────────────
   await guionizar([usar('preguntar_si_enviar', {})]);
   await decir('Está bien así');
-  const conBotones = await esperarSalidos(7);
+  const conBotones = await esperarSalidos(8);
   const pregunta = conBotones.find((s) => s.tipo === 'interactive');
   const botones = pregunta?.cuerpo.interactive?.action?.buttons ?? [];
   exigir(
@@ -235,7 +245,7 @@ const main = async () => {
   // ── enviar ──────────────────────────────────────────────────────────────
   await guionizar([usar('enviar_reporte', {}), texto('Listo, quedó enviado.')]);
   await tocarBoton('enviar_reporte', 'Enviar');
-  const trasEnviar = await esperarSalidos(9);
+  const trasEnviar = await esperarSalidos(10);
 
   // El borrador que se envia es el ULTIMO que se armo: el de la correccion.
   // El primero quedo dado de baja, que es justo lo que se comprobo arriba.

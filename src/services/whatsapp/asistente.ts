@@ -304,6 +304,10 @@ export function comoMensajes(historial: MensajeGuardado[]): {
       texto = dicho ? `[nota de voz] ${dicho}` : '[nota de voz que no se pudo entender]';
     } else if (entrante && (m.tipo === 'image' || m.tipo === 'document')) {
       texto = `[foto recibida${m.texto ? `, con este texto: ${m.texto}` : ', sin texto'}]`;
+    } else if (entrante && m.tipo === 'unsupported') {
+      // Si no se dice, el turno le llega vacio al modelo y contesta a lo que
+      // habia antes, como si la persona no hubiera mandado nada.
+      texto = '[mandó algo que WhatsApp no deja leer: pídele que lo mande como texto, foto o nota de voz]';
     } else if (!entrante && m.tipo === 'document') {
       // Lo que salio fue un PDF, no una frase: si se colara como texto, el
       // modelo creeria que ya le conto el reporte por escrito.
