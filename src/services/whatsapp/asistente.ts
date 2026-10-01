@@ -10,7 +10,7 @@ import { obtenerCliente } from '../asistentePagos/cliente.js';
 import { proyectosDePagos } from './solicitudes.js';
 import { obrasDeReportes } from './reportes.js';
 import {
-  HERRAMIENTAS,
+  herramientas,
   ejecutarHerramienta,
   hoyEnPanama,
   listasDe,
@@ -161,11 +161,19 @@ LOS REPORTES ANTERIORES
   ayer entra en el reporte de hoy si el ingeniero no lo cuenta hoy.
 
 LAS PREGUNTAS SOBRE REPORTES YA ENVIADOS
-- «Que se hizo ayer», «cuantas horas trabajo la retro», «cuantos dias llovio», «cuando
-  instalamos las tuberias»: buscar_reportes y ver_reporte. No confundas esto con el reporte
-  que se esta llenando: aquello son los reportes ya enviados.
-- Dias, horas, gente, maquinas y lo que llego te los da la herramienta ya calculados: los
-  dices tal cual, nunca sumas tu.
+- No confundas esto con el reporte que se esta llenando: aquello son los reportes ya
+  enviados.
+- Todo lo que sea CONTAR, SUMAR o COMPARAR —«cuantos dias de calificado llevamos», «cuantas
+  horas trabajo la retro en septiembre», «cuantos dias llovio», «cuanto cemento llego»— lo
+  sacas con consultar_reportes: escribes la consulta y la base hace la cuenta. Dices la
+  cifra tal cual te llega. NUNCA sumas, promedias ni estimas tu, ni multiplicas un promedio:
+  si la consulta no da el dato, lo dices.
+- Junto a la cifra di de donde sale en pocas palabras: la obra y el periodo («en Playa
+  Blanca, del 9 al 30 de septiembre»).
+- Si en lo que contaste entran reportes del formato anterior (reporte_de_antes), y eso
+  cambia la respuesta —no tenian ingenieros, supervisores ni horas de maquina—, dilo.
+- «Que se hizo ayer» o un reporte en concreto: ver_reporte. Para leer lo escrito en varios
+  reportes, buscar_reportes.
 - Para «cuando hicimos X» o «de que fecha a que fecha», busca con palabras: miran TODOS los
   reportes, aunque sean de hace mucho. Pon las variantes de como lo dirian en obra (raiz,
   plural, sinonimos). Si no aparece, prueba otras antes de decir que no hay. Contesta con
@@ -173,8 +181,6 @@ LAS PREGUNTAS SOBRE REPORTES YA ENVIADOS
 - Las cantidades que estan dentro del texto («20 m3 de concreto») no las suma la base. Si
   te las piden, las lees de las frases y dices que las sacaste de lo escrito en los
   reportes, dia por dia.
-- En los reportes viejos la gente era solo calificados y ayudantes, y las maquinas no
-  llevaban horas: si una pregunta no se puede contestar para esas fechas, dilo.
 - Las obras que puede consultar estan en el contexto. Si pregunta por otra, dile que no
   tienes acceso a sus reportes.
 - Fechas: «ayer», «la semana pasada», «en septiembre» las conviertes tu en desde/hasta
@@ -334,6 +340,83 @@ const ANOTAN = new Set(['anotar', 'agregar_equipo', 'agregar_area', 'empezar_de_
 /** «anoté», «anotado», «lo anoto», «apunté»… sobre el texto ya llano(). */
 const DICE_QUE_ANOTA = /\b(anot|apunt)[a-z]*/;
 
+/** Las herramientas que leen del sistema: lo que se conteste despues son cifras de la base. */
+const LEEN = new Set([
+  'consultar_reportes',
+  'buscar_reportes',
+  'ver_reporte',
+  'buscar_solicitudes',
+  'ver_solicitud',
+  'mandar_tabla',
+]);
+
+const CIFRA = /\d+(?:[.,]\d+)*/g;
+
+/** Las maneras de leer una cifra escrita: 1550, «1,550», «1.550», «9,5». */
+function lecturas(escrita: string): number[] {
+  const n = new Set<number>();
+  for (const s of [
+    escrita,
+    escrita.replace(/,/g, ''),
+    escrita.replace(/\./g, '').replace(',', '.'),
+    escrita.replace(',', '.'),
+  ]) {
+    const x = Number(s);
+    if (Number.isFinite(x)) n.add(x);
+  }
+  return [...n];
+}
+
+/**
+ * Las cifras de una respuesta que no estan en lo que el sistema le dio al
+ * modelo (ni en lo que dijo la persona). Es la regla de que todo numero sale
+ * de la base, comprobada por el sistema: en la hoja de respuestas del
+ * 2026-10-01 el modelo sumo tres filas de una consulta y dijo «8 dias».
+ *
+ * Una cifra con decimales vale si alguna de la base, redondeada a esos
+ * decimales, da lo mismo (4.93 se dice 4.9). Un entero tiene que estar tal
+ * cual. 0, 1 y 2 siempre valen, y los numeros de una lista («1. …») no son
+ * cifras.
+ */
+export function cifrasSinFuente(texto: string, fuentes: string[]): string[] {
+  const exactas = new Set<number>([0, 1, 2]);
+  const deTexto = (s: string): void => {
+    for (const t of s.match(CIFRA) ?? []) for (const x of lecturas(t)) exactas.add(x);
+  };
+  // Lo que devolvio el sistema llega en JSON y se recorre como tal: leido como
+  // texto, «[18,2]» —18 horas, 2 dias— parecia un solo numero, 18,2, y el 18
+  // que el modelo dijo bien se marcaba como inventado.
+  const recorrer = (v: unknown): void => {
+    if (typeof v === 'number') exactas.add(v);
+    else if (typeof v === 'string') deTexto(v);
+    else if (Array.isArray(v)) v.forEach(recorrer);
+    else if (v && typeof v === 'object') Object.values(v).forEach(recorrer);
+  };
+  for (const f of fuentes) {
+    let json: unknown;
+    try {
+      json = JSON.parse(f);
+    } catch {
+      json = undefined;
+    }
+    if (json !== null && typeof json === 'object') recorrer(json);
+    else deTexto(f);
+  }
+  const todas = [...exactas];
+  const sin = new Set<string>();
+  for (const t of texto.replace(/^\s*\d+[.)]\s/gm, '').match(CIFRA) ?? []) {
+    const vale = lecturas(t).some((x) => {
+      if (exactas.has(x)) return true;
+      const decimales = (String(x).split('.')[1] ?? '').length;
+      if (decimales === 0) return false;
+      const f = 10 ** decimales;
+      return todas.some((y) => Math.round(y * f) === Math.round(x * f));
+    });
+    if (!vale) sin.add(t);
+  }
+  return [...sin];
+}
+
 /**
  * Lo que hay que corregirle a una respuesta antes de que salga, o null si
  * puede salir.
@@ -342,11 +425,27 @@ export function revisarRespuesta(
   texto: string,
   anotoEnElTurno: boolean,
   ultimoEnviado: string,
+  /** Lo que el sistema le dio al modelo en este turno, si leyo algo; null si no. */
+  fuentes: string[] | null = null,
 ): string | null {
   const dicho = llano(texto);
   if (!dicho) return null;
   if (dicho === ultimoEnviado) {
     return 'Eso es exactamente lo que ya le mandaste y no te contestó. Dilo de otra manera.';
+  }
+  if (fuentes) {
+    const sin = cifrasSinFuente(texto, fuentes);
+    if (sin.length) {
+      return (
+        `Estas cifras no salieron de lo que te devolvió el sistema: ${sin.join(', ')}. Toda cifra ` +
+        'tiene que salir de la base: si es una cuenta tuya —una suma, una resta, contar días—, ' +
+        'sácala con una consulta; si no hace falta, quítala.'
+      );
+    }
+    // Contestando una pregunta, «anotado» habla de lo que dicen los reportes
+    // («27 codos, anotados en la unidad»), no de este: la hoja de respuestas
+    // del 2026-10-01 vio esta revision torcer una respuesta buena.
+    return null;
   }
   if (!anotoEnElTurno && DICE_QUE_ANOTA.test(dicho)) {
     return (
@@ -390,7 +489,8 @@ export async function conversar(args: {
     },
   ];
 
-  const cache: { listas: ListasProyecto | null } = { listas: null };
+  const tools = await herramientas();
+  const cache: { listas: ListasProyecto | null; consultasFallidas?: number } = { listas: null };
   let texto = '';
   // Las dos cosas que las instrucciones pedian y el modelo no cumplia (tanda
   // del 2026-09-28), comprobadas aqui: decir «lo anoto» sin anotar —y lo que
@@ -401,6 +501,10 @@ export async function conversar(args: {
   );
   let anotoEnElTurno = false;
   let corregido = false;
+  // Lo que puede citar en cifras: lo que dijeron en la conversacion, la fecha
+  // de hoy y —si lee algo del sistema en este turno— lo que el sistema le dio.
+  const fuentes: string[] = [...historial.map((m) => m.texto ?? ''), ...colgando, hoyEnPanama()];
+  let leyoEnElTurno = false;
 
   for (let vuelta = 0; vuelta < MAX_VUELTAS; vuelta += 1) {
     const respuesta = await cliente.messages.create({
@@ -414,7 +518,7 @@ export async function conversar(args: {
       // conversar y repartir lo que le cuentan, no razonar un problema.
       output_config: { effort: 'low' as const },
       system,
-      tools: HERRAMIENTAS,
+      tools,
       messages: mensajes,
     });
 
@@ -443,9 +547,12 @@ export async function conversar(args: {
       (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
     );
     if (llamadas.length === 0) {
-      const correccion = corregido ? null : revisarRespuesta(texto, anotoEnElTurno, ultimoEnviado);
+      const correccion = corregido
+        ? null
+        : revisarRespuesta(texto, anotoEnElTurno, ultimoEnviado, leyoEnElTurno ? fuentes : null);
       if (!correccion) break;
       corregido = true;
+      console.log(`[whatsapp] respuesta devuelta al modelo: ${correccion.slice(0, 200)}`);
       mensajes.push({ role: 'assistant', content: respuesta.content });
       mensajes.push({ role: 'user', content: `[Aviso del sistema, no de la persona] ${correccion}` });
       continue;
@@ -458,6 +565,10 @@ export async function conversar(args: {
       const r = await ejecutarHerramienta(llamada.name, llamada.input, ctx, cache);
       if (r.ok && r.cierraTurno) preguntaHecha = true;
       if (r.ok && ANOTAN.has(llamada.name)) anotoEnElTurno = true;
+      if (r.ok && LEEN.has(llamada.name)) {
+        leyoEnElTurno = true;
+        fuentes.push(JSON.stringify(r.contenido));
+      }
       if (r.ok) usadas.push(llamada.name);
       // Una herramienta rechazada queda en el registro: es la unica manera de
       // ver desde fuera por que un reporte salio sin algo que la persona conto.

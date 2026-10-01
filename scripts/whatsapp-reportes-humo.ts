@@ -4,14 +4,13 @@
 // Se exige:
 // - ve solo las obras cuyos reportes ve en la pantalla, y solo reportes
 //   enviados y activos;
-// - los totales los calcula la base, mezclando reportes nuevos y viejos (la
-//   gente de los viejos era calificados + ayudantes; sus maquinas, sin horas);
+// - aqui no se cuenta ni se suma: eso es consultar_reportes, y su prueba es
+//   whatsapp-consultas;
 // - buscar por palabra mira TODOS los reportes —tambien uno de hace año y
 //   medio—, sin tildes, y en todo lo escrito: trabajo (nuevo y viejo),
 //   atrasos, lo que llego y las leyendas; devuelve la frase y la fecha;
 // - una obra ajena no se busca;
-// - sin palabra, la lista lleva como mucho 60 reportes, y los totales son de
-//   todos;
+// - sin palabra, la lista lleva como mucho 60 reportes y dice cuantos son;
 // - un reporte se ve entero por su numero, nuevo o viejo.
 import { query, pool } from '../src/database/config.js';
 import { buscarReportes, verReporte } from '../src/services/whatsapp/reportes.js';
@@ -24,15 +23,7 @@ const exigir = (bien: boolean, que: string, visto?: unknown): void => {
 };
 
 interface Busqueda {
-  totales?: {
-    reportes: number; del: string; al: string;
-    clima: { clima: string; dias: number }[];
-    horas_perdidas: { total: number; dias_con_horas_perdidas: number };
-    gente: { promedio_por_dia: number | null; por_puesto: { puesto: string; promedio_por_dia: number }[] };
-    maquinas: { maquina: string; horas: number; dias: number }[];
-    maquinas_en_reportes_viejos?: { lista: { maquina: string; dias: number }[] };
-  };
-  totales_del_periodo?: Busqueda['totales'];
+  totales?: unknown;
   aparece_en?: { reportes: number; primer_dia: string; ultimo_dia: string };
   frases?: { fecha: string; donde: string; frase: string }[];
   reportes?: unknown[];
@@ -106,20 +97,13 @@ const main = async () => {
     [nuevo2.id, ingeniero.id],
   );
 
-  // ── los totales ─────────────────────────────────────────────────────────
+  // ── la lista ────────────────────────────────────────────────────────────
   const todo = await buscarReportes(ingeniero, {});
-  const t = todo.ok ? (todo.contenido as Busqueda).totales! : null;
-  exigir(t?.reportes === 3 && t.del === '2025-03-03' && t.al === '2026-09-21', 'cuenta solo los tres enviados y activos de su obra', t && [t.reportes, t.del, t.al]);
-  exigir(t?.horas_perdidas.total === 2 && t.horas_perdidas.dias_con_horas_perdidas === 1, 'las horas perdidas las suma la base');
-  exigir(t?.gente.promedio_por_dia === 10, 'la gente promedia nuevos y viejos: (10 + 8 + 12) / 3 = 10', t?.gente);
+  const t = todo.ok ? (todo.contenido as Busqueda) : null;
+  exigir(t?.reportes?.length === 3, 'lista solo los tres enviados y activos de su obra', t?.reportes?.length);
   exigir(
-    t?.maquinas.length === 1 && t.maquinas[0].horas === 9.5 && t.maquinas[0].dias === 2,
-    'las horas de la retro: 6 + 3.5, en dos días',
-    t?.maquinas,
-  );
-  exigir(
-    t?.maquinas_en_reportes_viejos?.lista[0]?.maquina === 'Retroexcavadora vieja',
-    'las máquinas de los reportes viejos salen aparte, sin horas',
+    t !== null && t.totales === undefined,
+    'y no trae totales: contar es de consultar_reportes, para que haya una sola manera de contar',
   );
 
   // ── buscar por palabra ──────────────────────────────────────────────────
@@ -153,9 +137,9 @@ const main = async () => {
   const muchos = await buscarReportes(ingeniero, {});
   const m = muchos.ok ? (muchos.contenido as Busqueda) : null;
   exigir(
-    m?.totales?.reportes === 73 && m.reportes?.length === 60 && Boolean(m.ojo?.includes('73')),
-    'con 73 reportes, la lista lleva 60 y los totales son de los 73',
-    m && [m.totales?.reportes, m.reportes?.length],
+    m?.reportes?.length === 60 && Boolean(m.ojo?.includes('73')),
+    'con 73 reportes, la lista lleva 60 y avisa de que son 73',
+    m && [m.reportes?.length, m.ojo],
   );
   const siguenTodos = await buscarReportes(ingeniero, { palabras: ['tuberia'] });
   exigir(

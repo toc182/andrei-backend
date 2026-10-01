@@ -7,8 +7,8 @@
 //  1. Ve lo mismo que en la pantalla: el permiso de reportes y sus obras —o
 //     todas, si tiene acceso global—. Tambien las obras ya terminadas: una
 //     pregunta puede ser de hace un año y medio.
-//  2. Los numeros los calcula la base: dias, horas, gente, maquinas, entregas.
-//     El modelo los pone en palabras.
+//  2. Aqui no se cuenta ni se suma: eso es consultar_reportes (consultas.ts),
+//     donde la base hace la cuenta. Esto busca lo escrito y lista reportes.
 //  3. Buscar por palabra mira TODOS los reportes del periodo, sin tope de
 //     fecha, y devuelve la frase donde aparece, no el reporte entero: asi caben
 //     cientos. El tope de reportes enteros es solo para cuando no se busca nada.
@@ -79,7 +79,6 @@ type Respuesta = { ok: true; contenido: unknown } | { ok: false; error: string; 
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const num = (v: string | number | null | undefined): number => Number(v ?? 0);
-const redondo = (n: number): number => Math.round(n * 10) / 10;
 
 /** La frase de un texto donde aparece alguna de las palabras. */
 function frasesCon(texto: string, palabras: string[]): string[] {
@@ -89,9 +88,8 @@ function frasesCon(texto: string, palabras: string[]): string[] {
 }
 
 /**
- * Busca reportes y devuelve lo que pide una pregunta: cuantos son, sus totales
- * calculados por la base, y —si se busco una palabra— la frase de cada uno
- * donde aparece; si no, la lista de los reportes.
+ * Busca reportes: si se busco una palabra, la frase de cada uno donde aparece
+ * con su fecha; si no, la lista de los reportes.
  */
 export async function buscarReportes(usuario: Usuario, entrada: FiltrosReportes): Promise<Respuesta> {
   const obras = await obrasDeReportes(usuario);
@@ -162,125 +160,14 @@ export async function buscarReportes(usuario: Usuario, entrada: FiltrosReportes)
     .filter((w) => w.length >= 2);
   const reps = `SELECT r.* FROM proyecto_reportes r WHERE ${donde.join(' AND ')}`;
 
-  // ── Los totales: de TODOS los reportes que calzan ────────────────────────
-  const [general, porObra, climas, personal, puestos, maquinas, maquinasViejas, entregas] = await Promise.all([
-    query<{ cantidad: string; primero: string | null; ultimo: string | null; horas: string; dias_horas: string }>(
-      `SELECT COUNT(*)::text AS cantidad,
-              to_char(MIN(fecha), 'YYYY-MM-DD') AS primero, to_char(MAX(fecha), 'YYYY-MM-DD') AS ultimo,
-              COALESCE(SUM(horas_perdidas), 0)::text AS horas,
-              COUNT(*) FILTER (WHERE COALESCE(horas_perdidas, 0) > 0)::text AS dias_horas
-         FROM (${reps}) r`,
-      params,
-    ),
-    query<{ obra: string; cantidad: string }>(
-      `SELECT COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS obra, COUNT(*)::text AS cantidad
-         FROM (${reps}) r JOIN proyectos p ON p.id = r.proyecto_id GROUP BY 1 ORDER BY 1`,
-      params,
-    ),
-    query<{ clima: string | null; dias: string }>(
-      `SELECT r.clima, COUNT(*)::text AS dias FROM (${reps}) r GROUP BY 1 ORDER BY COUNT(*) DESC`,
-      params,
-    ),
-    // La gente de cada dia: de la tabla nueva o, en los reportes viejos, de las
-    // dos columnas de antes.
-    query<{ dias: string; promedio: string | null; maximo: string | null }>(
-      `SELECT COUNT(*)::text AS dias, AVG(gente)::text AS promedio, MAX(gente)::text AS maximo
-         FROM (
-           SELECT COALESCE(
-                    (SELECT SUM(pp.cantidad) FROM proyecto_reporte_personal pp WHERE pp.reporte_id = r.id),
-                    NULLIF(COALESCE(r.personal_calificado, 0) + COALESCE(r.ayudantes, 0), 0)
-                  ) AS gente
-             FROM (${reps}) r
-         ) x WHERE gente IS NOT NULL`,
-      params,
-    ),
-    query<{ puesto: string; empresa: string | null; total: string; dias: string }>(
-      `SELECT pu.nombre AS puesto, e.nombre AS empresa, SUM(pp.cantidad)::text AS total,
-              COUNT(DISTINCT pp.reporte_id)::text AS dias
-         FROM (${reps}) r
-         JOIN proyecto_reporte_personal pp ON pp.reporte_id = r.id
-         JOIN proyecto_puestos pu ON pu.id = pp.puesto_id
-         LEFT JOIN proyecto_empresas e ON e.id = pu.empresa_id
-        GROUP BY 1, 2 ORDER BY SUM(pp.cantidad) DESC`,
-      params,
-    ),
-    query<{ maquina: string; empresa: string | null; horas: string; dias: string }>(
-      `SELECT q.nombre AS maquina, e.nombre AS empresa, COALESCE(SUM(re.horas), 0)::text AS horas,
-              COUNT(DISTINCT re.reporte_id)::text AS dias
-         FROM (${reps}) r
-         JOIN proyecto_reporte_equipos re ON re.reporte_id = r.id
-         JOIN proyecto_equipos q ON q.id = re.equipo_id
-         LEFT JOIN proyecto_empresas e ON e.id = q.empresa_id
-        GROUP BY 1, 2 ORDER BY SUM(re.horas) DESC NULLS LAST`,
-      params,
-    ),
-    // Los reportes viejos solo decian que maquinas habia, sin horas.
-    query<{ maquina: string; dias: string }>(
-      `SELECT m AS maquina, COUNT(*)::text AS dias
-         FROM (${reps}) r, unnest(COALESCE(r.equipo, ARRAY[]::text[])) m
-        WHERE NOT EXISTS (SELECT 1 FROM proyecto_reporte_equipos re WHERE re.reporte_id = r.id)
-        GROUP BY 1 ORDER BY COUNT(*) DESC`,
-      params,
-    ),
-    query<{ categoria: string | null; descripcion: string; unidad: string | null; cantidad: string | null; veces: string; primera: string; ultima: string }>(
-      `SELECT c.nombre AS categoria, en.descripcion, en.unidad, SUM(en.cantidad)::text AS cantidad,
-              COUNT(*)::text AS veces,
-              to_char(MIN(r.fecha), 'YYYY-MM-DD') AS primera, to_char(MAX(r.fecha), 'YYYY-MM-DD') AS ultima
-         FROM (${reps}) r
-         JOIN proyecto_reporte_entregas en ON en.reporte_id = r.id
-         LEFT JOIN proyecto_entrega_categorias c ON c.id = en.categoria_id
-        GROUP BY 1, 2, 3 ORDER BY MAX(r.fecha) DESC LIMIT 60`,
-      params,
-    ),
-  ]);
-
-  const cantidad = num(general.rows[0]?.cantidad);
-  const totales = {
-    reportes: cantidad,
-    del: general.rows[0]?.primero ?? null,
-    al: general.rows[0]?.ultimo ?? null,
-    ...(porObra.rows.length > 1
-      ? { por_obra: porObra.rows.map((o) => ({ obra: o.obra, reportes: num(o.cantidad) })) }
-      : {}),
-    clima: climas.rows.map((c) => ({ clima: c.clima ?? '(sin dato)', dias: num(c.dias) })),
-    horas_perdidas: {
-      total: redondo(num(general.rows[0]?.horas)),
-      dias_con_horas_perdidas: num(general.rows[0]?.dias_horas),
-    },
-    gente: {
-      dias_con_dato: num(personal.rows[0]?.dias),
-      promedio_por_dia: personal.rows[0]?.promedio ? redondo(num(personal.rows[0].promedio)) : null,
-      maximo_en_un_dia: personal.rows[0]?.maximo ? num(personal.rows[0].maximo) : null,
-      por_puesto: puestos.rows.map((x) => ({
-        puesto: x.puesto,
-        ...(x.empresa ? { empresa: x.empresa } : {}),
-        promedio_por_dia: redondo(num(x.total) / Math.max(1, num(x.dias))),
-        dias: num(x.dias),
-      })),
-    },
-    maquinas: maquinas.rows.map((m) => ({
-      maquina: m.maquina,
-      ...(m.empresa ? { de: m.empresa } : {}),
-      horas: redondo(num(m.horas)),
-      dias: num(m.dias),
-    })),
-    ...(maquinasViejas.rows.length
-      ? {
-          maquinas_en_reportes_viejos: {
-            ojo: 'Los reportes de antes no decían horas, solo qué máquinas había: aquí van los días, sin horas.',
-            lista: maquinasViejas.rows.map((m) => ({ maquina: m.maquina, dias: num(m.dias) })),
-          },
-        }
-      : {}),
-    llego: entregas.rows.map((e) => ({
-      ...(e.categoria ? { categoria: e.categoria } : {}),
-      que: e.descripcion,
-      ...(e.cantidad !== null ? { cantidad: redondo(num(e.cantidad)), unidad: e.unidad } : {}),
-      veces: num(e.veces),
-      del: e.primera,
-      al: e.ultima,
-    })),
-  };
+  // Contar y sumar ya no es de esta herramienta: lo hace consultar_reportes
+  // (consultas.ts), donde la base cuenta lo que se le pregunte. Ivan, el
+  // 2026-10-01: el resumen de aqui solo traia promedios por puesto, y «cuantos
+  // dias de calificado llevamos» no se pudo contestar. Aqui solo se busca y se
+  // lista; la cuenta de reportes es para el aviso del tope.
+  const cantidad = num(
+    (await query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM (${reps}) r`, params)).rows[0]?.n,
+  );
 
   // ── Con palabra: la frase de cada reporte donde aparece ─────────────────
   if (palabras.length) {
@@ -305,7 +192,11 @@ export async function buscarReportes(usuario: Usuario, entrada: FiltrosReportes)
          SELECT rs.id, rs.numero, to_char(rs.fecha, 'YYYY-MM-DD'), rs.proyecto_id, 'horas perdidas', NULL, rs.motivo FROM rs
          UNION ALL
          SELECT rs.id, rs.numero, to_char(rs.fecha, 'YYYY-MM-DD'), rs.proyecto_id, 'llegó a la obra', NULL,
-                CONCAT_WS(' — ', en.descripcion, en.notas)
+                -- Con cantidad y unidad: a veces lo que llego esta escrito ahi
+                -- («27 codos de 45° de 12"»), no en la descripcion.
+                CONCAT_WS(' — ', en.descripcion,
+                          NULLIF(TRIM(CONCAT_WS(' ', trim_scale(en.cantidad)::text, en.unidad)), ''),
+                          en.notas)
            FROM rs JOIN proyecto_reporte_entregas en ON en.reporte_id = rs.id
          UNION ALL
          SELECT rs.id, rs.numero, to_char(rs.fecha, 'YYYY-MM-DD'), rs.proyecto_id, 'foto', NULL, f.leyenda
@@ -346,7 +237,6 @@ export async function buscarReportes(usuario: Usuario, entrada: FiltrosReportes)
         ...(frases.length === 0
           ? { nada: 'No aparece en lo escrito. Prueba otras palabras (plural, sinónimos, como lo dirían en obra) antes de decir que no hay.' }
           : {}),
-        totales_del_periodo: totales,
       },
     };
   }
@@ -375,7 +265,6 @@ export async function buscarReportes(usuario: Usuario, entrada: FiltrosReportes)
   return {
     ok: true,
     contenido: {
-      totales,
       reportes: lista.rows.map((x) => ({
         numero: x.numero,
         fecha: x.fecha,
@@ -390,7 +279,7 @@ export async function buscarReportes(usuario: Usuario, entrada: FiltrosReportes)
         ? {
             ojo:
               `Son ${cantidad} reportes; van los ${TOPE_REPORTES} ${entrada.orden === 'antiguos' ? 'más antiguos' : 'más recientes'}. ` +
-              'Los totales son de todos. Para algo concreto, busca por palabra (palabras), que mira todos.',
+              'Para contar o sumar de todos, consultar_reportes; para algo concreto, busca por palabra (palabras), que mira todos.',
           }
         : {}),
     },

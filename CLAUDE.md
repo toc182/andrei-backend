@@ -136,6 +136,17 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
   solicitudes.ts is the ONLY place WhatsApp reads payment requests (questions
   only, nothing is approved or paid): same visibility as the screen, never bank
   data, and every count and total comes from the database, not the model.
+  consultas.ts: questions that COUNT anything in the sent daily reports. The
+  model writes its own SELECT (tool consultar_reportes); it runs with the
+  database account asistente_lector, which can only read the views of schema
+  `asistente` (migration 179), each filtered by asistente.acceso — the
+  person's projects, written by the system per query and keyed by the reading
+  connection's pg_backend_pid. Every query is saved in whatsapp_consultas. To
+  let the assistant count another part of the system, add views there with
+  COMMENT ON: it reads their descriptions from the database. reportes.ts only
+  searches text and lists reports; it does not count. asistente.ts
+  (cifrasSinFuente) sends an answer back once if it carries a number that is
+  not in what the tools returned.
   Keys are optional: without them WhatsApp simply does not exist for this
   server. Nothing is ever sent without the person having seen the draft first —
   that rule lives in code (herramientas.ts), not in the model's instructions.

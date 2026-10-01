@@ -34,6 +34,7 @@ import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal }
 import { ESTADOS, buscarSolicitudes, quienEs, verSolicitud, type Filtros } from './solicitudes.js';
 import { leerNombrePropio } from '../consorcioProyecto.js';
 import { buscarReportes, verReporte, type FiltrosReportes } from './reportes.js';
+import { TOPE_FILAS, consultarBase, describirVistas, guardarConsulta } from './consultas.js';
 import { sendEmail } from '../emailService.js';
 import {
   AGRUPAR,
@@ -497,12 +498,11 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
   {
     name: 'buscar_reportes',
     description:
-      'Consulta los reportes diarios YA ENVIADOS (no el que se esta llenando): cuantos son y ' +
-      'sus totales calculados por el sistema —clima, horas perdidas, gente por dia y por ' +
-      'puesto, horas por maquina, lo que llego—. Con palabras, busca en TODO lo escrito de ' +
-      'todos los reportes del periodo (trabajo, atrasos, novedades, entregas, leyendas) y ' +
-      'devuelve la frase de cada uno donde aparece, con su fecha: es lo que se usa para ' +
-      '«cuando instalamos las tuberias». Sin palabras, devuelve la lista de los reportes.',
+      'Lee lo escrito en los reportes diarios YA ENVIADOS (no el que se esta llenando). Con ' +
+      'palabras, busca en TODO lo escrito de todos los reportes del periodo (trabajo, atrasos, ' +
+      'novedades, entregas, leyendas) y devuelve la frase de cada uno donde aparece, con su ' +
+      'fecha: es lo que se usa para «cuando instalamos las tuberias». Sin palabras, devuelve la ' +
+      'lista de los reportes. NO cuenta ni suma: para eso, consultar_reportes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -559,6 +559,63 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
     },
   },
 ];
+
+/**
+ * La herramienta de las consultas: su descripcion lleva las tablas que puede
+ * leer, y esas salen de la base (consultas.ts), por eso no esta en la lista de
+ * arriba.
+ */
+function herramientaConsulta(tablas: string): Anthropic.Tool {
+  return {
+    name: 'consultar_reportes',
+    description:
+      'Le preguntas a la base escribiendo UNA consulta SELECT de PostgreSQL sobre las tablas de ' +
+      'abajo: los reportes diarios ENVIADOS de las obras que esta persona puede ver (las demas no ' +
+      'existen aqui). Es lo que se usa para TODO lo que sea contar, sumar o comparar: dias, ' +
+      'dias-persona por puesto, horas de maquina, horas perdidas, dias de lluvia, lo que llego. ' +
+      'La base hace la cuenta: pide el resultado ya calculado (SUM, COUNT, GROUP BY) y no traigas ' +
+      `filas sueltas para sumarlas tu. Llegan como mucho ${TOPE_FILAS} filas. Las fechas son ` +
+      'AAAA-MM-DD. Para buscar en lo escrito sin que importen tildes ni mayusculas: ' +
+      "llano(columna) LIKE '%tuberia%'. Si la consulta falla, lee el error, corrigela y vuelve a " +
+      'intentarlo una vez. El sistema comprueba que cada cifra de tu respuesta este en lo que te ' +
+      'devolvio la base: si das un total y su desglose, que la consulta te de los dos.' +
+      `\n\nTABLAS\n\n${tablas}`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        proposito: {
+          type: 'string',
+          description: 'Que estas contando, en una linea: «dias-persona por puesto en Playa Blanca desde el inicio»',
+        },
+        consulta: { type: 'string', description: 'Una sola consulta SELECT, sin punto y coma' },
+      },
+      required: ['proposito', 'consulta'],
+      additionalProperties: false,
+    },
+  };
+}
+
+let todas: Promise<Anthropic.Tool[]> | null = null;
+
+/**
+ * Todas las herramientas del asistente. Si las tablas de las consultas no se
+ * pueden leer —una base sin la migracion 179—, el asistente sigue funcionando
+ * sin esa herramienta en vez de quedarse mudo.
+ */
+export function herramientas(): Promise<Anthropic.Tool[]> {
+  todas ??= describirVistas().then(
+    (tablas) => [...HERRAMIENTAS, herramientaConsulta(tablas)],
+    (e) => {
+      console.error('[whatsapp] sin consultas a la base:', (e as Error).message);
+      todas = null;
+      return HERRAMIENTAS;
+    },
+  );
+  return todas;
+}
+
+/** Consultas que pueden fallar en un turno: la primera y un intento mas. */
+const CONSULTAS_FALLIDAS_MAX = 2;
 
 /**
  * Deja elegida la obra del reporte. Lo usan elegir_proyecto, empezar_reporte y
@@ -635,7 +692,7 @@ export async function ejecutarHerramienta(
   nombre: string,
   entrada: unknown,
   ctx: Contexto,
-  cache: { listas: ListasProyecto | null },
+  cache: { listas: ListasProyecto | null; consultasFallidas?: number },
 ): Promise<Resultado> {
   const input = (typeof entrada === 'object' && entrada !== null ? entrada : {}) as Record<
     string,
@@ -1042,6 +1099,40 @@ export async function ejecutarHerramienta(
     return r.ok
       ? { ok: true, contenido: r.contenido }
       : { ok: false, contenido: { error: r.error, ...(r.extra ? { detalle: r.extra } : {}) } };
+  }
+
+  if (nombre === 'consultar_reportes') {
+    if ((cache.consultasFallidas ?? 0) >= CONSULTAS_FALLIDAS_MAX) {
+      return {
+        ok: false,
+        contenido: { error: 'Ya fallaron dos consultas en este turno. No insistas: dile en una línea que no pudiste sacar ese dato.' },
+      };
+    }
+    const consulta = typeof input.consulta === 'string' ? input.consulta : '';
+    const r = await consultarBase(ctx.usuario, consulta);
+    await guardarConsulta({
+      conversacionId: ctx.conversacion.id,
+      userId: ctx.usuario.id,
+      proposito: typeof input.proposito === 'string' ? input.proposito : null,
+      consulta,
+      resultado: r,
+    });
+    if (!r.ok) {
+      cache.consultasFallidas = (cache.consultasFallidas ?? 0) + 1;
+      return { ok: false, contenido: { error: r.error } };
+    }
+    return {
+      ok: true,
+      contenido: {
+        columnas: r.columnas,
+        filas: r.filas,
+        cuantas_filas: r.filas.length,
+        ...(r.hay_mas
+          ? { ojo: `Hay más de ${TOPE_FILAS} filas y llegan las primeras ${TOPE_FILAS}: si lo que quieres es un total, súmalo o agrúpalo en la consulta.` }
+          : {}),
+        ...(r.filas.length === 0 ? { nada: 'La consulta no devolvió ninguna fila.' } : {}),
+      },
+    };
   }
 
   if (nombre === 'ver_reporte') {
