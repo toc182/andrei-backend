@@ -814,7 +814,69 @@ async function leerCorrecciones(reporteId: number | string) {
 // Lectura
 // ---------------------------------------------------------------------------
 
+/**
+ * Una condición del WHERE de la lista: recibe con qué numerar sus parámetros
+ * y devuelve su pedazo de SQL.
+ */
+type Condicion = (param: (valor: unknown) => string) => string;
+
+/**
+ * Arma un WHERE con sus parámetros numerados desde $1. La lista hace cuatro
+ * consultas —las filas, el total y los valores de cada filtro del
+ * encabezado— y cada una lleva un juego distinto de condiciones; Postgres
+ * rechaza un parámetro que la consulta no use, así que cada una arma el suyo.
+ */
+function armarWhere(condiciones: Condicion[]): { sql: string; params: unknown[] } {
+  const params: unknown[] = [];
+  const sql = condiciones
+    .map((c) => c((valor) => {
+      params.push(valor);
+      return `$${params.length}`;
+    }))
+    .join(' AND ');
+  return { sql, params };
+}
+
+/**
+ * Las columnas por las que se puede ordenar la lista. El nombre llega del
+ * navegador y solo sirve para escoger de aquí: nunca se pega tal cual al SQL.
+ * Los nombres se comparan en minúsculas, como lo hacía la pantalla.
+ */
+const ORDEN_LISTA: Record<string, string> = {
+  fecha: 'r.fecha',
+  creador_nombre: 'lower(u.nombre)',
+  clima: 'r.clima',
+};
+
+/**
+ * Un filtro del encabezado: los valores que se dejan pasar, como lista JSON
+ * (`["Soleado","Nublado"]`). Que no venga quiere decir «sin filtro». Una lista
+ * vacía quiere decir «ninguno» y no deja pasar ninguna fila, que es lo que hace
+ * el encabezado cuando se desmarca todo. Devuelve null si no se entiende.
+ */
+function leerFiltro(valor: unknown): string[] | undefined | null {
+  if (valor === undefined) return undefined;
+  try {
+    const lista: unknown = JSON.parse(String(valor));
+    return Array.isArray(lista) && lista.every((v) => typeof v === 'string')
+      ? lista
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 // GET /api/proyecto-reportes/:proyectoId
+//
+// La lista, de a una página. La pantalla abre en los más recientes y pide 25;
+// con un mes escogido pide el mes entero de una vez. Ordenar y filtrar por las
+// columnas del encabezado también ocurre aquí: si lo hiciera la pantalla, solo
+// vería la página que tiene cargada y los filtros mentirían sobre lo que hay.
+//
+// Además de las filas devuelve `total` (cuántas hay con estos filtros, para el
+// pie) y `filtros`: los valores que ofrece cada filtro del encabezado. Los de
+// una columna salen de lo filtrado por las DEMÁS, para no ofrecer un valor que
+// no daría ninguna fila.
 router.get(
   '/:proyectoId',
   authenticateToken,
@@ -822,59 +884,82 @@ router.get(
   checkProjectAccess('proyectoId'),
   asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const { mes, creado_por: creadoPor, q } = req.query as Record<string, string>;
-    // El tope sube a 2000 porque la lista del frontend filtra y pagina en el
-    // navegador (igual que Solicitudes): si el servidor recortara el conjunto,
-    // los filtros del encabezado mentirian sobre lo que hay.
+    // Un mes entero nunca se acerca al tope. El tope está para que nadie pida
+    // el proyecto completo de un golpe.
     const limit = Math.min(parseInt(String(req.query.limit ?? '25'), 10) || 25, 2000);
-    const offset = parseInt(String(req.query.offset ?? '0'), 10) || 0;
+    const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
 
-    const params: unknown[] = [req.params.proyectoId];
+    if (mes !== undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(mes))) {
+      res.status(400).json({ success: false, message: 'Mes inválido' });
+      return;
+    }
+    const autores = leerFiltro(req.query.autor);
+    const climas = leerFiltro(req.query.clima);
+    if (autores === null || climas === null) {
+      res.status(400).json({ success: false, message: 'Filtro inválido' });
+      return;
+    }
+
     // `completo` esconde los borradores: un reporte a medias no sale en la
-    // lista ni cuenta en el total del pie. El COUNT usa este mismo array, asi
-    // que las dos consultas quedan de acuerdo por construccion.
-    const where: string[] = [
-      'r.proyecto_id = $1', 'r.activo = true', 'r.completo = true',
+    // lista, ni cuenta en el total del pie, ni ofrece su clima en un filtro.
+    const comunes: Condicion[] = [
+      (p) => `r.proyecto_id = ${p(req.params.proyectoId)}`,
+      () => 'r.activo = true',
+      () => 'r.completo = true',
     ];
-
     if (mes) {
-      params.push(`${mes}-01`);
-      where.push(
-        `date_trunc('month', r.fecha) = date_trunc('month', $${params.length}::date)`,
-      );
+      // Un rango y no date_trunc sobre la columna, para que use el índice
+      // (proyecto_id, fecha).
+      comunes.push((p) => {
+        const primero = p(`${mes}-01`);
+        return `r.fecha >= ${primero}::date AND r.fecha < ${primero}::date + interval '1 month'`;
+      });
     }
-    if (creadoPor) {
-      params.push(creadoPor);
-      where.push(`r.creado_por = $${params.length}`);
-    }
+    if (creadoPor) comunes.push((p) => `r.creado_por = ${p(creadoPor)}`);
     if (q) {
-      params.push(`%${q}%`);
-      const i = params.length;
       // Un reporte por areas se encuentra por lo que dice cualquiera de sus
       // puntos y tambien por el nombre del area: buscar «torre» tiene que
       // traer los dias en que se trabajo en la torre.
-      where.push(
-        `(r.que_se_hizo ILIKE $${i} OR r.atrasos ILIKE $${i}
-          OR r.novedades ILIKE $${i} OR r.numero ILIKE $${i}
+      comunes.push((p) => {
+        const texto = p(`%${q}%`);
+        return `(r.que_se_hizo ILIKE ${texto} OR r.atrasos ILIKE ${texto}
+          OR r.novedades ILIKE ${texto} OR r.numero ILIKE ${texto}
           OR EXISTS (SELECT 1 FROM proyecto_reporte_trabajos t
                        LEFT JOIN proyecto_areas a ON a.id = t.area_id
                       WHERE t.reporte_id = r.id
-                        AND (t.texto ILIKE $${i} OR a.nombre ILIKE $${i})))`,
-      );
+                        AND (t.texto ILIKE ${texto} OR a.nombre ILIKE ${texto})))`;
+      });
     }
+    const porAutor: Condicion[] = autores
+      ? [(p) => `u.nombre = ANY(${p(autores)}::text[])`]
+      : [];
+    const porClima: Condicion[] = climas
+      ? [(p) => `r.clima = ANY(${p(climas)}::text[])`]
+      : [];
 
-    const total = await query<{ total: string }>(
-      `SELECT COUNT(*)::text AS total FROM proyecto_reportes r WHERE ${where.join(' AND ')}`,
-      params,
-    );
+    const columna = ORDEN_LISTA[String(req.query.orden ?? '')];
+    const sentido = req.query.dir === 'asc' ? 'ASC' : 'DESC';
+    // Lo que empata va por fecha, el más reciente primero, y al final por id:
+    // sin un orden total, la misma fila podría salir en dos páginas.
+    const orden = !columna
+      ? 'r.fecha DESC, r.id DESC'
+      : columna === 'r.fecha'
+        ? `r.fecha ${sentido}, r.id ${sentido}`
+        : `${columna} ${sentido}, r.fecha DESC, r.id DESC`;
 
-    params.push(limit, offset);
-    const rows = await query(
-      `SELECT r.id, r.numero, r.fecha, r.clima, r.horas_perdidas, r.motivo,
+    const DESDE = 'proyecto_reportes r JOIN users u ON u.id = r.creado_por';
+    const todos = armarWhere([...comunes, ...porAutor, ...porClima]);
+    const deAutores = armarWhere([...comunes, ...porClima]);
+    const deClimas = armarWhere([...comunes, ...porAutor]);
+    const n = todos.params.length;
+
+    const [filas, total, valoresAutor, valoresClima] = await Promise.all([
+      query(
+        `SELECT r.id, r.numero, r.fecha, r.clima, r.horas_perdidas, r.motivo,
               r.personal_calificado, r.ayudantes, r.equipo, r.creado_por,
               r.created_at, r.updated_at, r.enviado_at,
-              -- Solo el arranque del texto: la lista lo muestra recortado y
-              -- pide hasta 2000 filas de una vez. El texto completo va en el
-              -- detalle.
+              -- Solo el arranque del texto: la lista lo muestra recortado. El
+              -- texto completo va en el detalle.
               --
               -- Un reporte por areas no tiene ese texto: se arma con sus puntos,
               -- un renglon por area en el orden en que se escribieron, igual
@@ -905,18 +990,34 @@ router.get(
                                   WHERE t.reporte_id = r.id)),
                 '[]'::json
               ) AS areas
-         FROM proyecto_reportes r
-         JOIN users u ON u.id = r.creado_por
-        WHERE ${where.join(' AND ')}
-        ORDER BY r.fecha DESC, r.id DESC
-        LIMIT $${params.length - 1} OFFSET $${params.length}`,
-      params,
-    );
+         FROM ${DESDE}
+        WHERE ${todos.sql}
+        ORDER BY ${orden}
+        LIMIT $${n + 1} OFFSET $${n + 2}`,
+        [...todos.params, limit, offset],
+      ),
+      query<{ total: string }>(
+        `SELECT COUNT(*)::text AS total FROM ${DESDE} WHERE ${todos.sql}`,
+        todos.params,
+      ),
+      query<{ valor: string }>(
+        `SELECT DISTINCT u.nombre AS valor FROM ${DESDE} WHERE ${deAutores.sql} ORDER BY 1`,
+        deAutores.params,
+      ),
+      query<{ valor: string }>(
+        `SELECT DISTINCT r.clima AS valor FROM ${DESDE} WHERE ${deClimas.sql} ORDER BY 1`,
+        deClimas.params,
+      ),
+    ]);
 
     res.json({
       success: true,
-      data: rows.rows,
+      data: filas.rows,
       total: parseInt(total.rows[0].total, 10),
+      filtros: {
+        creador_nombre: valoresAutor.rows.map((r) => r.valor),
+        clima: valoresClima.rows.map((r) => r.valor),
+      },
     });
   }),
 );
