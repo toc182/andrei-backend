@@ -6,11 +6,14 @@
 // obra con ruido, sino que la maquinaria funciona —que la nota se guarda, se
 // pasa a texto antes de que el asistente piense, que el modelo la lee como lo
 // que dijo la persona, que se le manda el vocabulario de esa obra y que una
-// nota que no se entiende no se cuela en el reporte.
+// nota que no se entiende no se cuela en el reporte; y que una nota no se lee
+// dos veces a la vez.
 import { API } from './pruebas/contexto.js';
 import { SECRETOS_PRUEBA } from './pruebas/entorno.js';
 import crypto from 'crypto';
 import { query, pool } from '../src/database/config.js';
+import { uploadFile } from '../src/services/storage.js';
+import { leerNotaRecienLlegada, transcribirNotasDeVoz } from '../src/services/whatsapp/transcripcion.js';
 
 const META = process.env.PRUEBAS_META ?? '';
 const WEBHOOK = `${API}/whatsapp/webhook`;
@@ -226,6 +229,40 @@ const main = async () => {
   exigir(
     (larga.rows[0]?.error ?? '').includes('demasiado larga'),
     'y queda dicho en el mensaje por qué no se leyó',
+  );
+
+  // ── la misma nota leida por los dos caminos a la vez ────────────────────
+  // Al llegar y en el turno del asistente. Antes los dos llamaban a Whisper y
+  // el segundo pisaba al primero; esta prueba fallaba de vez en cuando por eso
+  // (2026-10-01). Aqui se fuerza el choque en vez de esperar a que pase solo.
+  const conversacion = await query<{ id: number }>(
+    'SELECT id FROM whatsapp_conversaciones WHERE telefono = $1 AND activa',
+    [NUMERO],
+  );
+  const clave = `whatsapp/prueba-voz-doble-${Date.now()}.ogg`;
+  await uploadFile(clave, Buffer.alloc(4000, 7), 'audio/ogg');
+  const nota = await query<{ id: number }>(
+    `INSERT INTO whatsapp_mensajes (direccion, telefono, user_id, tipo, r2_key, conversacion_id, procesado_at)
+     VALUES ('entrante', $1, $2, 'audio', $3, $4, CURRENT_TIMESTAMP) RETURNING id`,
+    [NUMERO, userId, clave, conversacion.rows[0].id],
+  );
+  const antes = (await promptsAudio()).length;
+  await guionizarAudio(['El vaciado terminó a las tres']);
+  await Promise.all([
+    leerNotaRecienLlegada(nota.rows[0].id),
+    transcribirNotasDeVoz({ id: conversacion.rows[0].id, proyectoId: 1 }),
+  ]);
+  const doble = await query<{ texto: string | null; error: string | null }>(
+    'SELECT texto, error FROM whatsapp_mensajes WHERE id = $1',
+    [nota.rows[0].id],
+  );
+  exigir(
+    (await promptsAudio()).length - antes === 1,
+    'leida por los dos caminos a la vez, la nota se transcribe una sola vez',
+  );
+  exigir(
+    doble.rows[0]?.texto === 'El vaciado terminó a las tres' && doble.rows[0]?.error === null,
+    'y queda lo que dijo, sin que el segundo camino lo pise con un error',
   );
 
   await pool.end();

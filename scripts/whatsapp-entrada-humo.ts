@@ -279,13 +279,21 @@ const main = async () => {
   );
   exigir(ajeno !== undefined && ajeno.user_id === null, 'el mensaje de un desconocido se guarda igual');
 
+  // Solo lo que le salio al desconocido. Al ingeniero de mas arriba el
+  // trabajador le contesta por su cuenta cuando le toca —con el modelo de
+  // mentira sin guion—, y contar todo lo enviado hacia que esta comprobacion
+  // fallara segun quien llegara primero. Despues de su respuesta se espera un
+  // poco mas: «una sola vez» tambien quiere decir que no llega una segunda.
+  const alDesconocido = async () => (await enviados()).filter((e) => e.telefono === NUMERO_DESCONOCIDO);
   const respuestas = await (async () => {
     const hasta = Date.now() + 10_000;
     for (;;) {
-      const e = await enviados();
-      if (e.length > 0 || Date.now() > hasta) return e;
+      const e = await alDesconocido();
+      if (e.length > 0 || Date.now() > hasta) break;
       await esperar(200);
     }
+    await esperar(1500);
+    return alDesconocido();
   })();
   exigir(
     respuestas.length === 1 &&

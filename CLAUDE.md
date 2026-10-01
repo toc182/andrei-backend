@@ -42,6 +42,12 @@ data. A test that needs more starting data adds it to `semilla.sql`, never to an
 test. Files land in the `andrei-pruebas` R2 bucket under the seeded projects' short
 names and get swept at the end of the run.
 
+`scripts/whatsapp-hoja.ts` is the WhatsApp assistant's answer sheet: 21 real
+questions (scripts/guiones/hoja-respuestas.json, all about September 2026) put
+to the real model against a read-only copy of production that it creates and
+drops. It COSTS MONEY (~$1): it only runs with `--si-gastar`, and only after
+telling Ivan the cost. Run it when the way the assistant answers changes.
+
 ## Middleware pattern
 
 Every protected route must follow this order:

@@ -1,0 +1,130 @@
+[
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos días de calificado, de ayudante y de supervisor tuvimos en Playa Blanca en septiembre?",
+    "debe": [77, 65, 15],
+    "nota": "calificados 74 + 3 del reporte de formato anterior del 09/09, ayudantes 64 + 1, supervisores 15"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos días llovió en Santa Isabel en septiembre?",
+    "debe": [2],
+    "nota": "2 días de lluvia parcial"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántas horas perdimos en Playa Blanca en septiembre y por qué?",
+    "debe": [4, "lluv"],
+    "nota": "1.5 + 1 + 1.5 = 4, todas por lluvia"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántas horas trabajó la retro de RODSA en Santa Isabel en septiembre?",
+    "debe": ["(?<![\\d.,])24(?!\\d)|16[\\s\\S]*(?<![\\d.,])8(?!\\d)"],
+    "nota": "24, o 16 de la Retroexcavadora de RODSA y aparte las 8 de «RODSA - Retroexcavadora», que la lista tiene como del consorcio"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántas horas de retroexcavadora tuvimos en Santa Isabel en septiembre, sumando todas?",
+    "debe": [126],
+    "nota": "8 + 9 + 16 + 73 + 9 + 3 + 8"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Qué día de septiembre hubo más gente en Santa Isabel y cuántos eran?",
+    "debe": [33, "29", "30"],
+    "nota": "33 el 29 y el 30 de septiembre (empate)"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos reportes mandó Cesar en septiembre?",
+    "debe": [16],
+    "nota": "todos de Playa Blanca"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos reportes hay de cada obra en septiembre?",
+    "debe": [15, 19, 16, 1],
+    "nota": "Santa Isabel 15, P Prueba 19, Playa Blanca 16, Pinellas - Tuberías SI 1"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántas varillas #4 llegaron a Playa Blanca en septiembre?",
+    "debe": [1550],
+    "nota": "una entrega, el 24/09"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos codos de 45 de 12 pulgadas llegaron a Playa Blanca en septiembre y cuándo?",
+    "debe": [27, "30"],
+    "nota": "27 el 30/09: lo que llegó está escrito en la unidad, no en la descripción"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos pernos A36 llegaron a Playa Blanca en septiembre?",
+    "debe": [560],
+    "nota": "64 + 240 + 256"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántas fotos tienen los reportes de septiembre de Playa Blanca?",
+    "debe": [231],
+    "nota": "231 fotos"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos días-persona puso RODSA en Santa Isabel en septiembre?",
+    "debe": [101],
+    "nota": "todos los puestos con empresa RODSA"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos días de operador de retroexcavadora tuvimos en Santa Isabel en septiembre?",
+    "debe": [37],
+    "nota": "6 + 18 + 13: el puesto está escrito de dos maneras"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos días se trabajó en la Torre Péndulo en Playa Blanca en septiembre?",
+    "debe": ["(?<![\\d.,])[78](?!\\d)"],
+    "nota": "7 contando los días con el área marcada (22 al 30), u 8 contando el 21, cuyo texto dice que se inicia en el Área Péndulo"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántas horas de compactador vertical tuvo Santa Isabel en septiembre?",
+    "debe": [116],
+    "nota": "18 + 16 + 66 + 8 + 8"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántas horas hombre tuvimos en Playa Blanca en septiembre?",
+    "debe": ["\\bno\\b"],
+    "noDebe": [616, 520],
+    "nota": "no hay horas por persona: debe decirlo, sin multiplicar por 8 (77×8 = 616, 65×8 = 520)"
+  },
+  {
+    "quien": "Cesar Lasso",
+    "pregunta": "¿Cuántos días de calificado tuvo Santa Isabel en septiembre?",
+    "debe": ["acceso|no (puedo|tengo|ves)"],
+    "noDebe": [16],
+    "nota": "Cesar no ve Santa Isabel (allí son 16)"
+  },
+  {
+    "quien": "Cesar Lasso",
+    "pregunta": "¿Cuántos días de ayudante tuvimos en septiembre?",
+    "debe": [65],
+    "nota": "Cesar solo ve Playa Blanca: 64 + 1"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántas horas trabajó la Toyota Hilux en Santa Isabel en septiembre?",
+    "debe": [18],
+    "nota": "9 + 9"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuándo llegaron las primeras tuberías de 12 a Playa Blanca?",
+    "debe": ["16"],
+    "nota": "el 16/09 (y las 21 que faltaban, el 17/09): la búsqueda por palabra"
+  }
+]

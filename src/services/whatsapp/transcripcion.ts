@@ -120,13 +120,61 @@ export async function vocabularioDe(proyectoId: number): Promise<string | undefi
 }
 
 /**
+ * Las notas que se estan leyendo ahora mismo.
+ *
+ * Una nota se lee por dos caminos: al llegar (leerNotaRecienLlegada) y, si al
+ * asistente le toca contestar antes de que eso termine, en su turno
+ * (transcribirNotasDeVoz). Sin esto los dos la leian a la vez: se pagaba dos
+ * veces y el que terminaba segundo pisaba lo del primero —una nota «no se
+ * entendio» acababa como «no se pudo leer»—. Lo vio la prueba whatsapp-voz,
+ * que fallaba de vez en cuando (2026-10-01).
+ */
+const leyendo = new Map<number, Promise<void>>();
+
+/** Hace `trabajo` con esa nota cuando nadie mas la este leyendo. */
+async function sinCruzarse(filaId: number, trabajo: () => Promise<void>): Promise<void> {
+  for (let otro = leyendo.get(filaId); otro; otro = leyendo.get(filaId)) {
+    await otro.catch(() => undefined);
+  }
+  const este = trabajo().finally(() => leyendo.delete(filaId));
+  leyendo.set(filaId, este);
+  return este;
+}
+
+/** Si la nota sigue sin leer: nadie le ha puesto texto ni motivo. */
+async function sigueSinLeer(filaId: number): Promise<boolean> {
+  const r = await query(
+    'SELECT 1 FROM whatsapp_mensajes WHERE id = $1 AND texto IS NULL AND error IS NULL',
+    [filaId],
+  );
+  return r.rows.length > 0;
+}
+
+/**
+ * Lo que salio de leer la nota, sin pisar lo que ya tenga: el primero que la
+ * resuelve manda. Tambien entre dos servidores a la vez, durante un despliegue.
+ */
+const ANOTAR = {
+  texto: 'UPDATE whatsapp_mensajes SET texto = $2 WHERE id = $1 AND texto IS NULL AND error IS NULL',
+  error: 'UPDATE whatsapp_mensajes SET error = $2 WHERE id = $1 AND texto IS NULL AND error IS NULL',
+} as const;
+async function anotarLectura(filaId: number, campo: keyof typeof ANOTAR, valor: string): Promise<void> {
+  await query(ANOTAR[campo], [filaId, valor]);
+}
+
+/**
  * Lee una nota de voz recien llegada, sin esperar al turno del asistente.
  *
  * Es lo que hace que la respuesta llegue antes: cuando el asistente va a
  * pensar, la nota ya es texto. Si falla, no pasa nada —queda pendiente y el
  * turno la vuelve a intentar—.
  */
-export async function leerNotaRecienLlegada(filaId: number): Promise<void> {
+export function leerNotaRecienLlegada(filaId: number): Promise<void> {
+  return sinCruzarse(filaId, () => leerAlLlegar(filaId));
+}
+
+async function leerAlLlegar(filaId: number): Promise<void> {
+  if (!(await sigueSinLeer(filaId))) return;
   const fila = await query<{ r2_key: string | null; proyecto_id: number | null }>(
     `SELECT m.r2_key, c.proyecto_id
        FROM whatsapp_mensajes m
@@ -143,16 +191,13 @@ export async function leerNotaRecienLlegada(filaId: number): Promise<void> {
   const audio = await downloadFile(r2Key);
   const r = await transcribir(audio, `nota-${filaId}.ogg`, vocabulario);
   if (r.ok) {
-    await query('UPDATE whatsapp_mensajes SET texto = $2 WHERE id = $1', [filaId, r.texto]);
+    await anotarLectura(filaId, 'texto', r.texto);
     return;
   }
   // Un fallo pasajero no se marca: la nota queda pendiente y el turno la
   // vuelve a intentar. Lo que no tiene arreglo —muy larga, no se entendio— si.
   if (r.motivo === 'fallo') return;
-  await query('UPDATE whatsapp_mensajes SET error = $2 WHERE id = $1', [
-    filaId,
-    MOTIVOS[r.motivo] ?? r.motivo,
-  ]);
+  await anotarLectura(filaId, 'error', MOTIVOS[r.motivo] ?? r.motivo);
 }
 
 /** Espera a que el audio este guardado, hasta unos segundos. */
@@ -208,23 +253,18 @@ export async function transcribirNotasDeVoz(conversacion: {
     conversacion.proyectoId === null ? undefined : await vocabularioDe(conversacion.proyectoId);
 
   for (const fila of pendientes.rows) {
-    const motivo = await (async (): Promise<string | null> => {
+    await sinCruzarse(fila.id, async () => {
+      // Si la estaba leyendo la llegada, ya puede estar resuelta.
+      if (!(await sigueSinLeer(fila.id))) return;
       // La copia del audio a R2 va por su cuenta al recibirlo y puede no haber
       // terminado. Se le espera un poco; si aun asi no esta, la nota se queda
       // pendiente —sin marcarla como fallida— y se lee en el siguiente turno.
       const clave = await esperarArchivo(fila.id, fila.r2_key);
-      if (!clave) return null;
+      if (!clave) return;
       const audio = await downloadFile(clave);
       const r = await transcribir(audio, `nota-${fila.id}.ogg`, vocabulario);
-      if (!r.ok) return r.motivo;
-      await query('UPDATE whatsapp_mensajes SET texto = $2 WHERE id = $1', [fila.id, r.texto]);
-      return null;
-    })();
-    if (motivo) {
-      await query('UPDATE whatsapp_mensajes SET error = $2 WHERE id = $1', [
-        fila.id,
-        MOTIVOS[motivo] ?? motivo,
-      ]);
-    }
+      if (r.ok) await anotarLectura(fila.id, 'texto', r.texto);
+      else await anotarLectura(fila.id, 'error', MOTIVOS[r.motivo] ?? r.motivo);
+    });
   }
 }
