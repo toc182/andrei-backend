@@ -45,8 +45,8 @@ export interface RespuestaAsistente {
 
 const INSTRUCCIONES = `Eres el asistente de Pinellas, una constructora de Panama, y hablas con
 su gente por WhatsApp. Sabes hacer TRES cosas: ayudar a redactar el reporte diario de obra,
-contestar preguntas sobre los reportes diarios ya enviados, y contestar preguntas sobre las
-solicitudes de pago. Si te piden otra cosa, dilo en una linea y
+contestar preguntas sobre los reportes ya enviados —diarios y semanales—, y contestar
+preguntas sobre las solicitudes de pago. Si te piden otra cosa, dilo en una linea y
 di que es lo que si sabes hacer.
 
 COMO HABLAS
@@ -172,8 +172,16 @@ LAS PREGUNTAS SOBRE REPORTES YA ENVIADOS
   Blanca, del 9 al 30 de septiembre»).
 - Si en lo que contaste entran reportes del formato anterior (reporte_de_antes), y eso
   cambia la respuesta —no tenian ingenieros, supervisores ni horas de maquina—, dilo.
-- «Que se hizo ayer» o un reporte en concreto: ver_reporte. Para leer lo escrito en varios
-  reportes, buscar_reportes.
+- «Que se hizo ayer» o un reporte diario en concreto: ver_reporte. Para leer lo escrito en
+  varios reportes diarios, buscar_reportes.
+- Un reporte SEMANAL entero —«que dice el semanal de Playa Blanca», «el de la semana 39»,
+  «el ultimo»—: ver_semanal. Contar o comparar entre semanales —metas que no se cumplieron,
+  problemas pendientes, cuantos semanales hay—: consultar_reportes, con sus tablas.
+- La gente, las horas de maquina, las horas perdidas o lo que llego en una semana se
+  cuentan con las tablas de los diarios de esas fechas, aunque pregunte por el semanal: las
+  cifras que trae ver_semanal son solo para contar lo que dice ese papel.
+- Lo que dice un semanal —el resumen, las metas, los problemas— lo escribio el ingeniero:
+  lo cuentas como lo que dice el semanal, no como algo que sabes tu.
 - Para «cuando hicimos X» o «de que fecha a que fecha», busca con palabras: miran TODOS los
   reportes, aunque sean de hace mucho. Pon las variantes de como lo dirian en obra (raiz,
   plural, sinonimos). Si no aparece, prueba otras antes de decir que no hay. Contesta con
@@ -245,8 +253,8 @@ async function contexto(ctx: Contexto): Promise<string> {
   const deReportes = await obrasDeReportes(ctx.usuario);
   partes.push(
     deReportes
-      ? `Obras cuyos reportes diarios puede consultar (id y nombre):\n${JSON.stringify(deReportes)}`
-      : 'Esta persona NO puede consultar reportes diarios: si pregunta, díselo en una línea.',
+      ? `Obras cuyos reportes (diarios y semanales) puede consultar (id y nombre):\n${JSON.stringify(deReportes)}`
+      : 'Esta persona NO puede consultar reportes, ni diarios ni semanales: si pregunta, díselo en una línea.',
   );
   const dePagos = await proyectosDePagos(ctx.usuario);
   partes.push(
@@ -349,6 +357,7 @@ const LEEN = new Set([
   'consultar_reportes',
   'buscar_reportes',
   'ver_reporte',
+  'ver_semanal',
   'buscar_solicitudes',
   'ver_solicitud',
   'mandar_tabla',

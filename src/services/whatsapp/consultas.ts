@@ -103,6 +103,17 @@ function poolLector(): Promise<Pool> {
   return lector;
 }
 
+/**
+ * Cierra la conexion del asistente. Solo para un script que termina y tira su
+ * base (la hoja de respuestas): una conexion abierta a una base que se tira
+ * revienta el proceso.
+ */
+export async function cerrarLector(): Promise<void> {
+  const p = lector;
+  lector = null;
+  if (p) await (await p).end();
+}
+
 let vistas: Promise<string> | null = null;
 
 /**

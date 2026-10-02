@@ -8,7 +8,7 @@
 // siempre despues de decirle a Ivan cuanto cuesta.
 //
 //   npx tsx scripts/whatsapp-hoja.ts                   -> que haria
-//   npx tsx scripts/whatsapp-hoja.ts --si-gastar       -> las 21 preguntas
+//   npx tsx scripts/whatsapp-hoja.ts --si-gastar       -> las 26 preguntas
 //   npx tsx scripts/whatsapp-hoja.ts --si-gastar 4,15  -> solo esas
 //
 // La copia: pg_dump de produccion EN SOLO LECTURA (DATABASE_PUBLIC_URL del
@@ -17,9 +17,9 @@
 // que pase. NO se llama andrei_pruebas_*: `npm run pruebas` barre esas al
 // arrancar y se llevo la copia a media corrida el 2026-10-01.
 //
-// Las preguntas (guiones/hoja-respuestas.json) son de septiembre de 2026, un
-// periodo cerrado, para que las respuestas no cambien con los reportes que
-// lleguen. Si una correccion cambia un reporte de septiembre, se corrige la
+// Las preguntas (guiones/hoja-respuestas.json) son de septiembre de 2026 y de
+// sus semanales, un periodo cerrado, para que las respuestas no cambien con los
+// reportes que lleguen. Si una correccion cambia un reporte de septiembre, se corrige la
 // respuesta alla. En `debe`, un numero es una cifra que tiene que aparecer
 // (escrita como sea: 1550, 1,550, 18.0) y un texto es una expresion regular.
 import 'dotenv/config';
@@ -73,11 +73,11 @@ const cifra = (n: number): RegExp => {
 };
 const patron = (x: number | string): RegExp => (typeof x === 'number' ? cifra(x) : new RegExp(x, 'i'));
 
-const admin = (): Client =>
+const admin = (database = 'postgres'): Client =>
   new Client({
     host: process.env.DB_HOST,
     port: Number(process.env.DB_PORT ?? 5432),
-    database: 'postgres',
+    database,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
   });
@@ -156,6 +156,25 @@ async function hacerCopia(): Promise<void> {
     encoding: 'utf8',
   });
   if (m.status !== 0) throw new Error(`las migraciones fallaron:\n${m.stdout}${m.stderr}`);
+
+  // --no-acl deja fuera los permisos. Mientras produccion no tenia la 179, la
+  // copia la corria y se los daba; desde que la tiene, la cuenta del asistente
+  // se quedaba sin entrar a su esquema y cada consulta fallaba con «relation
+  // "reportes" does not exist» (hoja del 2026-10-02: 13 de 26 mal por eso). Se
+  // le da lo mismo que le dan las migraciones: el esquema, todas sus vistas y
+  // llano(). asistente.acceso, nunca.
+  const base = admin(BASE);
+  await base.connect();
+  try {
+    await base.query('GRANT USAGE ON SCHEMA asistente TO asistente_lector');
+    const vistas = await base.query<{ vista: string }>(
+      "SELECT format('asistente.%I', viewname) AS vista FROM pg_views WHERE schemaname = 'asistente'",
+    );
+    for (const { vista } of vistas.rows) await base.query(`GRANT SELECT ON ${vista} TO asistente_lector`);
+    await base.query('GRANT EXECUTE ON FUNCTION asistente.llano(TEXT) TO asistente_lector');
+  } finally {
+    await base.end();
+  }
 }
 
 async function main(): Promise<number> {
@@ -168,11 +187,22 @@ async function main(): Promise<number> {
   const { query, pool } = await import('../src/database/config.js');
   const { conversar } = await import('../src/services/whatsapp/asistente.js');
   const { conversacionViva } = await import('../src/services/whatsapp/conversacion.js');
+  const { cerrarLector, consultarBase, describirVistas } = await import('../src/services/whatsapp/consultas.js');
   type Usuario = { id: number; nombre: string; rol: 'admin' | 'co-admin' | 'usuario' };
 
   const uso = { entrada: 0, salida: 0, cache: 0 };
   let bien = 0;
   try {
+    // Antes de gastar: la cuenta del asistente tiene que poder leer sus tablas
+    // en la copia. Si no, el modelo contesta sin ellas y la corrida no mide nada.
+    const ivan = (await query<Usuario>("SELECT id, nombre, rol FROM users WHERE nombre = 'Ivan Plotnikoff'")).rows[0];
+    const prueba = await consultarBase(ivan, 'SELECT COUNT(*) FROM reportes');
+    const tablas = await describirVistas();
+    if (!prueba.ok || !tablas.includes('reporte_personal:') || !tablas.includes('semanales:')) {
+      throw new Error(`la cuenta del asistente no puede leer sus tablas en la copia: ${prueba.ok ? 'faltan tablas' : prueba.error}`);
+    }
+    console.log(`La cuenta del asistente lee sus tablas (${prueba.filas[0][0]} reportes diarios en la copia).`);
+
     for (const c of elegidos) {
       const usuario = (await query<Usuario>('SELECT id, nombre, rol FROM users WHERE nombre = $1', [c.quien])).rows[0];
       if (!usuario) throw new Error(`no hay nadie llamado ${c.quien} en la copia`);
@@ -206,6 +236,7 @@ async function main(): Promise<number> {
       if (!ok) console.log(`  faltó: ${faltan.join(', ') || '-'} · sobró: ${sobran.join(', ') || '-'}`);
     }
   } finally {
+    await cerrarLector().catch(() => undefined);
     await pool.end().catch(() => undefined);
   }
   const costo = (uso.entrada * PRECIO.entrada + uso.salida * PRECIO.salida + uso.cache * PRECIO.cache) / 1e6;

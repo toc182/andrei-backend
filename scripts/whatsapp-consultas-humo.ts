@@ -12,6 +12,9 @@
 //   borradores ni reportes dados de baja;
 // - las fechas llegan como AAAA-MM-DD y los totales como numeros;
 // - con mas de 200 filas, llegan 200 y el aviso de que hay mas;
+// - los semanales (migracion 180): solo los enviados y no eliminados de sus
+//   obras; lo que se marco en un semanal que sigue en borrador no se ve, y el
+//   dia de envio es el de Panama;
 // - la herramienta consultar_reportes: el asistente recibe la descripcion de
 //   las tablas sacada de la base, cada consulta queda guardada con lo que
 //   salio, y tras dos que fallan en un turno no se le deja seguir probando.
@@ -124,6 +127,123 @@ const main = async () => {
     r4.ok ? r4.filas : falla(r4),
   );
 
+  // ── los semanales ───────────────────────────────────────────────────────
+  // Obra 1: uno eliminado, dos enviados (el segundo sin que haya salido el
+  // correo) y uno en borrador. Obra 2: uno, que el ingeniero no ve.
+  const semanal = async (
+    proyecto: number,
+    lunes: string,
+    semanaIso: number,
+    numero: string | null,
+    estado: { completo?: boolean; activo?: boolean; enviado_at?: string } = {},
+  ): Promise<number> =>
+    (await query<{ id: number }>(
+      `INSERT INTO proyecto_reportes_semanales
+         (proyecto_id, numero, semana_inicio, semana_fin, anio_iso, semana_iso, resumen,
+          lo_que_se_espera, completo, activo, enviado_at, creado_por)
+       VALUES ($1, $2, $3::date, $3::date + 6, 2026, $4, $5, $6, $7, $8, $9::timestamptz, $10)
+       RETURNING id`,
+      [
+        proyecto, numero, lunes, semanaIso, `Resumen de ${numero ?? 'un borrador'}`, `Plan después del ${lunes}`,
+        estado.completo ?? true, estado.activo ?? true, estado.enviado_at ?? null, ingeniero.id,
+      ],
+    )).rows[0].id;
+  const w0 = await semanal(1, '2026-08-31', 36, 'RS-PRU1-260831', { activo: false });
+  // Salió a las 22:30 del lunes 14 en Panamá, que ya es martes 15 en UTC.
+  const w1 = await semanal(1, '2026-09-07', 37, 'RS-PRU1-260907', { enviado_at: '2026-09-15 03:30:00+00' });
+  const w2 = await semanal(1, '2026-09-14', 38, 'RS-PRU1-260914');
+  const w3 = await semanal(1, '2026-09-21', 39, null, { completo: false });
+  const x = await semanal(2, '2026-09-14', 38, 'RS-PRU2-260914');
+
+  const meta = (plan: number | null, evaluacion: number | null, texto: string, marca: Record<string, unknown> = {}) =>
+    query(
+      `INSERT INTO proyecto_reporte_semanal_metas
+         (reporte_plan_id, reporte_evaluacion_id, texto, cantidad, unidad, estado, porcentaje, motivo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [plan, evaluacion, texto, marca.cantidad ?? null, marca.unidad ?? null, marca.estado ?? null, marca.porcentaje ?? null, marca.motivo ?? null],
+    );
+  await meta(w1, w2, 'Vaciar losa', { cantidad: 20, unidad: 'm3', estado: 'completada' });
+  await meta(w1, w2, 'Terminar tubería', { estado: 'no_completada', motivo: 'Faltó material' });
+  await meta(null, w2, 'Limpieza', { estado: 'parcial', porcentaje: 50 });
+  // Marcada en el borrador: hasta que salga, sigue sin marcar.
+  await meta(w2, w3, 'Pintar fachada', { estado: 'completada' });
+  await meta(w0, null, 'Meta del eliminado');
+  await meta(x, null, 'Meta de la otra obra');
+
+  const problema = (reporte: number, fecha: string | null, texto: string, pendiente: boolean | null) =>
+    query(
+      `INSERT INTO proyecto_reporte_semanal_problemas (reporte_id, fecha, problema, accion, pendiente)
+       VALUES ($1, $2, $3, 'Seguirlo', $4)`,
+      [reporte, fecha, texto, pendiente],
+    );
+  await problema(w0, null, 'Problema del eliminado', true);
+  await problema(w1, '2026-09-09', 'Lluvia', false);
+  await problema(w1, null, 'Falta de tubería', true);
+  await problema(w2, '2026-09-16', 'Falta de cemento', true);
+  await problema(w3, '2026-09-22', 'Problema del borrador', null);
+  await problema(x, '2026-09-15', 'Problema de la otra obra', true);
+  for (const [reporte, texto] of [[w1, 'Aprobar el cambio de tubería'], [w3, 'Decisión del borrador'], [x, 'Decisión de la otra obra']] as const) {
+    await query('INSERT INTO proyecto_reporte_semanal_decisiones (reporte_id, texto) VALUES ($1, $2)', [reporte, texto]);
+  }
+
+  const s1 = await consultarBase(ingeniero, 'SELECT numero, semana_inicio, semana_fin, semana_iso, enviado_el FROM semanales ORDER BY semana_inicio');
+  exigir(
+    s1.ok && JSON.stringify(s1.filas) === JSON.stringify([
+      ['RS-PRU1-260907', '2026-09-07', '2026-09-13', 37, '2026-09-14'],
+      ['RS-PRU1-260914', '2026-09-14', '2026-09-20', 38, null],
+    ]),
+    'semanales: los dos enviados de su obra, ni el eliminado ni el borrador; enviado el 14 en Panamá',
+    s1.ok ? s1.filas : falla(s1),
+  );
+  const s2 = await consultarBase(
+    ingeniero,
+    'SELECT texto, planeada_en, evaluada_en, semana_inicio, estado, cantidad, porcentaje, motivo FROM semanal_metas ORDER BY meta_id',
+  );
+  exigir(
+    s2.ok && JSON.stringify(s2.filas) === JSON.stringify([
+      ['Vaciar losa', 'RS-PRU1-260907', 'RS-PRU1-260914', '2026-09-14', 'completada', 20, null, null],
+      ['Terminar tubería', 'RS-PRU1-260907', 'RS-PRU1-260914', '2026-09-14', 'no_completada', null, null, 'Faltó material'],
+      ['Limpieza', null, 'RS-PRU1-260914', '2026-09-14', 'parcial', null, 50, null],
+      ['Pintar fachada', 'RS-PRU1-260914', null, '2026-09-21', null, null, null, null],
+    ]),
+    'metas: con la semana en que tocaban; la marcada en el borrador sale sin marcar; nada del eliminado ni de la otra obra',
+    s2.ok ? s2.filas : falla(s2),
+  );
+  const s3 = await consultarBase(ingeniero, 'SELECT numero, problema, pendiente FROM semanal_problemas ORDER BY numero, problema');
+  exigir(
+    s3.ok && JSON.stringify(s3.filas) === JSON.stringify([
+      ['RS-PRU1-260907', 'Falta de tubería', true],
+      ['RS-PRU1-260907', 'Lluvia', false],
+      ['RS-PRU1-260914', 'Falta de cemento', true],
+    ]),
+    'problemas: solo los de sus semanales enviados',
+    s3.ok ? s3.filas : falla(s3),
+  );
+  const s4 = await consultarBase(ingeniero, 'SELECT numero, texto FROM semanal_decisiones');
+  exigir(
+    s4.ok && JSON.stringify(s4.filas) === JSON.stringify([['RS-PRU1-260907', 'Aprobar el cambio de tubería']]),
+    'decisiones: ni la del borrador ni la de la otra obra',
+    s4.ok ? s4.filas : falla(s4),
+  );
+  const s5 = await consultarBase(ingeniero, 'SELECT * FROM semanales LIMIT 1');
+  exigir(
+    s5.ok && !s5.columnas.includes('datos') && s5.columnas.includes('resumen'),
+    'los semanales llegan sin sus cifras guardadas (con los pagos): esas se cuentan en los diarios',
+    s5.ok ? s5.columnas : falla(s5),
+  );
+  const s6 = await consultarBase(admin, 'SELECT numero FROM semanales ORDER BY numero');
+  exigir(
+    s6.ok && JSON.stringify(s6.filas) === JSON.stringify([['RS-PRU1-260907'], ['RS-PRU1-260914'], ['RS-PRU2-260914']]),
+    'el admin ve los semanales de las dos obras, y tampoco ve el borrador',
+    s6.ok ? s6.filas : falla(s6),
+  );
+  const s7 = await consultarBase(ingeniero, "SELECT texto FROM semanal_metas WHERE true OR obra = 'PRUEBAS2'");
+  exigir(
+    s7.ok && s7.filas.length === 4 && !JSON.stringify(s7.filas).includes('otra obra'),
+    'el ingeniero no ve las metas de la otra obra, aunque la consulta las pida',
+    s7.ok ? s7.filas : falla(s7),
+  );
+
   // ── quien ve que ────────────────────────────────────────────────────────
   const todas = 'SELECT DISTINCT obra FROM reportes ORDER BY obra';
   const delAdmin = await consultarBase(admin, todas);
@@ -147,6 +267,7 @@ const main = async () => {
     ['SELECT * FROM public.solicitudes_pago', 'no lee los pagos'],
     ['SELECT numero_cuenta FROM public.solicitudes_pago', 'no lee datos de banco'],
     ['SELECT * FROM proyecto_reportes', 'no lee las tablas del sistema, ni siquiera las de reportes'],
+    ['SELECT datos FROM public.proyecto_reportes_semanales', 'ni la de los semanales, con sus cifras de pagos'],
     ['SELECT * FROM asistente.acceso', 'no ve quién ve qué'],
     ["SELECT set_config('role', 'postgres', false)", 'no se puede cambiar de cuenta'],
     ['SELECT 1) AS x; DELETE FROM asistente.acceso; SELECT (1', 'una segunda orden detrás de un «;» no corre'],
@@ -175,9 +296,11 @@ const main = async () => {
   // ── la herramienta ──────────────────────────────────────────────────────
   const tablas = await describirVistas();
   exigir(
-    ['obras:', 'reportes:', 'reporte_personal:', 'reporte_maquinas:', 'reporte_entregas:', 'reporte_trabajos:', 'reporte_fotos:']
-      .every((t) => tablas.includes(t)) && tablas.includes('dias-persona') && !tablas.includes('acceso'),
-    'el asistente recibe las siete tablas con su explicación, sacada de la base, y no la de quién ve qué',
+    [
+      'obras:', 'reportes:', 'reporte_personal:', 'reporte_maquinas:', 'reporte_entregas:', 'reporte_trabajos:',
+      'reporte_fotos:', 'semanales:', 'semanal_metas:', 'semanal_problemas:', 'semanal_decisiones:',
+    ].every((t) => tablas.includes(t)) && tablas.includes('dias-persona') && tablas.includes('semana ISO') && !tablas.includes('acceso'),
+    'el asistente recibe las once tablas con su explicación, sacada de la base, y no la de quién ve qué',
     tablas.slice(0, 300),
   );
   const consultar = (await herramientas()).find((h) => h.name === 'consultar_reportes');

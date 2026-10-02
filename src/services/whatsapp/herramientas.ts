@@ -34,6 +34,7 @@ import { armarBorrador, enviarReporte, nombreArchivo, pdfDelBorrador, pdfFinal }
 import { ESTADOS, buscarSolicitudes, quienEs, verSolicitud, type Filtros } from './solicitudes.js';
 import { leerNombrePropio } from '../consorcioProyecto.js';
 import { buscarReportes, verReporte, type FiltrosReportes } from './reportes.js';
+import { verSemanal } from './semanales.js';
 import { TOPE_FILAS, consultarBase, describirVistas, guardarConsulta } from './consultas.js';
 import { sendEmail } from '../emailService.js';
 import {
@@ -546,6 +547,26 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'ver_semanal',
+    description:
+      'Un reporte SEMANAL enviado, entero, como salio: el resumen, las metas de la semana y como ' +
+      'quedaron, el plan de la semana siguiente, los problemas con su accion, las decisiones que ' +
+      'pide y las cifras de la semana (gente, maquinas, horas perdidas, lo que llego). Por su ' +
+      'numero («RS-PBR-260921»), o por la obra y la semana: una fecha de esa semana, o su numero ' +
+      'en el año si la dijo asi («la semana 39»). Con la obra sola, el ultimo que salio.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        numero: { type: 'string' },
+        proyecto_id: { type: 'integer' },
+        fecha: { type: 'string', description: 'AAAA-MM-DD, cualquier dia de esa semana' },
+        semana_iso: { type: 'integer', description: 'El numero de la semana en el año, solo si la dijo asi' },
+        anio: { type: 'integer', description: 'Solo si dijo el año; si no, el de hoy' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'ver_solicitud',
     description:
       'Una solicitud de pago entera por su numero (por ejemplo «STAISA-137», o solo «137»): ' +
@@ -570,9 +591,10 @@ function herramientaConsulta(tablas: string): Anthropic.Tool {
     name: 'consultar_reportes',
     description:
       'Le preguntas a la base escribiendo UNA consulta SELECT de PostgreSQL sobre las tablas de ' +
-      'abajo: los reportes diarios ENVIADOS de las obras que esta persona puede ver (las demas no ' +
-      'existen aqui). Es lo que se usa para TODO lo que sea contar, sumar o comparar: dias, ' +
-      'dias-persona por puesto, horas de maquina, horas perdidas, dias de lluvia, lo que llego. ' +
+      'abajo: los reportes diarios y semanales ENVIADOS de las obras que esta persona puede ver ' +
+      '(las demas no existen aqui). Es lo que se usa para TODO lo que sea contar, sumar o ' +
+      'comparar: dias, dias-persona por puesto, horas de maquina, horas perdidas, dias de lluvia, ' +
+      'lo que llego, metas cumplidas o no, problemas pendientes. ' +
       'La base hace la cuenta: pide el resultado ya calculado (SUM, COUNT, GROUP BY) y no traigas ' +
       `filas sueltas para sumarlas tu. Llegan como mucho ${TOPE_FILAS} filas. Las fechas son ` +
       'AAAA-MM-DD. Para buscar en lo escrito sin que importen tildes ni mayusculas: ' +
@@ -1136,12 +1158,30 @@ export async function ejecutarHerramienta(
   }
 
   if (nombre === 'ver_reporte') {
-    const r = await verReporte(ctx.usuario, {
+    const numero = typeof input.numero === 'string' ? input.numero : undefined;
+    // Un numero de semanal (RS-…) es de ver_semanal: lo decide el sistema, no
+    // el modelo.
+    const r = numero !== undefined && /^\s*RS-/i.test(numero)
+      ? await verSemanal(ctx.usuario, { numero })
+      : await verReporte(ctx.usuario, {
+          numero,
+          proyecto_id: input.proyecto_id === undefined ? undefined : Number(input.proyecto_id),
+          fecha: typeof input.fecha === 'string' ? input.fecha : undefined,
+        });
+    return r.ok ? { ok: true, contenido: r.contenido } : { ok: false, contenido: { error: r.error } };
+  }
+
+  if (nombre === 'ver_semanal') {
+    const r = await verSemanal(ctx.usuario, {
       numero: typeof input.numero === 'string' ? input.numero : undefined,
       proyecto_id: input.proyecto_id === undefined ? undefined : Number(input.proyecto_id),
       fecha: typeof input.fecha === 'string' ? input.fecha : undefined,
+      semana_iso: input.semana_iso === undefined ? undefined : Number(input.semana_iso),
+      anio: input.anio === undefined ? undefined : Number(input.anio),
     });
-    return r.ok ? { ok: true, contenido: r.contenido } : { ok: false, contenido: { error: r.error } };
+    return r.ok
+      ? { ok: true, contenido: r.contenido }
+      : { ok: false, contenido: { error: r.error, ...(r.extra ? { detalle: r.extra } : {}) } };
   }
 
   if (nombre === 'mandar_tabla') {

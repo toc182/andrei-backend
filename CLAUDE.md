@@ -42,11 +42,13 @@ data. A test that needs more starting data adds it to `semilla.sql`, never to an
 test. Files land in the `andrei-pruebas` R2 bucket under the seeded projects' short
 names and get swept at the end of the run.
 
-`scripts/whatsapp-hoja.ts` is the WhatsApp assistant's answer sheet: 21 real
-questions (scripts/guiones/hoja-respuestas.json, all about September 2026) put
-to the real model against a read-only copy of production that it creates and
-drops. It COSTS MONEY (~$1): it only runs with `--si-gastar`, and only after
-telling Ivan the cost. Run it when the way the assistant answers changes.
+`scripts/whatsapp-hoja.ts` is the WhatsApp assistant's answer sheet: 26 real
+questions (scripts/guiones/hoja-respuestas.json, about September 2026 and its
+weekly reports) put to the real model against a read-only copy of production
+that it creates and drops. It COSTS MONEY (~$1.50): it only runs with
+`--si-gastar`, and only when Ivan asks for it (2026-10-02: «ya deja de estar
+gastando plata»). Before asking the model anything it checks that the assistant's
+database account can read its views in the copy.
 
 ## Middleware pattern
 
@@ -142,15 +144,20 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
   solicitudes.ts is the ONLY place WhatsApp reads payment requests (questions
   only, nothing is approved or paid): same visibility as the screen, never bank
   data, and every count and total comes from the database, not the model.
-  consultas.ts: questions that COUNT anything in the sent daily reports. The
-  model writes its own SELECT (tool consultar_reportes); it runs with the
-  database account asistente_lector, which can only read the views of schema
-  `asistente` (migration 179), each filtered by asistente.acceso — the
+  consultas.ts: questions that COUNT anything in the sent daily and weekly
+  reports. The model writes its own SELECT (tool consultar_reportes); it runs
+  with the database account asistente_lector, which can only read the views of
+  schema `asistente` (migrations 179 daily, 180 weekly), each filtered by
+  asistente.acceso — the
   person's projects, written by the system per query and keyed by the reading
   connection's pg_backend_pid. Every query is saved in whatsapp_consultas. To
   let the assistant count another part of the system, add views there with
   COMMENT ON: it reads their descriptions from the database. reportes.ts only
-  searches text and lists reports; it does not count. asistente.ts
+  searches text and lists reports; it does not count. semanales.ts gives one
+  weekly report whole (ver_semanal), as sent, WITHOUT its payments section —
+  money is only talked about through solicitudes. People, machine hours and
+  lost hours of a week are counted from the daily views, never from the
+  weekly's frozen `datos`: one way to count. asistente.ts
   (cifrasSinFuente) sends an answer back once if it carries a number that is
   not in what the tools returned.
   Keys are optional: without them WhatsApp simply does not exist for this

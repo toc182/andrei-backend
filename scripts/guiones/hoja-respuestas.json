@@ -126,5 +126,36 @@
     "pregunta": "¿Cuándo llegaron las primeras tuberías de 12 a Playa Blanca?",
     "debe": ["16"],
     "nota": "el 16/09 (y las 21 que faltaban, el 17/09): la búsqueda por palabra"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántas metas cumplió Playa Blanca la semana del 21 de septiembre y cuáles fueron?",
+    "debe": ["(?<![\\d.,-])3(?!\\d)|\\btres\\b", 13, "p[eé]ndulo"],
+    "nota": "RS-PBR-260921: las 3 completadas, las tres agregadas fuera del plan: 13 zapatas del Área Interactiva, 6 zapatas PE-3 del Área Péndulo y 12 pedestales PE-3"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Qué problemas dejó pendientes el semanal de Santa Isabel de la semana 39?",
+    "debe": ["cu[ñn]as", "martillo|roc", "cilindro|balde|da[ñn]"],
+    "noDebe": ["combustible"],
+    "nota": "RS-STAISA-260921: 3 de 7 pendientes: las 2 cuñas de la Línea de Impulsión 2, la retro de RODSA dañada (cilindro del balde) y el estrato rocoso que espera el martillo hidráulico. El combustible del 21 no quedó pendiente"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Se cumplió el objetivo de la semana del 14 de septiembre en Playa Blanca?",
+    "debe": ["\\bno\\b", 13, "lluvi"],
+    "nota": "RS-PBR-260914, en el resumen: el vaciado de las 13 zapatas no se logró; el intento se canceló por lluvia"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Qué metas se planearon en Playa Blanca para la semana del 28 de septiembre?",
+    "debe": [13, 12, 10, "viga", "tuber"],
+    "nota": "las 5 del plan de RS-PBR-260921: 13 pedestales del Área Interactiva, 6 zapatas PE-3 y 6 pedestales PE-3 del Área Péndulo, 12 ud de acero de viga sísmica y 10 tramos de tubería de 12\" de los cárcamos 4 y 3"
+  },
+  {
+    "quien": "Ivan Plotnikoff",
+    "pregunta": "¿Cuántos días-persona hubo en Santa Isabel la semana del 21 de septiembre?",
+    "debe": [99],
+    "nota": "16 + 15 + 19 + 16 + 16 + 17, de los diarios del 21 al 26: lo mismo que dice por día el semanal RS-STAISA-260921"
   }
 ]
