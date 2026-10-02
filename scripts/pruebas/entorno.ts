@@ -360,9 +360,12 @@ export async function limpiarAlmacen(): Promise<number> {
     },
   });
   let borrados = 0;
-  // Los proyectos de la semilla, y además lo que entra por WhatsApp, que no
-  // vive bajo ningún proyecto porque al llegar todavía no se sabe de cuál es.
-  for (const prefijo of [...PROYECTOS_SEMILLA, 'whatsapp']) {
+  // Los proyectos de la semilla, lo que entra por WhatsApp —que no vive bajo
+  // ningún proyecto porque al llegar todavía no se sabe de cuál es— y los
+  // adjuntos de las órdenes de compra, que se guardan por número de orden
+  // (ordenes-compra/OC-PRU3-001/...) y no por proyecto: el proveedor y el
+  // número son lo que alguien busca cuando va a buscar ese papel.
+  for (const prefijo of [...PROYECTOS_SEMILLA, 'whatsapp', 'ordenes-compra']) {
     let token: string | undefined;
     do {
       const r = await s3.send(

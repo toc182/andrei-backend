@@ -39,6 +39,8 @@ export interface UserPermissions {
   requisiciones_ver: boolean;
   clientes_ver: boolean;
   costos_ver: boolean;
+  ordenes_ver: boolean;
+  ordenes_entregas: boolean;
 }
 
 /**

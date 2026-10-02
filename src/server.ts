@@ -49,6 +49,7 @@ import asignacionesRoutes from './routes/asignaciones.js';
 import registroUsoRoutes from './routes/registro-uso.js';
 
 import requisicionesRoutes from './routes/requisiciones.js';
+import ordenesCompraRoutes from './routes/ordenesCompra.js';
 import projectMembersRoutes from './routes/projectMembers.js';
 import externalContactsRoutes from './routes/externalContacts.js';
 import projectTodosRoutes from './routes/projectTodos.js';
@@ -132,6 +133,15 @@ app.use('/api/asignaciones', asignacionesRoutes);
 app.use('/api/registro-uso', registroUsoRoutes);
 
 app.use('/api/requisiciones', requisicionesRoutes);
+// El PDF se abre con window.open, que no manda cabeceras: el token viaja en la
+// direccion, igual que en las solicitudes de pago.
+app.use('/api/ordenes-compra/:id/pdf', (req, res, next) => {
+  if (!req.headers['authorization'] && req.query.token) {
+    req.headers['authorization'] = `Bearer ${req.query.token}`;
+  }
+  next();
+});
+app.use('/api/ordenes-compra', ordenesCompraRoutes);
 app.use('/api/project-members', projectMembersRoutes);
 app.use('/api/external-contacts', externalContactsRoutes);
 app.use('/api/project-todos', projectTodosRoutes);

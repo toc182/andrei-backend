@@ -3331,8 +3331,10 @@ router.post(
       userResult.rows[0].password,
     );
     if (!isValidPassword) {
+      // 403 y no 401: la pantalla toma cualquier 401 como sesión vencida y
+      // sacaba a la persona del sistema por equivocarse de contraseña.
       res
-        .status(401)
+        .status(403)
         .json({ success: false, message: 'Contraseña incorrecta' });
       return;
     }
@@ -3472,8 +3474,10 @@ router.post(
         userResult.rows[0].password,
       );
       if (!isValidPassword) {
+        // 403 y no 401: la pantalla toma cualquier 401 como sesión vencida y
+        // sacaba a la persona del sistema por equivocarse de contraseña.
         res
-          .status(401)
+          .status(403)
           .json({ success: false, message: 'Contraseña incorrecta' });
         return;
       }

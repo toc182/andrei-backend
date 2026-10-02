@@ -1,0 +1,12 @@
+-- 178_orden_compra_descripcion.sql
+--
+-- Una linea que diga de que es la compra.
+--
+-- Pedido por Ivan el 2026-10-01, mirando la lista llena por primera vez: con
+-- ocho ordenes en pantalla, el proveedor y el monto no alcanzan para saber cual
+-- es cual. «Acero para las columnas del bloque B» se lee de un vistazo; abrir
+-- la orden para leer sus renglones, no.
+--
+-- Es corta a proposito: cabe en una celda de la tabla sin romperla. El detalle
+-- de lo que se compro sigue estando en los renglones, que es donde vive.
+ALTER TABLE ordenes_compra ADD COLUMN IF NOT EXISTS descripcion VARCHAR(160);

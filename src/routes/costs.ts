@@ -214,6 +214,15 @@ router.post(
 //                  que iba a costar. null si el proyecto no tiene ninguno.
 //   gastado     -> las solicitudes de pago ya pagadas. Las cajas menudas no se
 //                  cuentan aparte: terminan pasando por solicitudes.
+//   porPagar    -> lo que YA LLEGO de las ordenes de compra y todavia no se ha
+//                  pagado. Es costo del proyecto desde que entra a la obra, no
+//                  desde que sale la plata: una orden a 90 dias dejaria el mes
+//                  mas caro viendose como el mas barato.
+//
+// El costo hasta hoy es gastado + porPagar, y no hay doble conteo: en cuanto la
+// solicitud de esa entrega se paga, el monto se mueve de porPagar a gastado.
+// Lo que falta por RETIRAR de una orden no esta aqui — no se debe, y Ivan pidio
+// que viva solo dentro de la orden (2026-09-30).
 //
 // Una solicitud cuenta como gastada en los estados 'pagada' y 'facturada'
 // (facturada viene DESPUES de pagada). 'devolucion' es una plata que el
@@ -450,6 +459,24 @@ router.get(
 
     const gastado = categorias.reduce((s, c) => s + c.monto, 0) + numero(sinCat?.monto);
 
+    const recibidoSinPagar = await query<{ por_pagar: string }>(
+      `SELECT COALESCE(SUM(
+                e.monto_total - COALESCE((
+                  SELECT SUM(spe.monto)
+                    FROM solicitud_pago_entregas spe
+                    JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
+                   WHERE spe.entrega_id = e.id AND sp.activo = true
+                     AND sp.estado IN ('pagada', 'facturada')
+                ), 0)
+              ), 0) AS por_pagar
+         FROM orden_compra_entregas e
+         JOIN ordenes_compra o ON o.id = e.orden_compra_id
+        WHERE o.proyecto_id = $1 AND o.activo = true AND e.activo = true
+          AND o.estado <> 'rechazada'`,
+      [proyectoId],
+    );
+    const porPagar = numero(recibidoSinPagar.rows[0].por_pagar);
+
     const filasComparativo: ComparativoFilaWire[] = comparativo.rows.map((f) => ({
       rowUid: f.row_uid,
       item: f.item,
@@ -476,6 +503,8 @@ router.get(
             }
           : null,
         gastado,
+        porPagar,
+        costoHastaHoy: Math.round((gastado + porPagar) * 100) / 100,
         categorias,
         sinClasificar: {
           monto: numero(sinCat?.monto),

@@ -50,6 +50,8 @@ const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'requisiciones_ver',
   'clientes_ver',
   'costos_ver',
+  'ordenes_ver',
+  'ordenes_entregas',
 ];
 
 const PERMISSIONS_SELECT = VALID_PERMISSIONS.join(', ');
