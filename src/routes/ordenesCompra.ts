@@ -27,7 +27,7 @@ import {
   requireRole,
 } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { deleteFile, uploadFile } from '../services/storage.js';
+import { deleteFile, getFileSignedUrl, uploadFile } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { fixFiles } from '../utils/fileEncoding.js';
 
@@ -1802,6 +1802,41 @@ router.post(
       archivo: req.file.originalname,
     });
     res.status(201).json({ success: true, data: r.rows[0] });
+  }),
+);
+
+// Los enlaces para abrir los adjuntos (la cotizacion y los documentos de las
+// entregas). Son enlaces firmados de R2 que caducan solos, igual que los de las
+// solicitudes de pago: el archivo no pasa por este servidor.
+router.get(
+  '/:id/adjuntos/urls',
+  authenticateToken,
+  checkPermission('ordenes_ver'),
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
+    if (erroresDeValidacion(req, res)) return;
+    const { id } = req.params;
+    const orden = await traerOrden(id);
+    if (!orden) {
+      res.status(404).json({ success: false, error: 'Orden no encontrada' });
+      return;
+    }
+    if (!(await puedeElProyecto(req, orden.proyecto_id))) {
+      res.status(403).json({ success: false, error: 'Sin acceso a esa orden' });
+      return;
+    }
+    const filas = await query<{ id: number; r2_key: string; tipo_mime: string }>(
+      'SELECT id, r2_key, tipo_mime FROM orden_compra_adjuntos WHERE orden_compra_id = $1',
+      [id],
+    );
+    const adjuntos = await Promise.all(
+      filas.rows.map(async (f) => ({
+        id: f.id,
+        url: await getFileSignedUrl(f.r2_key),
+        tipo_mime: f.tipo_mime,
+      })),
+    );
+    res.json({ success: true, adjuntos });
   }),
 );
 

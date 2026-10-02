@@ -595,6 +595,24 @@ const main = async () => {
     conAdjuntos.entregas.find((x) => x.id === e1.cuerpo.data.id)?.adjuntos?.length === 1,
     'y la entrega, su vale',
   );
+
+  // Abrirlos: sin estos enlaces los adjuntos se guardaban pero nadie podia
+  // verlos (Ivan, 2026-10-02).
+  const enlaces = await pedir('GET', `/ordenes-compra/${id}/adjuntos/urls`);
+  c(
+    enlaces.estado === 200 && enlaces.cuerpo?.adjuntos?.length === 2,
+    `los dos adjuntos traen su enlace (dio ${enlaces.estado}, ${enlaces.cuerpo?.adjuntos?.length})`,
+  );
+  const abierto = await fetch(enlaces.cuerpo.adjuntos[0].url);
+  c(
+    abierto.ok && (await abierto.text()).startsWith('%PDF'),
+    'y el enlace abre el archivo de verdad',
+  );
+  c(
+    (await pedir('GET', `/ordenes-compra/${id}/adjuntos/urls`, undefined, firmar(sinLlaves)))
+      .estado === 403,
+    'quien no tiene acceso al proyecto no recibe enlaces',
+  );
   c(
     (await pedir('DELETE', `/ordenes-compra/${id}/adjuntos/${cotizacion.cuerpo.data.id}`)).estado === 200,
     'y un adjunto se puede quitar',
