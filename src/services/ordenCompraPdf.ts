@@ -29,14 +29,14 @@ const MARGEN = 40;
 const ANCHO = 612 - MARGEN * 2; // 532
 const FONDO_PAGINA = 792 - MARGEN;
 
-/** Las seis columnas del modelo, sumando 532. */
-const COLS = [46, 44, 58, 214, 80, 90];
-const CABECERAS = ['Cant.', 'Unidad', 'Código', 'Descripción del producto o servicio', 'P. Unit.', 'P. Total'];
+/** Las cinco columnas, sumando 532. El modelo de Excel traía también el código
+ *  del producto; Ivan lo quitó el 2026-10-02: quien lo quiera ve la cotización. */
+const COLS = [46, 44, 272, 80, 90];
+const CABECERAS = ['Cant.', 'Unidad', 'Descripción del producto o servicio', 'P. Unit.', 'P. Total'];
 
 export interface OrdenPdfItem {
   cantidad: number | string;
   unidad: string;
-  codigo: string | null;
   descripcion: string;
   precio_unitario: number | string;
   precio_total: number | string;
@@ -181,7 +181,7 @@ export async function generarOrdenCompraPDF(data: OrdenPdfInput): Promise<Buffer
       doc.font('Helvetica-Bold').fontSize(7).fillColor(TINTA);
       let x = MARGEN;
       CABECERAS.forEach((etq, i) => {
-        const alineado = i === 0 || i >= 4 ? 'right' : 'left';
+        const alineado = i === 0 || i >= 3 ? 'right' : 'left';
         doc.text(etq, x + 4, enY + 5, { width: COLS[i] - 8, align: alineado });
         x += COLS[i];
       });
@@ -195,13 +195,12 @@ export async function generarOrdenCompraPDF(data: OrdenPdfInput): Promise<Buffer
       const textos = [
         cantidad(it.cantidad),
         it.unidad,
-        it.codigo ?? '',
         it.descripcion,
         dinero(it.precio_unitario),
         dinero(it.precio_total),
       ];
       // La descripcion es la que puede envolver: de ella sale el alto de la fila.
-      const altoDesc = doc.heightOfString(textos[3], { width: COLS[3] - 8 });
+      const altoDesc = doc.heightOfString(textos[2], { width: COLS[2] - 8 });
       const alto = Math.max(18, altoDesc + 8);
 
       if (y + alto > FONDO_PAGINA - 60) {
@@ -214,10 +213,10 @@ export async function generarOrdenCompraPDF(data: OrdenPdfInput): Promise<Buffer
       let x = MARGEN;
       textos.forEach((t, i) => {
         if (i > 0) doc.moveTo(x, y).lineTo(x, y + alto).lineWidth(0.5).strokeColor('#cbd5e1').stroke();
-        doc.fillColor(i === 2 ? GRIS : TINTA);
+        doc.fillColor(TINTA);
         doc.text(t, x + 4, y + 4, {
           width: COLS[i] - 8,
-          align: i === 0 || i >= 4 ? 'right' : 'left',
+          align: i === 0 || i >= 3 ? 'right' : 'left',
         });
         x += COLS[i];
       });
@@ -226,7 +225,7 @@ export async function generarOrdenCompraPDF(data: OrdenPdfInput): Promise<Buffer
 
     // ------------------------------------------------------------- totales
     const anchoEtq = 90;
-    const anchoVal = COLS[5];
+    const anchoVal = COLS[4];
     const xEtq = MARGEN + ANCHO - anchoVal - anchoEtq;
     const fila = (etq: string, valor: string, fuerte = false) => {
       if (y + 18 > FONDO_PAGINA - 40) {

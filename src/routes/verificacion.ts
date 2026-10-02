@@ -105,22 +105,11 @@ router.get(
                 COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
                 CASE
                   WHEN o.estado <> 'enviada' THEN o.estado
-                  WHEN NOT EXISTS (
+                  WHEN EXISTS (
                     SELECT 1 FROM orden_compra_entregas e
                      WHERE e.orden_compra_id = o.id AND e.activo = true
-                  ) THEN 'enviada'
-                  WHEN NOT EXISTS (
-                    SELECT 1 FROM orden_compra_items i
-                     WHERE i.orden_compra_id = o.id
-                       AND i.cantidad > COALESCE((
-                         SELECT SUM(ei.cantidad)
-                           FROM orden_compra_entrega_items ei
-                           JOIN orden_compra_entregas e2
-                             ON e2.id = ei.entrega_id AND e2.activo = true
-                          WHERE ei.item_id = i.id
-                       ), 0)
                   ) THEN 'recibida'
-                  ELSE 'entrega_parcial'
+                  ELSE 'enviada'
                 END AS estado
            FROM ordenes_compra o
            LEFT JOIN proyectos p ON p.id = o.proyecto_id

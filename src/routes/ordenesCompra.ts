@@ -4,14 +4,15 @@
  *
  * Lo que manda en este archivo:
  *
- *   * SE PAGA LO QUE SE VA RECIBIENDO. El monto de la orden es lo acordado con
- *     el proveedor; la deuda es la suma de las ENTREGAS registradas. Lo que
- *     falta por retirar no se debe y no cuenta como costo.
- *   * Cada entrega lleva su propio vencimiento (su fecha + el termino de ese
- *     momento) y su propio ITBMS. Un pago se amarra a entregas concretas.
- *   * 'entrega_parcial' y 'recibida' NO se guardan: se calculan de las
- *     entregas al leer (ESTADO_CALCULADO). Asi no hay dos verdades que se
- *     puedan separar.
+ *   * LA ORDEN LLEGA COMPLETA, EN UN SOLO PASO (Ivan, 2026-10-02: las
+ *     entregas parciales son casos raros y se quitaron; un proveedor que
+ *     despacha por partes lleva una orden por despacho). Hasta que se marca
+ *     como recibida no se debe nada; al marcarla, se debe completa y desde ese
+ *     dia corre el termino de pago.
+ *   * La recepcion se guarda como UNA entrega con todos los renglones: congela
+ *     el vencimiento y los montos de ese dia, y el pago se amarra a ella.
+ *   * 'recibida' NO se guarda: se calcula de la entrega al leer
+ *     (ESTADO_CALCULADO). Asi no hay dos verdades que se puedan separar.
  *   * El sistema no le escribe al proveedor. Martina baja el PDF, lo manda y
  *     marca la orden como enviada.
  */
@@ -79,26 +80,25 @@ interface ItemEntrada {
 }
 
 /**
- * El estado que ve la pantalla. Mientras la orden esta 'enviada', lo que manda
- * es lo que llego: nada -> enviada, todo -> recibida, algo -> entrega_parcial.
- * En cualquier otro estado, el guardado es el que vale.
+ * El estado que ve la pantalla. Mientras la orden esta 'enviada', manda si ya
+ * se recibio: sin recepcion -> enviada, con ella -> recibida. En cualquier otro
+ * estado, el guardado es el que vale.
  */
 const ESTADO_CALCULADO = `
   CASE
     WHEN o.estado <> 'enviada' THEN o.estado
     WHEN COALESCE(m.recibido, 0) = 0 THEN 'enviada'
-    WHEN NOT EXISTS (
-      SELECT 1 FROM orden_compra_items i
-      WHERE i.orden_compra_id = o.id
-        AND i.cantidad > COALESCE((
-          SELECT SUM(ei.cantidad)
-          FROM orden_compra_entrega_items ei
-          JOIN orden_compra_entregas e2 ON e2.id = ei.entrega_id AND e2.activo = true
-          WHERE ei.item_id = i.id
-        ), 0)
-    ) THEN 'recibida'
-    ELSE 'entrega_parcial'
+    ELSE 'recibida'
   END`;
+
+/** Si la orden ya se marco como recibida. */
+async function yaRecibida(ordenId: string | number): Promise<boolean> {
+  const r = await query(
+    'SELECT 1 FROM orden_compra_entregas WHERE orden_compra_id = $1 AND activo = true LIMIT 1',
+    [ordenId],
+  );
+  return r.rows.length > 0;
+}
 
 /**
  * Los tres numeros de dinero de una orden, todos sumados y ninguno guardado:
@@ -385,7 +385,6 @@ router.get(
                   WHEN 'pendiente'       THEN 1
                   WHEN 'por_enviar'      THEN 2
                   WHEN 'enviada'         THEN 3
-                  WHEN 'entrega_parcial' THEN 4
                   WHEN 'recibida'        THEN 5
                   WHEN 'cerrada'         THEN 6
                   WHEN 'rechazada'       THEN 7
@@ -440,7 +439,6 @@ router.get(
               COALESCE(m.pagado, 0) AS pagado,
               (COALESCE(m.recibido, 0) - COALESCE(m.pagado, 0)) AS por_pagar,
               (COALESCE(m.recibido, 0) - COALESCE(m.reclamado, 0)) AS disponible_para_activar,
-              (o.monto_total - COALESCE(m.recibido, 0)) AS falta_por_retirar,
               v.vence
          FROM ordenes_compra o
          LEFT JOIN proyectos p ON p.id = o.proyecto_id
@@ -465,14 +463,7 @@ router.get(
     const [items, entregas, adjuntos, aprobadores, aprobaciones, cambios, pagos] =
       await Promise.all([
         query(
-          `SELECT i.*,
-                  COALESCE((
-                    SELECT SUM(ei.cantidad)
-                      FROM orden_compra_entrega_items ei
-                      JOIN orden_compra_entregas e ON e.id = ei.entrega_id AND e.activo = true
-                     WHERE ei.item_id = i.id
-                  ), 0) AS recibido_cantidad
-             FROM orden_compra_items i
+          `SELECT i.* FROM orden_compra_items i
             WHERE i.orden_compra_id = $1
             ORDER BY i.orden, i.id`,
           [id],
@@ -543,17 +534,6 @@ router.get(
         ),
       ]);
 
-    // Que renglones llego en cada entrega.
-    const entregaItems = await query(
-      `SELECT ei.*, i.descripcion, i.unidad
-         FROM orden_compra_entrega_items ei
-         JOIN orden_compra_items i ON i.id = ei.item_id
-         JOIN orden_compra_entregas e ON e.id = ei.entrega_id
-        WHERE e.orden_compra_id = $1 AND e.activo = true
-        ORDER BY ei.entrega_id, i.orden`,
-      [id],
-    );
-
     res.json({
       success: true,
       data: {
@@ -561,9 +541,6 @@ router.get(
         items: items.rows,
         entregas: entregas.rows.map((e) => ({
           ...(e as Record<string, unknown>),
-          items: entregaItems.rows.filter(
-            (ei) => (ei as { entrega_id: number }).entrega_id === (e as { id: number }).id,
-          ),
           adjuntos: adjuntos.rows.filter(
             (a) => (a as { entrega_id: number | null }).entrega_id === (e as { id: number }).id,
           ),
@@ -817,6 +794,15 @@ router.put(
       });
       return;
     }
+    // Recibida, ya se debe completa y su vencimiento quedo fijado: cambiarla
+    // dejaria la deuda diciendo una cosa y la orden otra.
+    if (await yaRecibida(id)) {
+      res.status(400).json({
+        success: false,
+        error: 'La orden ya se recibió: ya no se edita',
+      });
+      return;
+    }
 
     const yaSalio = orden.estado === 'enviada' || orden.estado === 'cerrada';
     const esAdmin = req.user!.rol === 'admin' || req.user!.rol === 'co-admin';
@@ -875,44 +861,6 @@ router.put(
           res.status(400).json({ success: false, error: 'La orden necesita al menos un renglón' });
           return;
         }
-        // Lo que ya llego de cada renglon, para no dejar la orden en negativo.
-        const recibido = await client.query<{ item_id: number; cantidad: string }>(
-          `SELECT ei.item_id, SUM(ei.cantidad) AS cantidad
-             FROM orden_compra_entrega_items ei
-             JOIN orden_compra_entregas e ON e.id = ei.entrega_id AND e.activo = true
-            WHERE e.orden_compra_id = $1
-            GROUP BY ei.item_id`,
-          [id],
-        );
-        const yaLlego = new Map(
-          recibido.rows.map((r) => [r.item_id, Number(r.cantidad)]),
-        );
-        if (yaLlego.size > 0) {
-          const conIds = items.filter(
-            (it) => typeof (it as { id?: number }).id === 'number',
-          ) as (ItemEntrada & { id: number })[];
-          const quedan = new Set(conIds.map((it) => it.id));
-          for (const [itemId, cantidad] of yaLlego) {
-            if (!quedan.has(itemId)) {
-              await client.query('ROLLBACK');
-              res.status(400).json({
-                success: false,
-                error: 'No se puede quitar un renglón del que ya se recibió material',
-              });
-              return;
-            }
-            const nuevo = conIds.find((it) => it.id === itemId)!;
-            if (Number(nuevo.cantidad ?? 0) < cantidad) {
-              await client.query('ROLLBACK');
-              res.status(400).json({
-                success: false,
-                error: `No se puede bajar un renglón por debajo de lo ya recibido (${cantidad})`,
-              });
-              return;
-            }
-          }
-        }
-
         const desc = redondear(
           Number(traeDescuento ? req.body.descuento : orden.descuento),
         );
@@ -930,35 +878,16 @@ router.put(
           return;
         }
 
-        // Los renglones se reescriben, pero los que ya tienen entregas guardan
-        // su id: orden_compra_entrega_items apunta a ellos.
-        await client.query(
-          `DELETE FROM orden_compra_items
-            WHERE orden_compra_id = $1
-              AND id NOT IN (SELECT DISTINCT ei.item_id
-                               FROM orden_compra_entrega_items ei
-                               JOIN orden_compra_entregas e ON e.id = ei.entrega_id
-                              WHERE e.orden_compra_id = $1)`,
-          [id],
-        );
-        for (const [i, r] of renglones.entries()) {
-          const conId = items[i] as { id?: number };
-          if (typeof conId.id === 'number' && yaLlego.has(conId.id)) {
-            await client.query(
-              `UPDATE orden_compra_items
-                  SET cantidad = $1, unidad = $2, codigo = $3, descripcion = $4,
-                      precio_unitario = $5, precio_total = $6, orden = $7
-                WHERE id = $8 AND orden_compra_id = $9`,
-              [r.cantidad, r.unidad, r.codigo, r.descripcion, r.precio_unitario, r.precio_total, r.orden, conId.id, id],
-            );
-          } else {
-            await client.query(
-              `INSERT INTO orden_compra_items
-                 (orden_compra_id, cantidad, unidad, codigo, descripcion, precio_unitario, precio_total, orden)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-              [id, r.cantidad, r.unidad, r.codigo, r.descripcion, r.precio_unitario, r.precio_total, r.orden],
-            );
-          }
+        // Los renglones se reescriben: una orden sin recibir no tiene ninguno
+        // del que haya llegado material.
+        await client.query('DELETE FROM orden_compra_items WHERE orden_compra_id = $1', [id]);
+        for (const r of renglones) {
+          await client.query(
+            `INSERT INTO orden_compra_items
+               (orden_compra_id, cantidad, unidad, codigo, descripcion, precio_unitario, precio_total, orden)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [id, r.cantidad, r.unidad, r.codigo, r.descripcion, r.precio_unitario, r.precio_total, r.orden],
+          );
         }
 
         if (Number(orden.subtotal) !== subtotal) {
@@ -1233,28 +1162,22 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /:id/entregas — lo que llego a la obra
+// POST /:id/recibir — llego la orden completa
 // ---------------------------------------------------------------------------
-// El documento de entrega se adjunta aparte (POST /:id/adjuntos con entrega_id),
-// porque en obra la foto del vale llega del telefono y a veces despues del
-// registro. La entrega congela su vencimiento y el precio de cada renglon.
+// Se guarda como UNA entrega con todos los renglones y los montos de la orden
+// (con su descuento): eso fija el vencimiento —fecha de llegada + termino— y es
+// a lo que despues se amarra el pago. El vale firmado se adjunta aparte
+// (POST /:id/adjuntos con entrega_id), porque en obra la foto llega del
+// telefono y a veces despues.
 router.post(
-  '/:id/entregas',
+  '/:id/recibir',
   authenticateToken,
   checkPermission('ordenes_entregas'),
-  [
-    param('id').isInt(),
-    body('fecha').notEmpty().withMessage('La fecha de la entrega es obligatoria'),
-    body('items').isArray({ min: 1 }).withMessage('Diga qué llegó'),
-  ],
+  [param('id').isInt(), body('fecha').isDate().withMessage('La fecha en que llegó es obligatoria')],
   asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
     if (erroresDeValidacion(req, res)) return;
     const { id } = req.params;
-    const { fecha, nota, items } = req.body as {
-      fecha: string;
-      nota?: string;
-      items: { item_id: number; cantidad: number | string }[];
-    };
+    const { fecha, nota } = req.body as { fecha: string; nota?: string };
 
     const orden = await traerOrden(id);
     if (!orden) {
@@ -1268,94 +1191,62 @@ router.post(
     if (orden.estado !== 'enviada') {
       res.status(400).json({
         success: false,
-        error: 'Solo una orden enviada al proveedor puede recibir entregas',
+        error: 'Solo se recibe una orden enviada al proveedor',
       });
       return;
     }
-
-    const renglones = await query<{ id: number; cantidad: string; precio_unitario: string }>(
-      'SELECT id, cantidad, precio_unitario FROM orden_compra_items WHERE orden_compra_id = $1',
-      [id],
-    );
-    const porId = new Map(renglones.rows.map((r) => [r.id, r]));
-    const recibido = await query<{ item_id: number; cantidad: string }>(
-      `SELECT ei.item_id, SUM(ei.cantidad) AS cantidad
-         FROM orden_compra_entrega_items ei
-         JOIN orden_compra_entregas e ON e.id = ei.entrega_id AND e.activo = true
-        WHERE e.orden_compra_id = $1
-        GROUP BY ei.item_id`,
-      [id],
-    );
-    const yaLlego = new Map(recibido.rows.map((r) => [r.item_id, Number(r.cantidad)]));
-
-    const lineas: { item_id: number; cantidad: number; precio_unitario: number; precio_total: number }[] = [];
-    for (const it of items) {
-      const cantidad = Number(it.cantidad);
-      if (!cantidad) continue; // un renglon que no llego en esta entrega
-      const renglon = porId.get(Number(it.item_id));
-      if (!renglon) {
-        res.status(400).json({ success: false, error: 'Un renglón no es de esta orden' });
-        return;
-      }
-      if (cantidad < 0) {
-        res.status(400).json({ success: false, error: 'La cantidad recibida no puede ser negativa' });
-        return;
-      }
-      const falta = Number(renglon.cantidad) - (yaLlego.get(renglon.id) ?? 0);
-      if (cantidad > falta) {
-        res.status(400).json({
-          success: false,
-          error: `De un renglón solo faltan ${falta} y se están recibiendo ${cantidad}`,
-        });
-        return;
-      }
-      const precio = Number(renglon.precio_unitario);
-      lineas.push({
-        item_id: renglon.id,
-        cantidad,
-        precio_unitario: precio,
-        precio_total: redondear(cantidad * precio),
-      });
-    }
-    if (lineas.length === 0) {
-      res.status(400).json({ success: false, error: 'No se recibió nada' });
-      return;
-    }
-
-    const subtotal = redondear(lineas.reduce((s, l) => s + l.precio_total, 0));
-    const itbms = redondear(subtotal * Number(orden.itbms_tasa));
-    const montoTotal = redondear(subtotal + itbms);
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Dos personas marcandola a la vez no pueden dejar dos recepciones.
+      await client.query('SELECT 1 FROM ordenes_compra WHERE id = $1 FOR UPDATE', [id]);
+      const previa = await client.query(
+        'SELECT 1 FROM orden_compra_entregas WHERE orden_compra_id = $1 AND activo = true',
+        [id],
+      );
+      if (previa.rows.length > 0) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ success: false, error: 'Esa orden ya se marcó como recibida' });
+        return;
+      }
+
       const entrega = await client.query<{ id: number; vence: string }>(
         `INSERT INTO orden_compra_entregas
            (orden_compra_id, fecha, vence, subtotal, itbms, monto_total, nota, registrada_por)
          VALUES ($1, $2::date, $2::date + $3::int, $4, $5, $6, $7, $8)
          RETURNING id, vence`,
-        [id, fecha, orden.termino_dias, subtotal, itbms, montoTotal, nota || null, req.user!.id],
+        [
+          id,
+          fecha,
+          orden.termino_dias,
+          redondear(Number(orden.subtotal) - Number(orden.descuento)),
+          orden.itbms,
+          orden.monto_total,
+          nota?.trim() || null,
+          req.user!.id,
+        ],
       );
-      for (const l of lineas) {
-        await client.query(
-          `INSERT INTO orden_compra_entrega_items
-             (entrega_id, item_id, cantidad, precio_unitario, precio_total)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [entrega.rows[0].id, l.item_id, l.cantidad, l.precio_unitario, l.precio_total],
-        );
-      }
+      await client.query(
+        `INSERT INTO orden_compra_entrega_items
+           (entrega_id, item_id, cantidad, precio_unitario, precio_total)
+         SELECT $1, i.id, i.cantidad, i.precio_unitario, i.precio_total
+           FROM orden_compra_items i
+          WHERE i.orden_compra_id = $2`,
+        [entrega.rows[0].id, id],
+      );
       await registrarAudit(
         req.user!.id,
-        'entrega',
+        'recibir',
         'orden_compra',
         Number(id),
-        { numero: orden.numero, entrega_id: entrega.rows[0].id, monto_total: montoTotal },
+        { numero: orden.numero, entrega_id: entrega.rows[0].id, monto_total: orden.monto_total },
         client,
       );
       await client.query('COMMIT');
       res.status(201).json({
         success: true,
-        data: { id: entrega.rows[0].id, vence: entrega.rows[0].vence, subtotal, itbms, monto_total: montoTotal },
+        data: { id: entrega.rows[0].id, vence: entrega.rows[0].vence, monto_total: orden.monto_total },
       });
     } catch (err) {
       await client.query('ROLLBACK');
@@ -1369,8 +1260,8 @@ router.post(
 // ---------------------------------------------------------------------------
 // POST /:id/activar-pago — nace la solicitud de pago de lo que ya llego
 // ---------------------------------------------------------------------------
-// Se paga por ENTREGA, no contra el saldo suelto de la orden: cada entrega tiene
-// su propio vencimiento y un monto suelto no sabria cual reloj esta parando.
+// El pago se amarra a la recepcion de la orden (su unica entrega), que es la
+// que tiene el vencimiento. Se puede pagar menos y dejar el resto para despues.
 router.post(
   '/:id/activar-pago',
   authenticateToken,
@@ -1393,12 +1284,10 @@ router.post(
       res.status(403).json({ success: false, error: 'Sin acceso a esa orden' });
       return;
     }
-    // Tambien se paga una orden DADA DE BAJA: lo que ya llego se sigue
-    // debiendo, y si no se pudiera activar el pago esa deuda no tendria salida.
-    if (orden.estado !== 'enviada' && orden.estado !== 'dada_de_baja') {
+    if (orden.estado !== 'enviada' || !(await yaRecibida(id))) {
       res.status(400).json({
         success: false,
-        error: 'Solo se activa un pago sobre una orden enviada con material recibido',
+        error: 'Solo se activa un pago sobre una orden ya recibida',
       });
       return;
     }
@@ -1425,7 +1314,7 @@ router.post(
       const monto = redondear(Number(e.monto));
       const disponible = porEntrega.get(Number(e.entrega_id));
       if (disponible === undefined) {
-        res.status(400).json({ success: false, error: 'Una entrega no es de esta orden' });
+        res.status(400).json({ success: false, error: 'Esa recepción no es de esta orden' });
         return;
       }
       if (monto <= 0) {
@@ -1435,7 +1324,7 @@ router.post(
       if (monto > disponible) {
         res.status(400).json({
           success: false,
-          error: `De una entrega solo quedan ${disponible.toFixed(2)} por pagar`,
+          error: `De esta orden solo quedan ${disponible.toFixed(2)} por pagar`,
         });
         return;
       }
@@ -1495,7 +1384,7 @@ router.post(
         );
       }
 
-      // Un renglon por entrega, para que la solicitud se lea sola.
+      // Un renglon que diga de que orden y de que recepcion viene.
       const detalle = await client.query<{ entrega_id: number; fecha: string }>(
         `SELECT e.id AS entrega_id, e.fecha
            FROM orden_compra_entregas e
@@ -1510,7 +1399,7 @@ router.post(
           `INSERT INTO solicitud_pago_items
              (solicitud_pago_id, cantidad, unidad, descripcion, precio_unitario, precio_total, orden)
            VALUES ($1, 1, 'entrega', $2, $3, $3, $4)`,
-          [solicitudId, `Entrega del ${new Date(d.fecha).toISOString().split('T')[0]} · ${orden.numero}`, monto, i],
+          [solicitudId, `${orden.numero} · recibida el ${new Date(d.fecha).toISOString().split('T')[0]}`, monto, i],
         );
       }
 
@@ -1536,7 +1425,7 @@ router.post(
 // ---------------------------------------------------------------------------
 // POST /:id/baja — matar la orden sin borrarla
 // ---------------------------------------------------------------------------
-// Lo que ya llego se sigue debiendo; lo que faltaba por retirar se suelta.
+// Solo antes de recibirla: recibida, ya se debe completa y no hay nada que soltar.
 router.post(
   '/:id/baja',
   authenticateToken,
@@ -1557,6 +1446,13 @@ router.post(
     }
     if (orden.estado === 'rechazada') {
       res.status(400).json({ success: false, error: 'Una orden rechazada no se da de baja' });
+      return;
+    }
+    if (orden.estado === 'cerrada' || (await yaRecibida(id))) {
+      res.status(400).json({
+        success: false,
+        error: 'La orden ya se recibió y se debe completa: no se da de baja',
+      });
       return;
     }
 
