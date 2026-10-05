@@ -153,6 +153,11 @@ router.post(
           [nombre],
         );
 
+        await registrarAudit(req.user!.id, 'crear', 'usuario', result.rows[0].id, {
+          nombre: result.rows[0].nombre,
+          tipo_usuario: 'externo',
+        });
+
         res.status(201).json({
           success: true,
           message: 'Usuario externo creado exitosamente',
@@ -163,6 +168,16 @@ router.post(
 
       // Usuario interno: flujo original
       const { email, password, rol = 'usuario' } = req.body;
+
+      // Un admin lo crea solo otro admin: si no, un co-admin podria darse una
+      // cuenta de admin y saltarse lo que no le deja hacer.
+      if (rol === 'admin' && req.user?.rol !== 'admin') {
+        res.status(403).json({
+          success: false,
+          message: 'Solo un administrador puede crear otro administrador',
+        });
+        return;
+      }
 
       if (!email) {
         res.status(400).json({
@@ -208,6 +223,12 @@ router.post(
           [result.rows[0].id],
         );
       }
+
+      await registrarAudit(req.user!.id, 'crear', 'usuario', result.rows[0].id, {
+        nombre: result.rows[0].nombre,
+        email: result.rows[0].email,
+        rol: result.rows[0].rol,
+      });
 
       res.status(201).json({
         success: true,
@@ -299,6 +320,29 @@ router.put(
         res.status(404).json({
           success: false,
           message: 'Usuario no encontrado',
+        });
+        return;
+      }
+
+      // El rol cambia solo si es distinto del que tiene: la pantalla manda
+      // siempre el rol actual, tambien cuando alguien se edita a si mismo el
+      // nombre o el WhatsApp.
+      const cambiaRol = rol !== undefined && rol !== existing.rows[0].rol;
+
+      // Nadie se cambia su propio rol.
+      if (cambiaRol && req.user!.id === parseInt(id, 10)) {
+        res.status(403).json({
+          success: false,
+          message: 'No puedes cambiar tu propio rol',
+        });
+        return;
+      }
+
+      // A admin lo sube solo un admin.
+      if (cambiaRol && rol === 'admin' && req.user?.rol !== 'admin') {
+        res.status(403).json({
+          success: false,
+          message: 'Solo un administrador puede dar el rol de administrador',
         });
         return;
       }

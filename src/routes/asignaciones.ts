@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult, param } from 'express-validator';
-import { query } from '../database/config.js';
+import { query, pool } from '../database/config.js';
 import { authenticateToken, checkPermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
@@ -58,6 +58,56 @@ interface UpdateAsignacionBody extends Partial<CreateAsignacionBody> {
   ajuste_monto?: number | string;
   motivo_ajuste?: string;
 }
+
+/** Lo unico que PUT /:id puede escribir. `estado` no: ninguna pantalla lo manda. */
+const CAMPOS_EDITABLES: readonly (keyof UpdateAsignacionBody)[] = [
+  'equipo_id',
+  'cliente_id',
+  'proyecto_id',
+  'responsable_id',
+  'fecha_inicio',
+  'fecha_fin',
+  'tipo_uso',
+  'tipo_cobro',
+  'tarifa',
+  'incluye_operador',
+  'costo_operador',
+  'incluye_combustible',
+  'costo_combustible',
+  'ajuste_monto',
+  'motivo_ajuste',
+  'observaciones',
+];
+
+/** Columnas donde '' quiere decir "sin valor". */
+const VACIO_ES_NULL = new Set<string>([
+  'responsable_id',
+  'tipo_cobro',
+  'fecha_fin',
+  'tarifa',
+  'costo_operador',
+  'costo_combustible',
+  'ajuste_monto',
+]);
+
+/** Lo que se anota en asignaciones_historial cuando cambia. */
+const CAMPOS_HISTORIAL: readonly string[] = [
+  'cliente_id',
+  'proyecto_id',
+  'responsable_id',
+  'fecha_inicio',
+  'fecha_fin',
+  'tipo_uso',
+  'tipo_cobro',
+  'tarifa',
+  'incluye_operador',
+  'costo_operador',
+  'incluye_combustible',
+  'costo_combustible',
+  'ajuste_monto',
+  'motivo_ajuste',
+  'observaciones',
+];
 
 // Obtener todas las asignaciones
 router.get(
@@ -239,23 +289,63 @@ router.put(
       }
 
       const { id } = req.params;
-      const updateData = req.body;
       const userId = req.user!.id;
 
-      // Si se intenta cambiar tipo_cobro, verificar que no haya registros de uso
-      if (updateData.tipo_cobro) {
-        const registrosUso = await query<{ count: string }>(
-          'SELECT COUNT(*) as count FROM registro_uso_equipos WHERE asignacion_id = $1',
+      // Solo las columnas de la lista: los nombres de lo que llega en el cuerpo
+      // nunca se escriben en el SQL. Antes el SET se armaba con las llaves del
+      // cuerpo, y una llave inventada era SQL ajeno corriendo en la base.
+      const datos: Record<string, unknown> = {};
+      for (const campo of CAMPOS_EDITABLES) {
+        if (!Object.prototype.hasOwnProperty.call(req.body, campo)) continue;
+        const valor = (req.body as Record<string, unknown>)[campo];
+        // La pantalla manda '' por "sin valor" (sin responsable, sin tipo de
+        // cobro en una de uso propio...). En una columna de numero, fecha o con
+        // CHECK, '' revienta; se guarda null, igual que al crear.
+        datos[campo] = valor === '' && VACIO_ES_NULL.has(campo) ? null : valor;
+      }
+
+      if (Object.keys(datos).length === 0) {
+        res.status(400).json({
+          success: false,
+          message: 'No se proporcionaron campos para actualizar',
+        });
+        return;
+      }
+
+      // La comprobacion, el historial, el cambio y el registro van juntos: si
+      // algo falla no queda historial de un cambio que nunca se guardo.
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        const previousData = await client.query<AsignacionRow>(
+          'SELECT * FROM asignaciones_equipos WHERE id = $1 FOR UPDATE',
           [id],
         );
 
-        if (parseInt(registrosUso.rows[0].count) > 0) {
-          const asignacionActual = await query<{ tipo_cobro: TipoCobro }>(
-            'SELECT tipo_cobro FROM asignaciones_equipos WHERE id = $1',
+        if (previousData.rows.length === 0) {
+          await client.query('ROLLBACK');
+          res.status(404).json({
+            success: false,
+            message: 'Asignación no encontrada',
+          });
+          return;
+        }
+
+        const oldData = previousData.rows[0];
+
+        // Con registros de uso, el tipo de cobro ya no cambia: ni a otro ni a
+        // ninguno.
+        if (
+          'tipo_cobro' in datos &&
+          (datos.tipo_cobro ?? null) !== (oldData.tipo_cobro ?? null)
+        ) {
+          const registrosUso = await client.query<{ count: string }>(
+            'SELECT COUNT(*) as count FROM registro_uso_equipos WHERE asignacion_id = $1',
             [id],
           );
-
-          if (asignacionActual.rows[0].tipo_cobro !== updateData.tipo_cobro) {
+          if (parseInt(registrosUso.rows[0].count) > 0) {
+            await client.query('ROLLBACK');
             res.status(400).json({
               success: false,
               message:
@@ -264,116 +354,59 @@ router.put(
             return;
           }
         }
-      }
 
-      // Obtener datos anteriores para comparación
-      const previousData = await query<AsignacionRow>(
-        'SELECT * FROM asignaciones_equipos WHERE id = $1',
-        [id],
-      );
-
-      if (previousData.rows.length === 0) {
-        res.status(404).json({
-          success: false,
-          message: 'Asignación no encontrada',
-        });
-        return;
-      }
-
-      const oldData = previousData.rows[0];
-
-      // Campos a trackear
-      const camposTrackear = [
-        'cliente_id',
-        'proyecto_id',
-        'responsable_id',
-        'fecha_inicio',
-        'fecha_fin',
-        'tipo_uso',
-        'tipo_cobro',
-        'tarifa',
-        'incluye_operador',
-        'costo_operador',
-        'incluye_combustible',
-        'costo_combustible',
-        'ajuste_monto',
-        'motivo_ajuste',
-        'observaciones',
-      ];
-
-      // Registrar cambios en historial
-      for (const campo of camposTrackear) {
-        if (Object.prototype.hasOwnProperty.call(updateData, campo)) {
-          const valorAnterior = oldData[campo as keyof AsignacionRow];
-          const valorNuevo = updateData[campo as keyof UpdateAsignacionBody];
-
-          // Solo registrar si hay cambio real
+        // Historial: solo lo que de verdad cambia. Se compara ya limpio, para
+        // que un '' contra un null no cuente como cambio.
+        for (const campo of CAMPOS_HISTORIAL) {
+          if (!(campo in datos)) continue;
+          const valorAnterior = oldData[campo as keyof AsignacionRow] ?? null;
+          const valorNuevo = datos[campo] ?? null;
           if (String(valorAnterior) !== String(valorNuevo)) {
-            await query(
-              `
-          INSERT INTO asignaciones_historial (
-            asignacion_id, campo_modificado, valor_anterior, valor_nuevo, usuario_id
-          ) VALUES ($1, $2, $3, $4, $5)
-        `,
+            await client.query(
+              `INSERT INTO asignaciones_historial (
+                 asignacion_id, campo_modificado, valor_anterior, valor_nuevo, usuario_id
+               ) VALUES ($1, $2, $3, $4, $5)`,
               [id, campo, valorAnterior, valorNuevo, userId],
             );
           }
         }
+
+        const campos = Object.keys(datos);
+        const sets = campos.map((campo, i) => `${campo} = $${i + 2}`);
+        const result = await client.query<AsignacionRow>(
+          `UPDATE asignaciones_equipos
+              SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+        RETURNING *`,
+          [id, ...campos.map((campo) => datos[campo])],
+        );
+
+        await registrarAudit(
+          userId,
+          'editar',
+          'asignacion_equipo',
+          parseInt(id),
+          {
+            equipo_id: oldData.equipo_id,
+            proyecto_id: oldData.proyecto_id,
+            campos,
+          },
+          client,
+        );
+
+        await client.query('COMMIT');
+
+        res.json({
+          success: true,
+          message: 'Asignación actualizada exitosamente',
+          data: result.rows[0],
+        });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
-
-      // Limpiar strings vacíos en updateData antes de actualizar
-      const cleanedUpdateData: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(updateData)) {
-        if (key === 'fecha_fin' && value === '') {
-          cleanedUpdateData[key] = null;
-        } else if (
-          [
-            'tarifa',
-            'costo_operador',
-            'costo_combustible',
-            'ajuste_monto',
-          ].includes(key) &&
-          value === ''
-        ) {
-          cleanedUpdateData[key] = null;
-        } else {
-          cleanedUpdateData[key] = value;
-        }
-      }
-
-      // Actualizar asignación
-      cleanedUpdateData.updated_at = new Date();
-      const fields = Object.keys(cleanedUpdateData)
-        .map((key, index) => `${key} = $${index + 2}`)
-        .join(', ');
-      const values = [id, ...Object.values(cleanedUpdateData)];
-
-      const result = await query<AsignacionRow>(
-        `
-    UPDATE asignaciones_equipos
-    SET ${fields}
-    WHERE id = $1
-    RETURNING *
-  `,
-        values,
-      );
-
-      await registrarAudit(
-        req.user!.id,
-        'editar',
-        'asignacion_equipo',
-        parseInt(id),
-        {
-          equipo_id: oldData.equipo_id,
-          proyecto_id: oldData.proyecto_id,
-        },
-      );
-
-      res.json({
-        success: true,
-        message: 'Asignación actualizada exitosamente',
-        data: result.rows[0],
-      });
     },
   ),
 );
