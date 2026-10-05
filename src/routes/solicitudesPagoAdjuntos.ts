@@ -4,6 +4,7 @@ import multer from 'multer';
 import crypto from 'crypto';
 import { query } from '../database/config.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { soloAdjuntoVisible, soloSolicitudVisible } from '../middleware/solicitudVisible.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import {
   uploadFile,
@@ -43,6 +44,7 @@ function sanitizeFilename(name: string): string {
 router.get(
   '/adjuntos/:adjuntoId/download',
   [param('adjuntoId').isInt()],
+  soloAdjuntoVisible,
   asyncHandler(
     async (
       req: Request<{ adjuntoId: string }>,
@@ -72,6 +74,7 @@ router.get(
 router.delete(
   '/adjuntos/:adjuntoId',
   [param('adjuntoId').isInt()],
+  soloAdjuntoVisible,
   asyncHandler(
     async (
       req: Request<{ adjuntoId: string }>,
@@ -112,6 +115,7 @@ router.delete(
 router.get(
   '/:id/adjuntos/urls',
   [param('id').isInt()],
+  soloSolicitudVisible,
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;
@@ -142,6 +146,7 @@ router.get(
 router.get(
   '/:id/adjuntos',
   [param('id').isInt()],
+  soloSolicitudVisible,
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;
@@ -166,6 +171,7 @@ router.get(
 router.post(
   '/:id/adjuntos',
   [param('id').isInt()],
+  soloSolicitudVisible,
   (req: Request, res: Response, next: NextFunction) => {
     upload.array('archivos', 5)(req, res, (err) => {
       if (err instanceof multer.MulterError) {

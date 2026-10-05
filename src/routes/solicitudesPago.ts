@@ -18,6 +18,7 @@ import {
 import { generateSolicitudPDF } from '../services/pdfGenerator.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { sendEmail } from '../services/emailService.js';
+import { soloSolicitudVisible } from '../middleware/solicitudVisible.js';
 import { fixFiles } from '../utils/fileEncoding.js';
 import { PDFDocument } from 'pdf-lib';
 import bcrypt from 'bcryptjs';
@@ -551,6 +552,7 @@ router.get(
   '/:id/pdf',
   [param('id').isInt()],
   authenticateToken,
+  soloSolicitudVisible,
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const { id } = req.params;
@@ -579,6 +581,10 @@ router.get(
 
 // Todas las rutas requieren autenticación
 router.use(authenticateToken);
+
+// Una solicitud pedida por su número (/:id y todo lo que cuelga de ella) solo
+// si es de un proyecto que esta persona puede ver.
+router.use('/:id', soloSolicitudVisible);
 
 // --- Interfaces ---
 
@@ -1463,6 +1469,14 @@ router.get(
             !!req.user?.permissions?.solicitudes_editar_todas);
       }
 
+      // Si quien la abre ya la marco como revisada. La lista lo trae por fila;
+      // una solicitud abierta desde un enlace (el WhatsApp de las urgentes) no
+      // pasa por la lista y lo necesita de aqui.
+      const revisada = await query(
+        'SELECT 1 FROM solicitud_revisiones WHERE solicitud_pago_id = $1 AND user_id = $2',
+        [id, req.user?.id],
+      );
+
       res.json({
         success: true,
         solicitud: solicitud.rows[0],
@@ -1476,6 +1490,7 @@ router.get(
         reembolso,
         devolucion,
         puede_eliminar,
+        revisada: revisada.rows.length > 0,
       });
     },
   ),

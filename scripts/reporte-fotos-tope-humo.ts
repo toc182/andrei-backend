@@ -7,8 +7,8 @@
 // - desde la pantalla, la foto 41 se rechaza con un mensaje claro;
 // - fotos tan pesadas que no caben se aprietan todas en vez de dejar alguna
 //   fuera del PDF;
-// - por WhatsApp, al pasar de 40 el asistente recibe el aviso para decirlo, y
-//   al reporte entran solo las primeras 40.
+// - por WhatsApp, al pasar de 40 el mensaje del sistema lo dice (un turno de
+//   solo fotos no pasa por el modelo), y al reporte entran solo las primeras 40.
 import { API } from './pruebas/contexto.js';
 import { SECRETOS_PRUEBA } from './pruebas/entorno.js';
 import crypto from 'crypto';
@@ -136,11 +136,6 @@ const main = async () => {
       body: JSON.stringify({ base64: pequena.toString('base64'), tipoMime: 'image/jpeg' }),
     })
   ).json()) as { mediaId: string };
-  await fetch(`${META}/_prueba/ia`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify([{ content: [{ type: 'text', text: 'Van 41: la última no entra.' }], stop_reason: 'end_turn' }]),
-  });
   const crudo = Buffer.from(
     JSON.stringify({
       object: 'whatsapp_business_account',
@@ -167,16 +162,23 @@ const main = async () => {
     },
     body: crudo,
   });
-  let peticiones: { system?: { text: string }[] }[] = [];
-  for (const hasta = Date.now() + 20000; Date.now() < hasta && peticiones.length === 0; ) {
-    peticiones = (await (await fetch(`${META}/_prueba/ia/peticiones`)).json()) as never;
-    if (peticiones.length === 0) await esperar(250);
+  // Un turno de solo fotos lo contesta el sistema, sin el modelo (a6e1800,
+  // 2026-10-02): el aviso del tope va en ese mismo mensaje.
+  type Enviado = { telefono: string; tipo: string; texto: string | null };
+  let respuesta: Enviado | undefined;
+  for (const hasta = Date.now() + 20000; Date.now() < hasta && !respuesta; ) {
+    const enviados = (await (await fetch(`${META}/_prueba/enviados`)).json()) as Enviado[];
+    respuesta = enviados.find((e) => e.telefono === NUMERO && (e.texto ?? '').includes('Recibí'));
+    if (!respuesta) await esperar(250);
   }
-  const sistema = (peticiones.at(-1)?.system ?? []).map((s) => s.text).join('\n');
+  const texto = respuesta?.texto ?? '';
   exigir(
-    sistema.includes('entran solo las primeras 40') && sistema.includes('Ya van 41'),
-    'al pasar de 40 por WhatsApp, el asistente recibe el aviso para decirlo',
+    texto.includes('Ya van 41') && texto.includes('entran solo las primeras 40'),
+    'al pasar de 40 por WhatsApp, el mensaje que recibe se lo dice',
+    texto,
   );
+  const peticiones = (await (await fetch(`${META}/_prueba/ia/peticiones`)).json()) as unknown[];
+  exigir(peticiones.length === 0, 'y lo dice el sistema, sin pasar por el modelo', peticiones.length);
 
   const borrador = await armarBorrador(await conversacionViva(NUMERO, admin.id));
   const enElReporte = borrador.ok
