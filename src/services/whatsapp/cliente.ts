@@ -74,6 +74,54 @@ export async function enviarTexto(telefono: string, texto: string): Promise<stri
 }
 
 /**
+ * Manda una plantilla aprobada por Meta: lo unico que deja mandar cuando el
+ * mensaje lo empieza el sistema y no la persona (fuera de las 24 horas).
+ *
+ * `cuerpo` son los {{1}}, {{2}}… del texto, en orden, y `boton` lo que va al
+ * final de la direccion del primer boton, si es de enlace. Meta rechaza un
+ * valor con saltos de linea, tabuladores o mas de cuatro espacios seguidos:
+ * aqui se dejan en un espacio.
+ */
+export async function enviarPlantilla(
+  telefono: string,
+  plantilla: { nombre: string; idioma: string; cuerpo: string[]; boton?: string },
+): Promise<string | null> {
+  if (!estaConfigurado()) {
+    throw new Error('WhatsApp no esta configurado en este servidor');
+  }
+  const limpio = (t: string): string => t.replace(/\s+/g, ' ').trim() || '—';
+  const componentes: unknown[] = [
+    { type: 'body', parameters: plantilla.cuerpo.map((t) => ({ type: 'text', text: limpio(t) })) },
+  ];
+  if (plantilla.boton !== undefined) {
+    componentes.push({
+      type: 'button',
+      sub_type: 'url',
+      index: '0',
+      parameters: [{ type: 'text', text: limpio(plantilla.boton) }],
+    });
+  }
+  const res = await fetch(`${api()}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: telefono,
+      type: 'template',
+      template: {
+        name: plantilla.nombre,
+        language: { code: plantilla.idioma },
+        components: componentes,
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(await leerError(res));
+  const cuerpo = (await res.json().catch(() => null)) as Enviado | null;
+  return cuerpo?.messages?.[0]?.id ?? null;
+}
+
+/**
  * Manda hasta tres botones para que la persona toque en vez de escribir.
  *
  * Los titulos no pueden pasar de 20 caracteres: Meta rechaza el mensaje entero

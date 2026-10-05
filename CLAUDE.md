@@ -144,6 +144,14 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
   solicitudes.ts is the ONLY place WhatsApp reads payment requests (questions
   only, nothing is approved or paid): same visibility as the screen, never bank
   data, and every count and total comes from the database, not the model.
+  avisoUrgente.ts: the ONE message the system starts on its own. When an URGENT
+  request reaches someone's turn (created, previous approver signs —one or
+  bulk—, resent after a rejection) that person gets Meta template
+  `solicitud_urgente` with an «Aprobar» button to /solicitud/<id>; approving
+  stays in the system, with the password. Only urgent ones (Ivan, 2026-10-05:
+  «me llegaría un montón de mensajes»). One per turn: unique row in
+  whatsapp_avisos_urgentes (migration 181), the round = the request's
+  updated_at. A new template needs Meta's approval first (hours, up to a day).
   consultas.ts: questions that COUNT anything in the sent daily and weekly
   reports. The model writes its own SELECT (tool consultar_reportes); it runs
   with the database account asistente_lector, which can only read the views of

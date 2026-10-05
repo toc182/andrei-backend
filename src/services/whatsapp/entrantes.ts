@@ -12,6 +12,7 @@ import {
   descargarMedia,
   enviarBotones,
   enviarDocumento,
+  enviarPlantilla,
   enviarTexto,
   estaConfigurado,
   marcarLeidoYEscribiendo,
@@ -306,6 +307,18 @@ export async function responder(
     todo = todo && salio;
   }
   return todo;
+}
+
+/**
+ * Una plantilla de Meta —un mensaje que empieza el sistema—. `texto` es como
+ * se lee, para dejarlo escrito con los demas. Devuelve si salio.
+ */
+export async function mandarPlantilla(
+  telefono: string,
+  texto: string,
+  plantilla: Parameters<typeof enviarPlantilla>[1],
+): Promise<boolean> {
+  return mandar(telefono, 'template', texto, () => enviarPlantilla(telefono, plantilla));
 }
 
 /** Una pregunta con botones para tocar. Devuelve si salio. */

@@ -19,6 +19,7 @@ import { generateSolicitudPDF } from '../services/pdfGenerator.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { sendEmail } from '../services/emailService.js';
 import { soloSolicitudVisible } from '../middleware/solicitudVisible.js';
+import { avisarTurnoUrgente } from '../services/whatsapp/avisoUrgente.js';
 import { fixFiles } from '../utils/fileEncoding.js';
 import { PDFDocument } from 'pdf-lib';
 import bcrypt from 'bcryptjs';
@@ -1718,6 +1719,9 @@ router.post(
         solicitud: result.rows[0],
       });
 
+      // Y por WhatsApp, a quien le toca firmar (services/whatsapp/avisoUrgente.ts).
+      if (urgente) void avisarTurnoUrgente(result.rows[0].id);
+
       // Notificar al primer aprobador si es urgente (fire and forget)
       if (urgente) {
         (async () => {
@@ -2352,6 +2356,12 @@ router.patch(
         message: `Estado cambiado a ${estado}`,
         solicitud: result.rows[0],
       });
+
+      // Reenviada despues de un rechazo: vuelve a empezar la cadena, y si es
+      // urgente se le avisa por WhatsApp al primero.
+      if (estadoActual === 'rechazada' && estado === 'pendiente') {
+        void avisarTurnoUrgente(Number(id));
+      }
     },
   ),
 );
@@ -3355,6 +3365,8 @@ router.post(
     }
 
     const resultados: { id: number; aprobada: boolean; error?: string }[] = [];
+    /** Las urgentes aprobadas que todavia tienen a alguien detras en la cadena. */
+    const siguenUrgentes: number[] = [];
 
     for (const solicitudId of ids) {
       try {
@@ -3435,6 +3447,12 @@ router.post(
         );
 
         resultados.push({ id: solicitudId, aprobada: true });
+        if (
+          solicitud.rows[0].urgente &&
+          aprobacionesHechas + 1 < aprobadores.rows.length
+        ) {
+          siguenUrgentes.push(solicitudId);
+        }
       } catch (err) {
         console.error(`Error aprobando solicitud ${solicitudId}:`, err);
         resultados.push({
@@ -3453,6 +3471,9 @@ router.post(
       total: ids.length,
       resultados,
     });
+
+    // Las urgentes que siguen en la cadena: WhatsApp a quien firma ahora.
+    for (const solicitudId of siguenUrgentes) void avisarTurnoUrgente(solicitudId);
   }),
 );
 
@@ -3561,6 +3582,11 @@ router.post(
       }
 
       res.json({ success: true, message: 'Solicitud aprobada' });
+
+      // Y por WhatsApp (services/whatsapp/avisoUrgente.ts).
+      if (solicitud.rows[0].urgente && !esUltimoAprobador) {
+        void avisarTurnoUrgente(Number(id));
+      }
 
       // Notificar al siguiente aprobador si es urgente y quedan aprobadores (fire and forget)
       if (solicitud.rows[0].urgente && !esUltimoAprobador) {
