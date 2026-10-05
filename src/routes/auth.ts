@@ -21,13 +21,6 @@ interface UserRow {
   debe_cambiar_password: boolean;
 }
 
-interface RegisterBody {
-  nombre: string;
-  email: string;
-  password: string;
-  rol?: UserRole;
-}
-
 interface LoginBody {
   email: string;
   password: string;
@@ -47,74 +40,9 @@ const authLimiter = rateLimit({
   skipSuccessfulRequests: true,
 });
 
-// Registro de usuario
-router.post(
-  '/register',
-  authLimiter,
-  [
-    body('nombre')
-      .trim()
-      .isLength({ min: 2 })
-      .withMessage('Nombre debe tener al menos 2 caracteres'),
-    body('email').isEmail().withMessage('Email inválido'),
-    body('password')
-      .isLength({ min: 6 })
-      .withMessage('Password debe tener al menos 6 caracteres'),
-    body('rol')
-      .optional()
-      .isIn(['admin', 'co-admin', 'usuario'])
-      .withMessage('Rol inválido'),
-  ],
-  asyncHandler(
-    async (
-      req: Request<object, object, RegisterBody>,
-      res: Response,
-    ): Promise<void> => {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        res.status(400).json({
-          success: false,
-          message: 'Datos inválidos',
-          errors: errors.array(),
-        });
-        return;
-      }
-
-      const { nombre, email, password, rol = 'usuario' } = req.body;
-
-      // Verificar si el email ya existe
-      const existingUser = await query<{ id: number }>(
-        'SELECT id FROM users WHERE email = $1',
-        [email],
-      );
-      if (existingUser.rows.length > 0) {
-        res.status(400).json({
-          success: false,
-          message: 'El email ya está registrado',
-        });
-        return;
-      }
-
-      // Encriptar password
-      const saltRounds = 10;
-      const hashedPassword = await bcrypt.hash(password, saltRounds);
-
-      // Crear usuario
-      const result = await query<Omit<UserRow, 'password'>>(
-        'INSERT INTO users (nombre, email, password, rol) VALUES ($1, $2, $3, $4) RETURNING id, nombre, email, rol',
-        [nombre, email, hashedPassword, rol],
-      );
-
-      const newUser = result.rows[0];
-
-      res.status(201).json({
-        success: true,
-        message: 'Usuario registrado exitosamente',
-        user: newUser,
-      });
-    },
-  ),
-);
+// No hay registro publico: las cuentas se crean solo desde Administracion
+// (POST /api/users, admin o co-admin). Hubo un /register abierto que dejaba
+// a cualquiera crearse una cuenta de admin; se quito el 2026-10-05.
 
 // Login
 router.post(
