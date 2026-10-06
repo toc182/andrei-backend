@@ -18,7 +18,10 @@ import {
 import { generateSolicitudPDF } from '../services/pdfGenerator.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { sendEmail } from '../services/emailService.js';
-import { soloSolicitudVisible } from '../middleware/solicitudVisible.js';
+import {
+  puedeGestionarSolicitud,
+  soloSolicitudVisible,
+} from '../middleware/solicitudVisible.js';
 import { avisarTurnoUrgente } from '../services/whatsapp/avisoUrgente.js';
 import { fixFiles } from '../utils/fileEncoding.js';
 import { PDFDocument } from 'pdf-lib';
@@ -681,15 +684,6 @@ interface CreateBody {
 }
 
 // --- Helpers ---
-
-const TRANSICIONES: Record<string, string[]> = {
-  pendiente: ['rechazada'],
-  aprobada: ['pagada'],
-  rechazada: ['pendiente'],
-  pagada: ['facturada', 'devolucion'],
-  facturada: ['devolucion'],
-  devolucion: [],
-};
 
 function generateCodigoVerificacion(): string {
   const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -1823,18 +1817,14 @@ router.put(
         return;
       }
 
-      // Verificar permisos: admin/co-admin pasan; usuario con solicitudes_editar_todas pasa; sino verificar propiedad
-      if (
-        req.user?.rol === 'usuario' &&
-        !req.user?.permissions?.solicitudes_editar_todas
-      ) {
-        if (existing.rows[0].preparado_por !== req.user.id) {
-          res.status(403).json({
-            success: false,
-            message: 'Solo puedes editar tus propias solicitudes',
-          });
-          return;
-        }
+      // Edita quien la maneja: admin/co-admin, quien la preparo o quien tiene
+      // «Editar todas las solicitudes».
+      if (!puedeGestionarSolicitud(req.user!, existing.rows[0])) {
+        res.status(403).json({
+          success: false,
+          message: 'Solo puedes editar tus propias solicitudes',
+        });
+        return;
       }
 
       // Verificar estado de aprobaciones — editar reinicia la cadena tanto si
@@ -2282,14 +2272,20 @@ router.patch(
   ),
 );
 
-// --- PATCH /:id/estado — Cambiar estado ---
+// --- PATCH /:id/estado — Reenviar una solicitud rechazada ---
+// Es lo unico que hace: «Reenviar para aprobacion». Antes aceptaba tambien
+// 'pagada' y 'rechazada', y cualquiera con sesion podia marcar una aprobada como
+// pagada sin comprobante, o rechazar una sin ser su aprobador, sin dejar rastro.
+// Pagar va por /registrar-pago (comprobante y «Registrar pagos y facturas») y
+// rechazar por /rechazar (el turno del aprobador), como ya hacia la pantalla.
+// Reenvia quien puede editarla.
 router.patch(
   '/:id/estado',
   [
     param('id').isInt(),
     body('estado')
-      .isIn(['pendiente', 'rechazada', 'pagada'])
-      .withMessage('Estado inválido'),
+      .equals('pendiente')
+      .withMessage('Aquí solo se reenvía una solicitud rechazada'),
   ],
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
@@ -2304,10 +2300,9 @@ router.patch(
       }
 
       const { id } = req.params;
-      const { estado } = req.body;
 
-      const existing = await query<SolicitudRow>(
-        'SELECT id, estado, tipo FROM solicitudes_pago WHERE id = $1 AND activo = true',
+      const existing = await query<{ estado: string; tipo: string; preparado_por: number }>(
+        'SELECT estado, tipo, preparado_por FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (existing.rows.length === 0) {
@@ -2316,52 +2311,90 @@ router.patch(
           .json({ success: false, message: 'Solicitud no encontrada' });
         return;
       }
+      const actual = existing.rows[0];
 
-      const estadoActual = existing.rows[0].estado;
-      const permitidos = TRANSICIONES[estadoActual] || [];
-
-      if (!permitidos.includes(estado)) {
-        res.status(400).json({
+      if (!puedeGestionarSolicitud(req.user!, actual)) {
+        res.status(403).json({
           success: false,
-          message: `No se puede cambiar de "${estadoActual}" a "${estado}"`,
+          message: 'Solo quien preparó la solicitud, o quien edita todas, puede reenviarla',
         });
         return;
       }
 
-      // Si se reenvía (rechazada → pendiente), limpiar aprobaciones anteriores.
-      // Las solicitudes de apertura/aumento de caja menuda no pueden reenviarse:
-      // su rechazo es definitivo y revierte el monto de la caja.
-      if (estadoActual === 'rechazada' && estado === 'pendiente') {
-        if (existing.rows[0].tipo === 'apertura') {
-          res.status(400).json({
-            success: false,
-            message:
-              'Las solicitudes de apertura o aumento de caja menuda no pueden reenviarse. Cree una nueva solicitud de aumento desde la caja.',
-          });
-          return;
-        }
-        await query(
+      if (actual.estado !== 'rechazada') {
+        res.status(400).json({
+          success: false,
+          message: 'Solo se puede reenviar una solicitud rechazada',
+        });
+        return;
+      }
+
+      // Las de apertura/aumento de caja menuda no se reenvian: su rechazo es
+      // definitivo y revierte el monto de la caja.
+      if (actual.tipo === 'apertura') {
+        res.status(400).json({
+          success: false,
+          message:
+            'Las solicitudes de apertura o aumento de caja menuda no pueden reenviarse. Cree una nueva solicitud de aumento desde la caja.',
+        });
+        return;
+      }
+
+      // Las firmas viejas se borran y la solicitud vuelve a empezar, junto con
+      // su rastro. El UPDATE vuelve a mirar el estado: con dos clics seguidos,
+      // el segundo no pasa.
+      const client = await pool.connect();
+      let reenviada: SolicitudRow | undefined;
+      try {
+        await client.query('BEGIN');
+        await client.query(
           'DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1',
           [id],
         );
+        const result = await client.query<SolicitudRow>(
+          `UPDATE solicitudes_pago SET estado = 'pendiente', updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1 AND activo = true AND estado = 'rechazada'
+        RETURNING *`,
+          [id],
+        );
+        reenviada = result.rows[0];
+        if (!reenviada) {
+          await client.query('ROLLBACK');
+        } else {
+          await registrarAudit(
+            req.user!.id,
+            'reenviar',
+            'solicitud_pago',
+            Number(id),
+            { numero: reenviada.numero },
+            client,
+          );
+          await client.query('COMMIT');
+        }
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
 
-      const result = await query<SolicitudRow>(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true RETURNING *',
-        [estado, id],
-      );
+      if (!reenviada) {
+        res.status(409).json({
+          success: false,
+          message: 'La solicitud cambió mientras tanto. Vuelve a abrirla.',
+        });
+        return;
+      }
 
       res.json({
         success: true,
-        message: `Estado cambiado a ${estado}`,
-        solicitud: result.rows[0],
+        message: 'Estado cambiado a pendiente',
+        solicitud: reenviada,
       });
 
       // Reenviada despues de un rechazo: vuelve a empezar la cadena, y si es
       // urgente se le avisa por WhatsApp al primero.
-      if (estadoActual === 'rechazada' && estado === 'pendiente') {
-        void avisarTurnoUrgente(Number(id));
-      }
+      void avisarTurnoUrgente(Number(id));
     },
   ),
 );

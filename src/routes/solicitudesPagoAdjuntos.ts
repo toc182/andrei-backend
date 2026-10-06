@@ -4,8 +4,15 @@ import multer from 'multer';
 import crypto from 'crypto';
 import { query } from '../database/config.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { soloAdjuntoVisible, soloSolicitudVisible } from '../middleware/solicitudVisible.js';
+import {
+  puedeGestionarSolicitud,
+  soloAdjuntoVisible,
+  soloQuienPuedeAdjuntar,
+  soloSolicitudVisible,
+  type SolicitudAcceso,
+} from '../middleware/solicitudVisible.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { registrarAudit } from '../services/auditLog.js';
 import {
   uploadFile,
   deleteFile,
@@ -71,6 +78,10 @@ router.get(
 );
 
 // --- DELETE /adjuntos/:adjuntoId — Delete from R2 and DB ---
+// Solo los adjuntos normales: el comprobante de pago y la factura no se borran
+// por aqui (los corrige el admin con «Corregir solicitud»). Y solo quien maneja
+// la solicitud o quien subio ese archivo: un aprobador que subio uno equivocado
+// lo puede quitar, pero no los papeles de otro.
 router.delete(
   '/adjuntos/:adjuntoId',
   [param('adjuntoId').isInt()],
@@ -82,8 +93,15 @@ router.delete(
     ): Promise<void> => {
       const { adjuntoId } = req.params;
 
-      const result = await query<{ r2_key: string }>(
-        'SELECT r2_key FROM solicitud_pago_adjuntos WHERE id = $1',
+      const result = await query<{
+        r2_key: string;
+        nombre_original: string;
+        tipo_adjunto: string | null;
+        subido_por: number;
+        solicitud_pago_id: number;
+      }>(
+        `SELECT r2_key, nombre_original, tipo_adjunto, subido_por, solicitud_pago_id
+           FROM solicitud_pago_adjuntos WHERE id = $1`,
         [adjuntoId],
       );
 
@@ -93,18 +111,46 @@ router.delete(
           .json({ success: false, message: 'Adjunto no encontrado' });
         return;
       }
+      const adjunto = result.rows[0];
 
-      // Delete from R2
-      try {
-        await deleteFile(result.rows[0].r2_key);
-      } catch (err) {
-        console.error('Error deleting file from R2:', err);
+      if (adjunto.tipo_adjunto !== null && adjunto.tipo_adjunto !== 'adjunto') {
+        res.status(403).json({
+          success: false,
+          message: 'El comprobante de pago y la factura no se borran desde aquí',
+        });
+        return;
       }
 
-      // Delete from DB
+      const solicitud = res.locals.solicitudAcceso as SolicitudAcceso;
+      if (
+        !puedeGestionarSolicitud(req.user!, solicitud) &&
+        adjunto.subido_por !== req.user!.id
+      ) {
+        res.status(403).json({
+          success: false,
+          message: 'Solo quien maneja la solicitud o quien subió el archivo puede quitarlo',
+        });
+        return;
+      }
+
       await query('DELETE FROM solicitud_pago_adjuntos WHERE id = $1', [
         adjuntoId,
       ]);
+      await registrarAudit(
+        req.user!.id,
+        'eliminar_adjunto',
+        'solicitud_pago',
+        adjunto.solicitud_pago_id,
+        { adjunto_id: Number(adjuntoId), nombre: adjunto.nombre_original },
+      );
+
+      // El archivo, despues: si R2 falla, queda un archivo suelto, no una
+      // solicitud apuntando a algo que ya no existe.
+      try {
+        await deleteFile(adjunto.r2_key);
+      } catch (err) {
+        console.error('Error deleting file from R2:', err);
+      }
 
       res.json({ success: true, message: 'Adjunto eliminado' });
     },
@@ -172,6 +218,7 @@ router.post(
   '/:id/adjuntos',
   [param('id').isInt()],
   soloSolicitudVisible,
+  soloQuienPuedeAdjuntar,
   (req: Request, res: Response, next: NextFunction) => {
     upload.array('archivos', 5)(req, res, (err) => {
       if (err instanceof multer.MulterError) {
@@ -267,6 +314,10 @@ router.post(
   `,
         params,
       );
+
+      await registrarAudit(req.user!.id, 'adjuntar', 'solicitud_pago', Number(id), {
+        archivos: uploadedFiles.map((f) => f.originalname),
+      });
 
       res.status(201).json({ success: true, adjuntos: result.rows });
     },

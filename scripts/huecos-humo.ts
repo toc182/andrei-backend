@@ -12,10 +12,17 @@
 //   * Hueco 6: guardar una asignacion de equipo escribe solo sus columnas; una
 //     llave inventada en el cuerpo ya no llega al SQL. Y lo que la pantalla
 //     manda vacio ('' en responsable o tipo de cobro) se guarda, no revienta.
+//   * Huecos 1, 2 y 3, solicitudes de pago: el camino del estado solo reenvia
+//     una rechazada, y solo quien la maneja (antes cualquiera la marcaba
+//     pagada); una solicitud se ve por uno de los seis casos de
+//     middleware/solicitudVisible.ts (César, con el proyecto solo para
+//     reportes, ya no ve los pagos; quien firma la abre sin el proyecto); el
+//     comprobante y la factura no se borran como un adjunto cualquiera.
 //
 // Crea sus propios usuarios y datos: la semilla es de todas las pruebas.
 import { API } from './pruebas/contexto.js';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import { query, pool } from '../src/database/config.js';
 
@@ -299,6 +306,191 @@ const main = async () => {
     c(roto.estado >= 400, `un valor que la base rechaza no se guarda (dio ${roto.estado})`);
     c((await historial(alquilada)).length === antes, 'y no deja historial falso');
     c((await leer(alquilada)).observaciones === 'original', 'ni cambia nada');
+  }
+
+  // ------------------------------------- huecos 1, 2 y 3: solicitudes de pago
+  {
+    const P = 2;
+    const CUENTA = '0400-9999-8888';
+    const conProyecto = async (u: Usuario) =>
+      query('INSERT INTO user_project_access (user_id, proyecto_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [u.id, P]);
+
+    // Quien prepara, sin cajas ni proyecto: ve y maneja las suyas.
+    const creador = await crearUsuario('Creador Pagos', 'usuario');
+    await darPermisos(creador, ['equipos_ver']);
+    // Quien firma en la cadena, sin cajas ni proyecto (Hilario desde el WhatsApp).
+    const aprobador = await crearUsuario('Aprobador Pagos', 'usuario');
+    await darPermisos(aprobador, ['equipos_ver']);
+    await query("UPDATE users SET password = $1 WHERE id = $2", [await bcrypt.hash('clave-buena', 4), aprobador.id]);
+    await query('INSERT INTO proyecto_ajustes_aprobacion (proyecto_id, user_id, orden) VALUES ($1, $2, 1)', [P, aprobador.id]);
+    const verSinProyecto = await crearUsuario('Ver Sin Proyecto', 'usuario');
+    await darPermisos(verSinProyecto, ['solicitudes_ver']);
+    const verConProyecto = await crearUsuario('Ver Con Proyecto', 'usuario');
+    await darPermisos(verConProyecto, ['solicitudes_ver']);
+    await conProyecto(verConProyecto);
+    const pagador = await crearUsuario('Pagador', 'usuario');
+    await darPermisos(pagador, ['registrar_pago']);
+    await conProyecto(pagador);
+    const costos = await crearUsuario('Solo Costos', 'usuario');
+    await darPermisos(costos, ['costos_ver']);
+    await conProyecto(costos);
+    const cajero = await crearUsuario('Solo Cajas', 'usuario');
+    await darPermisos(cajero, ['caja_menuda']);
+    await conProyecto(cajero);
+    // César: tiene el proyecto para hacer reportes, ninguna casilla de pagos.
+    const cesar = await crearUsuario('Cesar Reportes', 'usuario');
+    await darPermisos(cesar, ['reportes']);
+    await conProyecto(cesar);
+    const editaTodas = await crearUsuario('Edita Todas', 'usuario');
+    await darPermisos(editaTodas, ['solicitudes_ver', 'solicitudes_editar_todas']);
+    await conProyecto(editaTodas);
+
+    let n = 0;
+    const solicitud = async (estado: string, preparadoPor: Usuario, tipo = 'regular'): Promise<number> =>
+      (
+        await query<{ id: number }>(
+          `INSERT INTO solicitudes_pago
+             (proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por, subtotal, monto_total,
+              estado, numero_cuenta, codigo_verificacion, tipo)
+           VALUES ($1, $2, CURRENT_DATE, 'Proveedor de pruebas', $3, $3, 100, 100, $4, $5, $6, $7)
+           RETURNING id`,
+          [P, `PRU2-H${++n}-${marca}`, preparadoPor.id, estado, CUENTA, randomUUID().slice(0, 8), tipo],
+        )
+      ).rows[0].id;
+
+    const pendiente = await solicitud('pendiente', creador);
+    const pagada = await solicitud('pagada', admin);
+    const aprobada = await solicitud('aprobada', admin);
+    const rechazadaDelCreador = await solicitud('rechazada', creador);
+    const rechazadaAjena = await solicitud('rechazada', admin);
+    const apertura = await solicitud('pendiente', admin, 'apertura');
+    const aperturaRechazada = await solicitud('rechazada', admin, 'apertura');
+
+    // ---- hueco 2: quien la ve
+    const ver = async (u: Usuario, id: number) => pedir('GET', `/solicitudes-pago/${id}`, u);
+    for (const [quien, id, debe, que] of [
+      [creador, pendiente, 200, 'quien la preparo la ve, aunque no tenga el proyecto'],
+      [aprobador, pendiente, 200, 'quien la firma la ve, aunque no tenga el proyecto'],
+      [verSinProyecto, pendiente, 404, '«Ver solicitudes» sin el proyecto no la ve'],
+      [verConProyecto, pendiente, 200, '«Ver solicitudes» con el proyecto la ve'],
+      [pagador, pendiente, 200, '«Registrar pagos» con el proyecto la ve'],
+      [costos, pagada, 200, '«Ver control de costos» ve una pagada'],
+      [costos, pendiente, 404, 'pero no una pendiente'],
+      [cajero, apertura, 200, '«Cajas menudas» ve la apertura de una caja'],
+      [cajero, pendiente, 404, 'pero no una solicitud cualquiera'],
+      [cesar, pendiente, 404, 'César, con el proyecto solo para reportes, no la ve'],
+      [admin, pendiente, 200, 'el admin la ve'],
+    ] as const) {
+      const r = await ver(quien, id);
+      c(r.estado === debe, `${que} (dio ${r.estado})`);
+      if (debe === 404) c(!JSON.stringify(r.cuerpo).includes(CUENTA), `${que}: sin datos de banco`);
+    }
+    for (const [ruta, que] of [
+      [`/solicitudes-pago/${pendiente}/pdf`, 'su PDF'],
+      [`/solicitudes-pago/${pendiente}/correcciones`, 'sus correcciones'],
+      [`/solicitudes-pago/${pendiente}/adjuntos/urls`, 'sus adjuntos'],
+    ] as const) {
+      const r = await pedir('GET', ruta, cesar);
+      c(r.estado === 404, `César tampoco ve ${que} (dio ${r.estado})`);
+    }
+    const urlsCaja = await pedir('GET', `/solicitudes-pago/${apertura}/adjuntos/urls`, cajero);
+    c(urlsCaja.estado === 200, `el «Descargar» de la caja sigue funcionando (dio ${urlsCaja.estado})`);
+
+    // Quien firma llega a firmarla desde el enlace, sin el proyecto.
+    const firma = await pedir('POST', `/solicitudes-pago/${pendiente}/aprobar`, aprobador, { password: 'clave-buena' });
+    c(firma.estado === 200, `quien firma la aprueba aunque no tenga el proyecto (dio ${firma.estado})`);
+
+    // ---- hueco 1: el camino del estado solo reenvia
+    const marcarPagada = await pedir('PATCH', `/solicitudes-pago/${aprobada}/estado`, verConProyecto, { estado: 'pagada' });
+    c(marcarPagada.estado === 400, `nadie la marca pagada por aqui (dio ${marcarPagada.estado})`);
+    const marcarPagadaAdmin = await pedir('PATCH', `/solicitudes-pago/${aprobada}/estado`, admin, { estado: 'pagada' });
+    c(marcarPagadaAdmin.estado === 400, `ni el admin: pagar va con su comprobante (dio ${marcarPagadaAdmin.estado})`);
+    const rechazar = await pedir('PATCH', `/solicitudes-pago/${aprobada}/estado`, verConProyecto, { estado: 'rechazada' });
+    c(rechazar.estado === 400, `nadie la rechaza por aqui sin ser su aprobador (dio ${rechazar.estado})`);
+    const estadoAprobada = await query<{ estado: string }>('SELECT estado FROM solicitudes_pago WHERE id = $1', [aprobada]);
+    c(estadoAprobada.rows[0].estado === 'aprobada', 'y sigue aprobada');
+
+    const cesarReenvia = await pedir('PATCH', `/solicitudes-pago/${rechazadaDelCreador}/estado`, cesar, { estado: 'pendiente' });
+    c(cesarReenvia.estado === 404, `César no reenvía lo que no ve (dio ${cesarReenvia.estado})`);
+    const otroReenvia = await pedir('PATCH', `/solicitudes-pago/${rechazadaAjena}/estado`, verConProyecto, { estado: 'pendiente' });
+    c(otroReenvia.estado === 403, `quien la ve pero no la preparo no la reenvía (dio ${otroReenvia.estado})`);
+    const creadorReenvia = await pedir('PATCH', `/solicitudes-pago/${rechazadaDelCreador}/estado`, creador, { estado: 'pendiente' });
+    c(creadorReenvia.estado === 200, `quien la preparo la reenvía (dio ${creadorReenvia.estado})`);
+    const rastroReenvio = await query(
+      "SELECT 1 FROM audit_log WHERE accion = 'reenviar' AND entidad = 'solicitud_pago' AND entidad_id = $1 AND user_id = $2",
+      [rechazadaDelCreador, creador.id],
+    );
+    c(rastroReenvio.rows.length === 1, 'reenviar deja rastro');
+    const otraVez = await pedir('PATCH', `/solicitudes-pago/${rechazadaDelCreador}/estado`, creador, { estado: 'pendiente' });
+    c(otraVez.estado === 400, `una que ya no esta rechazada no se reenvía (dio ${otraVez.estado})`);
+    const editaReenvia = await pedir('PATCH', `/solicitudes-pago/${rechazadaAjena}/estado`, editaTodas, { estado: 'pendiente' });
+    c(editaReenvia.estado === 200, `«Editar todas» reenvía la de otro (dio ${editaReenvia.estado})`);
+    const aperturaReenvio = await pedir('PATCH', `/solicitudes-pago/${aperturaRechazada}/estado`, admin, { estado: 'pendiente' });
+    c(aperturaReenvio.estado === 400, `la apertura de una caja no se reenvía (dio ${aperturaReenvio.estado})`);
+
+    // ---- hueco 3: adjuntos
+    const adjunto = async (solicitudId: number, subidoPor: Usuario, tipo: string | null) =>
+      (
+        await query<{ id: number }>(
+          `INSERT INTO solicitud_pago_adjuntos
+             (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
+           VALUES ($1, 'papel.pdf', $2, 'application/pdf', 10, $3, $4) RETURNING id`,
+          [solicitudId, `PRUEBAS2/no-existe-${randomUUID()}.pdf`, subidoPor.id, tipo],
+        )
+      ).rows[0].id;
+    const sigue = async (id: number) =>
+      (await query('SELECT 1 FROM solicitud_pago_adjuntos WHERE id = $1', [id])).rows.length === 1;
+
+    const delAdmin = await adjunto(pendiente, admin, 'adjunto');
+    const delAprobador = await adjunto(pendiente, aprobador, 'adjunto');
+    const viejo = await adjunto(pendiente, admin, null);
+    const comprobante = await adjunto(pagada, admin, 'comprobante');
+
+    const cesarBorra = await pedir('DELETE', `/solicitudes-pago/adjuntos/${delAdmin}`, cesar);
+    c(cesarBorra.estado === 404, `César no borra un adjunto (dio ${cesarBorra.estado})`);
+    const veBorra = await pedir('DELETE', `/solicitudes-pago/adjuntos/${delAdmin}`, verConProyecto);
+    c(veBorra.estado === 403, `quien solo la ve no borra papeles ajenos (dio ${veBorra.estado})`);
+    c(await sigue(delAdmin), 'y el adjunto sigue ahí');
+    const aprobadorBorra = await pedir('DELETE', `/solicitudes-pago/adjuntos/${delAprobador}`, aprobador);
+    c(aprobadorBorra.estado === 200, `quien subió un archivo lo puede quitar (dio ${aprobadorBorra.estado})`);
+    const creadorBorra = await pedir('DELETE', `/solicitudes-pago/adjuntos/${delAdmin}`, creador);
+    c(creadorBorra.estado === 200, `quien la preparó quita un adjunto (dio ${creadorBorra.estado})`);
+    const creadorBorraViejo = await pedir('DELETE', `/solicitudes-pago/adjuntos/${viejo}`, creador);
+    c(creadorBorraViejo.estado === 200, `también uno de los viejos, sin tipo (dio ${creadorBorraViejo.estado})`);
+    const rastroBorrar = await query(
+      "SELECT 1 FROM audit_log WHERE accion = 'eliminar_adjunto' AND entidad = 'solicitud_pago' AND entidad_id = $1",
+      [pendiente],
+    );
+    c(rastroBorrar.rows.length === 3, `quitar un adjunto deja rastro (quedaron ${rastroBorrar.rows.length})`);
+    const borraComprobante = await pedir('DELETE', `/solicitudes-pago/adjuntos/${comprobante}`, admin);
+    c(borraComprobante.estado === 403, `el comprobante de pago no se borra por aquí, ni el admin (dio ${borraComprobante.estado})`);
+    c(await sigue(comprobante), 'y el comprobante sigue ahí');
+
+    const subir = async (u: Usuario, id: number) => {
+      const forma = new FormData();
+      forma.append('archivos', new Blob([Buffer.from('%PDF-1.4 prueba')], { type: 'application/pdf' }), 'cotizacion.pdf');
+      const res = await fetch(`${API}/solicitudes-pago/${id}/adjuntos`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${firmar(u)}` },
+        body: forma,
+      });
+      return { estado: res.status, cuerpo: await res.json().catch(() => null) };
+    };
+    const costosSube = await subir(costos, pagada);
+    c(costosSube.estado === 403, `«Ver control de costos» la mira pero no le agrega papeles (dio ${costosSube.estado})`);
+    const cesarSube = await subir(cesar, pendiente);
+    c(cesarSube.estado === 404, `César no adjunta a lo que no ve (dio ${cesarSube.estado})`);
+    const creadorSube = await subir(creador, pendiente);
+    c(creadorSube.estado === 201, `quien la preparó adjunta (dio ${creadorSube.estado})`);
+    const rastroSubir = await query(
+      "SELECT 1 FROM audit_log WHERE accion = 'adjuntar' AND entidad = 'solicitud_pago' AND entidad_id = $1",
+      [pendiente],
+    );
+    c(rastroSubir.rows.length === 1, 'adjuntar deja rastro');
+    // Lo que se subio a R2 se quita por el camino normal.
+    for (const a of (creadorSube.cuerpo?.adjuntos ?? []) as { id: number }[]) {
+      await pedir('DELETE', `/solicitudes-pago/adjuntos/${a.id}`, creador);
+    }
   }
 
   console.log(`${ok} pasaron, ${fallo} fallaron`);
