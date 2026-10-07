@@ -3,14 +3,19 @@
 //
 // Lo que se comprueba, y por que cada cosa importa:
 //
-//   * La orden LLEGA COMPLETA, en un solo paso (Ivan, 2026-10-02: las entregas
-//     parciales se quitaron). Hasta que se marca como recibida no se debe nada;
-//     al marcarla se debe entera —con su descuento— y corre el termino.
-//   * 'recibida' se calcula de la recepcion, no se guarda.
+//   * La orden LLEGA POR FACTURAS (Ivan, 2026-10-05). Cada factura vence a los
+//     dias de credito contados desde SU fecha, y lo que se debe es la suma de
+//     las facturas, no el total de la orden, que es referencial.
+//   * Alguien la marca COMPLETA; desde ahi no admite facturas.
+//   * Una factura mal digitada se anula, mientras no tenga solicitud de pago, y
+//     se registra de nuevo.
+//   * 'entrega_parcial', 'recibida' y la 'cerrada' de una orden pagada se
+//     calculan, no se guardan.
 //   * No se puede pedir dos veces la misma plata: el tope para activar un pago
-//     es lo recibido menos lo que ya tiene una solicitud encima.
-//   * Una orden ya enviada solo la edita un admin, con motivo; ya recibida no
-//     se edita ni se da de baja: se debe completa.
+//     es lo facturado menos lo que ya tiene una solicitud encima, factura por
+//     factura.
+//   * Una orden ya enviada solo la edita un admin, con motivo; con facturas no
+//     se edita ni se da de baja.
 //
 // Usa el proyecto 3, que en la semilla no tiene aprobadores ni solicitudes.
 import { API } from './pruebas/contexto.js';
@@ -143,9 +148,13 @@ const main = async () => {
   const pdfBorrador = await bajarPdf(id);
   c(pdfBorrador.estado === 200 && pdfBorrador.esPdf, 'el papel se puede bajar desde el principio');
 
-  // Nada se recibe antes de que la orden salga al proveedor.
-  const prematura = await pedir('POST', `/ordenes-compra/${id}/recibir`, { fecha: '2026-08-20' });
-  c(prematura.estado === 400, 'no se recibe una orden antes de enviarla');
+  // Ninguna factura entra antes de que la orden salga al proveedor.
+  const prematura = await pedir('POST', `/ordenes-compra/${id}/facturas`, {
+    numero_factura: 'F-0001',
+    fecha: '2026-08-20',
+    monto: 100,
+  });
+  c(prematura.estado === 400, 'no se registra una factura antes de enviar la orden');
 
   // ------------------------------------------------------------ aprobar
   const sinClave = await pedir('POST', `/ordenes-compra/${id}/aprobar`, {}, firmar(otros[0]));
@@ -180,7 +189,7 @@ const main = async () => {
   c((await pedir('POST', `/ordenes-compra/${id}/marcar-enviada`)).estado === 400,
     'no se marca dos veces');
   orden = await ver();
-  c(orden.estado_calculado === 'enviada', 'sin recibir, el estado que se ve es enviada');
+  c(orden.estado_calculado === 'enviada', 'sin facturas, el estado que se ve es enviada');
   c(Number(orden.por_pagar) === 0, 'y todavia no se debe nada');
 
   const pdfAprobado = await bajarPdf(id);
@@ -220,70 +229,170 @@ const main = async () => {
   );
   c(orden.cambios?.[0]?.motivo === 'Renegociado con el proveedor', 'con su motivo');
 
-  // ----------------------------------------------------- marcar como recibida
-  // La orden llega completa, en un solo paso (Ivan, 2026-10-02): desde ese dia
-  // se debe entera y corre el termino de pago.
-  const sinFecha = await pedir('POST', `/ordenes-compra/${id}/recibir`, {});
-  c(sinFecha.estado === 400, 'recibirla pide la fecha en que llego');
+  // ---------------------------------------------------------- las facturas
+  // La orden llega por partes, cada una con su factura (Ivan, 2026-10-05).
+  const facturar = (cuerpo: unknown, token = tokenAdmin) =>
+    pedir('POST', `/ordenes-compra/${id}/facturas`, cuerpo, token);
+  c((await facturar({ fecha: '2026-09-01', monto: 100 })).estado === 400, 'una factura sin numero se rechaza');
+  c((await facturar({ numero_factura: 'F-1', monto: 100 })).estado === 400, 'sin fecha tambien');
+  c(
+    (await facturar({ numero_factura: 'F-1', fecha: '2026-09-01', monto: 0 })).estado === 400,
+    'y con monto cero',
+  );
+  c(
+    (await pedir('POST', `/ordenes-compra/${id}/completa`)).estado === 400,
+    'no se marca completa sin ninguna factura',
+  );
 
-  const recibida = await pedir('POST', `/ordenes-compra/${id}/recibir`, {
+  const f1 = await facturar({
+    numero_factura: 'F-1001',
     fecha: '2026-09-01',
-    nota: 'Llego en dos camiones',
+    monto: 1000,
+    nota: 'Primer camion',
   });
-  c(recibida.estado === 201, `marcarla como recibida responde 201 (dio ${recibida.estado})`);
+  c(f1.estado === 201, `registrar la primera factura responde 201 (dio ${f1.estado})`);
   c(
-    Number(recibida.cuerpo?.data?.monto_total) === 2407.5,
-    `se debe la orden completa, 2407.50 (dio ${recibida.cuerpo?.data?.monto_total})`,
+    String(f1.cuerpo?.data?.vence).startsWith('2026-10-16'),
+    `vence 45 dias despues de SU fecha, con el termino ya cambiado (dio ${f1.cuerpo?.data?.vence})`,
+  );
+  const f2 = await facturar({ numero_factura: 'F-1002', fecha: '2026-09-03', monto: 900 });
+  c(
+    String(f2.cuerpo?.data?.vence).startsWith('2026-10-18'),
+    `la segunda vence contando desde la suya (dio ${f2.cuerpo?.data?.vence})`,
   );
   c(
-    String(recibida.cuerpo?.data?.vence).startsWith('2026-10-16'),
-    `vence 45 dias despues de llegar, con el termino ya cambiado (dio ${recibida.cuerpo?.data?.vence})`,
-  );
-  c(
-    (await pedir('POST', `/ordenes-compra/${id}/recibir`, { fecha: '2026-09-02' })).estado === 400,
-    'no se recibe dos veces',
+    (await facturar({ numero_factura: ' f-1001 ', fecha: '2026-09-04', monto: 5 })).estado === 400,
+    'la misma factura no entra dos veces',
   );
 
   orden = await ver();
   c(orden.estado === 'enviada', 'en la base el estado guardado sigue siendo enviada');
-  c(orden.estado_calculado === 'recibida', `y el que se ve es recibida (dio ${orden.estado_calculado})`);
-  c(Number(orden.recibido) === 2407.5, 'recibido = el total de la orden');
-  c(Number(orden.por_pagar) === 2407.5, 'y se debe completa');
-  c(orden.entregas?.length === 1, 'queda una sola recepcion');
-  c(String(orden.vence).startsWith('2026-10-16'), 'y la orden sabe cuando vence');
+  c(
+    orden.estado_calculado === 'entrega_parcial',
+    `y el que se ve es entrega parcial (dio ${orden.estado_calculado})`,
+  );
+  c(Number(orden.recibido) === 1900, `se debe la suma de las facturas, 1900 (dio ${orden.recibido})`);
+  c(Number(orden.por_pagar) === 1900, 'y eso es lo que queda por pagar');
+  c(
+    orden.entregas?.length === 2 && orden.entregas[0].numero_factura === 'F-1001',
+    'las dos facturas, en orden, con su numero',
+  );
+  c(String(orden.vence).startsWith('2026-10-16'), 'la orden vence con su factura mas vieja sin pagar');
 
-  const editarRecibida = await pedir('PUT', `/ordenes-compra/${id}`, {
+  const editarConFacturas = await pedir('PUT', `/ordenes-compra/${id}`, {
     condiciones: 'Otra cosa',
     motivo: 'Probando',
   });
-  c(editarRecibida.estado === 400, 'una orden recibida ya no se edita');
+  c(editarConFacturas.estado === 400, 'una orden con facturas ya no se edita');
   c(
     (await pedir('POST', `/ordenes-compra/${id}/baja`, { motivo: 'Probando' })).estado === 400,
-    'ni se da de baja: se debe completa',
+    'ni se da de baja: ya se debe',
   );
 
+  // Falto material: las facturas no llegan al total de la orden, y se marca
+  // completa igual.
+  const f3 = await facturar({ numero_factura: 'F-1010', fecha: '2026-09-05', monto: 450.25 });
+  c(f3.estado === 201, 'la tercera factura entra');
+  const completa = await pedir('POST', `/ordenes-compra/${id}/completa`);
+  c(completa.estado === 200, `marcarla completa responde 200 (dio ${completa.estado})`);
+  c(
+    (await pedir('POST', `/ordenes-compra/${id}/completa`)).estado === 400,
+    'no se marca completa dos veces',
+  );
+  c(
+    (await facturar({ numero_factura: 'F-1011', fecha: '2026-09-06', monto: 10 })).estado === 400,
+    'completa, ya no admite facturas',
+  );
+
+  orden = await ver();
+  c(orden.estado_calculado === 'recibida', `completa, se ve recibida (dio ${orden.estado_calculado})`);
+  c(
+    Number(orden.recibido) === 2350.25,
+    `se debe lo facturado, 2350.25, aunque la orden diga 2407.50 (dio ${orden.recibido})`,
+  );
+  c(!!orden.completa_at && !!orden.completa_por_nombre, 'y se sabe cuando y quien la marco completa');
+
+  // ------------------------------------------------- anular una factura
+  // Mal digitada: se anula y se registra de nuevo (Ivan, 2026-10-07). La orden
+  // ya estaba completa: vuelve a admitir facturas.
+  const anular = (facturaId: number, cuerpo: unknown, token = tokenAdmin) =>
+    pedir('POST', `/ordenes-compra/${id}/facturas/${facturaId}/anular`, cuerpo, token);
+  c((await anular(f3.cuerpo.data.id, {})).estado === 400, 'anular pide el motivo');
+  const anulada = await anular(f3.cuerpo.data.id, { motivo: 'El monto se digito mal' });
+  c(anulada.estado === 200, `anular una factura sin solicitud responde 200 (dio ${anulada.estado})`);
+  c(anulada.cuerpo?.data?.reabierta === true, 'y dice que la orden se reabrio');
+  c(
+    (await anular(f3.cuerpo.data.id, { motivo: 'Otra vez' })).estado === 400,
+    'una factura anulada no se anula dos veces',
+  );
+  orden = await ver();
+  c(
+    orden.estado_calculado === 'entrega_parcial' && !orden.completa_at,
+    `la orden vuelve a entrega parcial (dio ${orden.estado_calculado})`,
+  );
+  c(Number(orden.recibido) === 1900, `lo anulado deja de deberse: 1900 (dio ${orden.recibido})`);
+  c(orden.entregas.length === 2, 'y ya no sale entre sus facturas');
+  c(
+    orden.anuladas?.length === 1 && orden.anuladas[0].anulada_motivo === 'El monto se digito mal',
+    'pero la historia la conserva, con su motivo',
+  );
+  const f3b = await facturar({ numero_factura: 'F-1010', fecha: '2026-09-05', monto: 450.25 });
+  c(f3b.estado === 201, `el mismo numero se registra de nuevo, bien (dio ${f3b.estado})`);
+  c((await pedir('POST', `/ordenes-compra/${id}/completa`)).estado === 200, 'y se marca completa otra vez');
+
   // ------------------------------------------------------- activar el pago
-  const recepcion = recibida.cuerpo.data.id as number;
+  // Cada factura se paga por separado (Ivan, 2026-10-05).
+  const [idF1, idF2, idF3] = [f1, f2, f3b].map((f) => f.cuerpo.data.id as number);
   const pagoDeMas = await pedir('POST', `/ordenes-compra/${id}/activar-pago`, {
-    entregas: [{ entrega_id: recepcion, monto: 3000 }],
+    entregas: [{ entrega_id: idF1, monto: 1500 }],
   });
-  c(pagoDeMas.estado === 400, 'no se activa un pago mayor que la orden');
+  c(pagoDeMas.estado === 400, 'no se activa un pago mayor que su factura');
+  c(
+    (
+      await pedir('POST', `/ordenes-compra/${id}/activar-pago`, {
+        entregas: [
+          { entrega_id: idF1, monto: 500 },
+          { entrega_id: idF1, monto: 500 },
+        ],
+      })
+    ).estado === 400,
+    'ni la misma factura dos veces en una solicitud',
+  );
 
   const pago1 = await pedir('POST', `/ordenes-compra/${id}/activar-pago`, {
-    entregas: [{ entrega_id: recepcion, monto: 300 }],
+    entregas: [{ entrega_id: idF1, monto: 300 }],
   });
   c(pago1.estado === 201, `activar un pago parcial responde 201 (dio ${pago1.estado})`);
   const solicitudId = pago1.cuerpo?.data?.id as number;
+  c(
+    (await anular(idF1, { motivo: 'Probando' })).estado === 400,
+    'una factura con solicitud de pago ya no se anula',
+  );
+  const renglon = (
+    await query<{ descripcion: string }>(
+      'SELECT descripcion FROM solicitud_pago_items WHERE solicitud_pago_id = $1',
+      [solicitudId],
+    )
+  ).rows[0];
+  c(
+    renglon?.descripcion === 'OC-PRU3-001 · factura F-1001',
+    `la solicitud dice de que factura viene (dio ${renglon?.descripcion})`,
+  );
 
   orden = await ver();
   c(
-    Number(orden.disponible_para_activar) === 2107.5,
-    `quedan 2107.50 por reclamar (dio ${orden.disponible_para_activar})`,
+    Number(orden.disponible_para_activar) === 2050.25,
+    `quedan 2050.25 por reclamar (dio ${orden.disponible_para_activar})`,
   );
-  c(Number(orden.por_pagar) === 2407.5, 'pero la deuda con el proveedor sigue en 2407.50');
+  c(Number(orden.por_pagar) === 2350.25, 'pero la deuda con el proveedor sigue en 2350.25');
+  c(
+    orden.entregas.find((e: { id: number }) => e.id === idF1)?.solicitudes?.[0]?.numero ===
+      pago1.cuerpo?.data?.numero,
+    'y la factura sabe que solicitud la esta pagando',
+  );
 
   const pidiendoDosVeces = await pedir('POST', `/ordenes-compra/${id}/activar-pago`, {
-    entregas: [{ entrega_id: recepcion, monto: 2200 }],
+    entregas: [{ entrega_id: idF1, monto: 800 }],
   });
   c(pidiendoDosVeces.estado === 400, 'no se puede pedir dos veces la misma plata');
 
@@ -291,34 +400,38 @@ const main = async () => {
   await query("UPDATE solicitudes_pago SET estado = 'pagada' WHERE id = $1", [solicitudId]);
   orden = await ver();
   c(Number(orden.pagado) === 300, `pagado 300.00 (dio ${orden.pagado})`);
-  c(Number(orden.por_pagar) === 2107.5, `por pagar 2107.50 (dio ${orden.por_pagar})`);
+  c(Number(orden.por_pagar) === 2050.25, `por pagar 2050.25 (dio ${orden.por_pagar})`);
 
-  // Control de costos: lo recibido y sin pagar es COSTO, aunque la plata no haya
-  // salido: 300 pagado + 2107.50 por pagar = 2407.50 de costo.
+  // Control de costos: lo facturado y sin pagar es COSTO, aunque la plata no
+  // haya salido: 300 pagado + 2050.25 por pagar = 2350.25 de costo.
   const costos = await pedir('GET', '/costs/projects/' + P + '/resumen');
   c(costos.estado === 200, `el resumen de costos responde 200 (dio ${costos.estado})`);
   c(Number(costos.cuerpo?.data?.gastado) === 300, `pagado 300.00 (dio ${costos.cuerpo?.data?.gastado})`);
   c(
-    Number(costos.cuerpo?.data?.porPagar) === 2107.5,
-    `por pagar 2107.50 (dio ${costos.cuerpo?.data?.porPagar})`,
+    Number(costos.cuerpo?.data?.porPagar) === 2050.25,
+    `por pagar 2050.25 (dio ${costos.cuerpo?.data?.porPagar})`,
   );
   c(
-    Number(costos.cuerpo?.data?.costoHastaHoy) === 2407.5,
-    `y el costo hasta hoy es la orden recibida (dio ${costos.cuerpo?.data?.costoHastaHoy})`,
+    Number(costos.cuerpo?.data?.costoHastaHoy) === 2350.25,
+    `y el costo hasta hoy es lo facturado (dio ${costos.cuerpo?.data?.costoHastaHoy})`,
   );
 
   // Una solicitud rechazada suelta la plata que tenia reservada.
   const pago2 = await pedir('POST', `/ordenes-compra/${id}/activar-pago`, {
-    entregas: [{ entrega_id: recepcion, monto: 2107.5 }],
+    entregas: [
+      { entrega_id: idF1, monto: 700 },
+      { entrega_id: idF2, monto: 900 },
+      { entrega_id: idF3, monto: 450.25 },
+    ],
   });
-  c(pago2.estado === 201, 'se activa el resto');
+  c(pago2.estado === 201, 'se activa el resto, de las tres facturas a la vez');
   c(Number((await ver()).disponible_para_activar) === 0, 'y ya no queda nada por reclamar');
   await query("UPDATE solicitudes_pago SET estado = 'rechazada' WHERE id = $1", [
     pago2.cuerpo.data.id,
   ]);
   c(
-    Number((await ver()).disponible_para_activar) === 2107.5,
-    'al rechazarse la solicitud, sus 2107.50 vuelven a estar disponibles',
+    Number((await ver()).disponible_para_activar) === 2050.25,
+    'al rechazarse la solicitud, sus 2050.25 vuelven a estar disponibles',
   );
 
   // ------------------------------------------------------------- rechazar
@@ -344,7 +457,7 @@ const main = async () => {
   );
 
   // --------------------------------------------------------- dar de baja
-  // Solo antes de recibirla: enviada al proveedor, pero sin llegar.
+  // Solo antes de la primera factura: enviada al proveedor, pero sin llegar.
   const tres = await pedir('POST', '/ordenes-compra', ORDEN_NUEVA);
   const id3 = tres.cuerpo.data.id as number;
   await pedir('POST', `/ordenes-compra/${id3}/aprobar`, conClave, firmar(otros[0]));
@@ -362,8 +475,14 @@ const main = async () => {
   c(tras.estado === 'dada_de_baja', 'la orden queda dada de baja');
   c(Number(tras.por_pagar) === 0, `y no se debe nada (dio ${tras.por_pagar})`);
   c(
-    (await pedir('POST', `/ordenes-compra/${id3}/recibir`, { fecha: '2026-09-30' })).estado === 400,
-    'ya no se puede recibir',
+    (
+      await pedir('POST', `/ordenes-compra/${id3}/facturas`, {
+        numero_factura: 'F-9',
+        fecha: '2026-09-30',
+        monto: 10,
+      })
+    ).estado === 400,
+    'ya no admite facturas',
   );
 
   // ------------------------------------------------------------- la lista
@@ -399,8 +518,8 @@ const main = async () => {
   );
 
   // ------------------------------------------------- con descuento
-  // Al recibirla se debe lo que dice la orden, con su descuento: no la suma de
-  // los renglones a precio lleno.
+  // La orden calcula su total con el descuento. Lo que se debe es lo que diga
+  // la factura; pagada entera, la orden completa se ve cerrada sola.
   const conDescuento = await pedir('POST', '/ordenes-compra', { ...ORDEN_NUEVA, descuento: 250 });
   const idD = conDescuento.cuerpo.data.id as number;
   c(
@@ -410,15 +529,28 @@ const main = async () => {
   await pedir('POST', `/ordenes-compra/${idD}/aprobar`, conClave, firmar(otros[0]));
   await pedir('POST', `/ordenes-compra/${idD}/aprobar`, conClave, firmar(otros[1]));
   await pedir('POST', `/ordenes-compra/${idD}/marcar-enviada`);
-  const recibidaD = await pedir('POST', `/ordenes-compra/${idD}/recibir`, { fecha: '2026-09-05' });
+  const facturaD = await pedir('POST', `/ordenes-compra/${idD}/facturas`, {
+    numero_factura: 'D-1',
+    fecha: '2026-09-05',
+    monto: 2140,
+  });
   c(
-    Number(recibidaD.cuerpo?.data?.monto_total) === 2140,
-    `recibida, se deben los 2140.00 de la orden (dio ${recibidaD.cuerpo?.data?.monto_total})`,
+    Number(facturaD.cuerpo?.data?.monto_total) === 2140,
+    `la factura entra por su total, 2140.00 (dio ${facturaD.cuerpo?.data?.monto_total})`,
   );
+  await pedir('POST', `/ordenes-compra/${idD}/completa`);
+  const verD = async () => (await pedir('GET', `/ordenes-compra/${idD}`)).cuerpo.data;
+  c(Number((await verD()).por_pagar) === 2140, 'y eso es lo que queda por pagar');
+  const pagoD = await pedir('POST', `/ordenes-compra/${idD}/activar-pago`, {
+    entregas: [{ entrega_id: facturaD.cuerpo.data.id, monto: 2140 }],
+  });
+  await query("UPDATE solicitudes_pago SET estado = 'pagada' WHERE id = $1", [pagoD.cuerpo.data.id]);
+  const pagadaD = await verD();
   c(
-    Number((await pedir('GET', `/ordenes-compra/${idD}`)).cuerpo.data.por_pagar) === 2140,
-    'y eso es lo que queda por pagar',
+    pagadaD.estado_calculado === 'cerrada' && pagadaD.estado === 'enviada',
+    `completa y pagada, se ve cerrada sin que nadie la cierre (dio ${pagadaD.estado_calculado})`,
   );
+  c(Number(pagadaD.por_pagar) === 0, 'y no se debe nada');
 
   // --------------------------------------------------- la pagina del codigo
   const codigo = (
@@ -447,8 +579,9 @@ const main = async () => {
 
   // ------------------------------------------------------------ las llaves
   // Sin «ordenes_ver» la seccion no existe; con ella pero sin
-  // «ordenes_entregas» se mira pero no se marca lo que llego; y ninguna de las
-  // dos alcanza un proyecto al que la persona no tiene acceso.
+  // «ordenes_entregas» se mira pero no se registran facturas ni se marca
+  // completa; y ninguna de las dos alcanza un proyecto al que la persona no
+  // tiene acceso.
   const sinLlaves = otros[0];
   await query(
     `INSERT INTO user_permissions (user_id, ordenes_ver, ordenes_entregas, acceso_global)
@@ -468,9 +601,20 @@ const main = async () => {
     'con la llave de ver, la lista abre',
   );
   c(
-    (await pedir('POST', `/ordenes-compra/${cinco}/recibir`, { fecha: '2026-09-22' }, firmar(sinLlaves)))
-      .estado === 403,
-    'pero marcar una orden como recibida necesita su propia llave',
+    (
+      await pedir(
+        'POST',
+        `/ordenes-compra/${cinco}/facturas`,
+        { numero_factura: 'F-7', fecha: '2026-09-22', monto: 10 },
+        firmar(sinLlaves),
+      )
+    ).estado === 403,
+    'pero registrar una factura necesita su propia llave',
+  );
+  c(
+    (await pedir('POST', `/ordenes-compra/${cinco}/completa`, undefined, firmar(sinLlaves))).estado ===
+      403,
+    'y marcarla completa tambien',
   );
 
   // Con las dos llaves pero sin acceso al proyecto, tampoco.
@@ -487,7 +631,7 @@ const main = async () => {
   // ------------------------------------------------- lo que el PUT no toca
   // El SET se arma solo con lo que viene. Mandar una sola cosa no puede dejar
   // en blanco el resto —la regla del CLAUDE.md, que aqui se comprueba—. Sobre
-  // la 004, todavia pendiente: la recibida ya no se edita.
+  // la 004, todavia pendiente: con facturas ya no se edita.
   const verCuatro = async () => (await pedir('GET', `/ordenes-compra/${cuatro}`)).cuerpo?.data;
   const antes = await verCuatro();
   const soloCondiciones = await pedir('PUT', `/ordenes-compra/${cuatro}`, {
@@ -535,7 +679,7 @@ const main = async () => {
   );
 
   // ------------------------------------------------------------- adjuntos
-  // La cotizacion va sobre la orden; el vale firmado, sobre su recepcion.
+  // La cotizacion va sobre la orden; el papel de la factura, sobre su factura.
   const subir = async (nombre, descripcion, entregaId) => {
     const fd = new FormData();
     fd.append('archivo', new Blob([Buffer.from('%PDF-1.4 de mentira')], { type: 'application/pdf' }), nombre);
@@ -551,14 +695,14 @@ const main = async () => {
 
   const cotizacion = await subir('cotizacion.pdf', 'Cotizacion del proveedor');
   c(cotizacion.estado === 201, `subir la cotizacion responde 201 (dio ${cotizacion.estado})`);
-  const vale = await subir('vale.pdf', 'Vale firmado en obra', recepcion);
-  c(vale.estado === 201, 'subir el vale de la recepcion responde 201');
+  const papel = await subir('factura.pdf', 'Factura F-1001', idF1);
+  c(papel.estado === 201, 'subir el papel de una factura responde 201');
 
   const conAdjuntos = await ver();
   c(conAdjuntos.adjuntos.length === 1, 'la orden tiene su cotizacion');
   c(
-    conAdjuntos.entregas.find((x) => x.id === recepcion)?.adjuntos?.length === 1,
-    'y la recepcion, su vale',
+    conAdjuntos.entregas.find((x: { id: number }) => x.id === idF1)?.adjuntos?.length === 1,
+    'y la factura, su papel',
   );
 
   // Abrirlos: sin estos enlaces los adjuntos se guardaban pero nadie podia
@@ -598,7 +742,17 @@ const main = async () => {
     "SELECT accion FROM audit_log WHERE entidad = 'orden_compra' ORDER BY id",
   );
   const acciones = new Set(rastro.rows.map((r) => r.accion));
-  for (const a of ['crear', 'aprobar', 'rechazar', 'enviar', 'recibir', 'editar', 'dar_de_baja']) {
+  for (const a of [
+    'crear',
+    'aprobar',
+    'rechazar',
+    'enviar',
+    'registrar_factura',
+    'completar',
+    'anular_factura',
+    'editar',
+    'dar_de_baja',
+  ]) {
     c(acciones.has(a), `queda rastro de «${a}»`);
   }
 

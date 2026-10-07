@@ -4,15 +4,20 @@
  *
  * Lo que manda en este archivo:
  *
- *   * LA ORDEN LLEGA COMPLETA, EN UN SOLO PASO (Ivan, 2026-10-02: las
- *     entregas parciales son casos raros y se quitaron; un proveedor que
- *     despacha por partes lleva una orden por despacho). Hasta que se marca
- *     como recibida no se debe nada; al marcarla, se debe completa y desde ese
- *     dia corre el termino de pago.
- *   * La recepcion se guarda como UNA entrega con todos los renglones: congela
- *     el vencimiento y los montos de ese dia, y el pago se amarra a ella.
- *   * 'recibida' NO se guarda: se calcula de la entrega al leer
- *     (ESTADO_CALCULADO). Asi no hay dos verdades que se puedan separar.
+ *   * LA ORDEN LLEGA POR FACTURAS (Ivan, 2026-10-05, migracion 182). Cada
+ *     entrega se registra por su factura —numero, fecha, monto, archivo—, sin
+ *     contar cantidades. Lo que se debe es la suma de las facturas: el monto de
+ *     la orden es referencial.
+ *   * Cada factura congela su vencimiento (su fecha + el termino) y se paga por
+ *     separado: el pago se amarra a ella.
+ *   * Como las facturas no tienen por que sumar la orden, alguien la marca
+ *     como COMPLETA cuando el proveedor ya no va a mandar nada mas. Despues no
+ *     admite facturas.
+ *   * Una factura mal digitada se ANULA —mientras no tenga solicitud de pago— y
+ *     se registra de nuevo. No se borra.
+ *   * 'entrega_parcial', 'recibida' y la 'cerrada' de una orden completa y
+ *     pagada NO se guardan: se calculan al leer (ESTADO_CALCULADO). Asi no hay
+ *     dos verdades que se puedan separar.
  *   * El sistema no le escribe al proveedor. Martina baja el PDF, lo manda y
  *     marca la orden como enviada.
  */
@@ -34,7 +39,7 @@ import { fixFiles } from '../utils/fileEncoding.js';
 
 const router = Router();
 
-/** Los estados que alguien decide. Los otros dos se calculan. */
+/** Los estados que alguien decide. Los demás se calculan (ESTADO_CALCULADO). */
 type EstadoGuardado =
   | 'pendiente'
   | 'rechazada'
@@ -68,6 +73,9 @@ interface OrdenRow {
   enviada_por: number | null;
   enviada_at: string | null;
   baja_motivo: string | null;
+  /** Cuándo alguien la marcó como completa: desde ahí no admite facturas. */
+  completa_at: string | null;
+  completa_por: number | null;
   activo: boolean;
 }
 
@@ -80,19 +88,22 @@ interface ItemEntrada {
 }
 
 /**
- * El estado que ve la pantalla. Mientras la orden esta 'enviada', manda si ya
- * se recibio: sin recepcion -> enviada, con ella -> recibida. En cualquier otro
- * estado, el guardado es el que vale.
+ * El estado que ve la pantalla. Mientras la orden esta 'enviada', mandan sus
+ * facturas: sin ninguna -> enviada; con alguna pero sin marcarla completa ->
+ * entrega_parcial; completa -> recibida, y cerrada cuando ya no se debe nada.
+ * En cualquier otro estado, el guardado es el que vale. Necesita MONTOS.
  */
 const ESTADO_CALCULADO = `
   CASE
     WHEN o.estado <> 'enviada' THEN o.estado
-    WHEN COALESCE(m.recibido, 0) = 0 THEN 'enviada'
+    WHEN o.completa_at IS NULL AND m.facturas = 0 THEN 'enviada'
+    WHEN o.completa_at IS NULL THEN 'entrega_parcial'
+    WHEN COALESCE(m.recibido, 0) - COALESCE(m.pagado, 0) <= 0 THEN 'cerrada'
     ELSE 'recibida'
   END`;
 
-/** Si la orden ya se marco como recibida. */
-async function yaRecibida(ordenId: string | number): Promise<boolean> {
+/** Si la orden ya tiene alguna factura registrada. */
+async function tieneFacturas(ordenId: string | number): Promise<boolean> {
   const r = await query(
     'SELECT 1 FROM orden_compra_entregas WHERE orden_compra_id = $1 AND activo = true LIMIT 1',
     [ordenId],
@@ -101,9 +112,10 @@ async function yaRecibida(ordenId: string | number): Promise<boolean> {
 }
 
 /**
- * Los tres numeros de dinero de una orden, todos sumados y ninguno guardado:
+ * Los numeros de dinero de una orden, todos sumados y ninguno guardado:
  *
- *   recibido  — lo que llego (con su ITBMS). Es el costo y es la deuda.
+ *   facturas  — cuantas facturas tiene.
+ *   recibido  — la suma de las facturas. Es el costo y es la deuda.
  *   pagado    — lo que ya salio del banco. Misma regla que control de costos:
  *               cuentan 'pagada' y 'facturada'; una devolucion no.
  *   reclamado — lo que ya tiene una solicitud encima, aunque todavia no se haya
@@ -113,6 +125,9 @@ async function yaRecibida(ordenId: string | number): Promise<boolean> {
 const MONTOS = `
   LEFT JOIN LATERAL (
     SELECT
+      (SELECT COUNT(*)::int
+         FROM orden_compra_entregas e
+        WHERE e.orden_compra_id = o.id AND e.activo = true) AS facturas,
       (SELECT COALESCE(SUM(e.monto_total), 0)
          FROM orden_compra_entregas e
         WHERE e.orden_compra_id = o.id AND e.activo = true) AS recibido,
@@ -385,6 +400,7 @@ router.get(
                   WHEN 'pendiente'       THEN 1
                   WHEN 'por_enviar'      THEN 2
                   WHEN 'enviada'         THEN 3
+                  WHEN 'entrega_parcial' THEN 4
                   WHEN 'recibida'        THEN 5
                   WHEN 'cerrada'         THEN 6
                   WHEN 'rechazada'       THEN 7
@@ -394,10 +410,13 @@ router.get(
       paramsLista,
     );
 
-    // Los tres numeros de arriba, del mismo conjunto que la lista.
+    // Los tres numeros de arriba, del mismo conjunto que la lista. Abierta es
+    // la que todavia espera algo: que salga, que llegue o que se pague.
     const resumen = await query(
       `SELECT
-         COUNT(*) FILTER (WHERE o.estado IN ('por_enviar', 'enviada'))::int AS abiertas,
+         COUNT(*) FILTER (
+           WHERE (${ESTADO_CALCULADO}) IN ('por_enviar', 'enviada', 'entrega_parcial', 'recibida')
+         )::int AS abiertas,
          COALESCE(SUM(COALESCE(m.recibido, 0) - COALESCE(m.pagado, 0)), 0) AS por_pagar,
          COUNT(*) FILTER (
            WHERE v.vence IS NOT NULL AND v.vence < CURRENT_DATE
@@ -434,6 +453,7 @@ router.get(
               cg.nombre AS categoria_nombre,
               uc.nombre AS creado_por_nombre,
               ue.nombre AS enviada_por_nombre,
+              ucp.nombre AS completa_por_nombre,
               ${ESTADO_CALCULADO} AS estado_calculado,
               COALESCE(m.recibido, 0) AS recibido,
               COALESCE(m.pagado, 0) AS pagado,
@@ -445,6 +465,7 @@ router.get(
          LEFT JOIN categorias_gastos cg ON cg.id = o.categoria_id
          LEFT JOIN users uc ON uc.id = o.creado_por
          LEFT JOIN users ue ON ue.id = o.enviada_por
+         LEFT JOIN users ucp ON ucp.id = o.completa_por
          ${MONTOS}
          ${VENCE}
         WHERE o.id = $1 AND o.activo = true`,
@@ -460,7 +481,7 @@ router.get(
       return;
     }
 
-    const [items, entregas, adjuntos, aprobadores, aprobaciones, cambios, pagos] =
+    const [items, entregas, adjuntos, aprobadores, aprobaciones, cambios, pagos, anuladas] =
       await Promise.all([
         query(
           `SELECT i.* FROM orden_compra_items i
@@ -483,7 +504,18 @@ router.get(
                       JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
                      WHERE spe.entrega_id = e.id AND sp.activo = true
                        AND sp.estado NOT IN ('rechazada', 'devolucion')
-                  ), 0) AS reclamado
+                  ), 0) AS reclamado,
+                  -- Las solicitudes de esta factura, para decir en su renglón
+                  -- si ya se pagó o en qué va su pago.
+                  COALESCE((
+                    SELECT json_agg(json_build_object(
+                             'id', sp.id, 'numero', sp.numero, 'estado', sp.estado,
+                             'monto', spe.monto
+                           ) ORDER BY sp.id)
+                      FROM solicitud_pago_entregas spe
+                      JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
+                     WHERE spe.entrega_id = e.id AND sp.activo = true
+                  ), '[]'::json) AS solicitudes
              FROM orden_compra_entregas e
              LEFT JOIN users u ON u.id = e.registrada_por
             WHERE e.orden_compra_id = $1 AND e.activo = true
@@ -532,6 +564,16 @@ router.get(
             ORDER BY sp.id`,
           [id],
         ),
+        // Las facturas anuladas no cuentan para nada, pero la historia las dice.
+        query(
+          `SELECT e.id, e.numero_factura, e.fecha, e.monto_total, e.anulada_at, e.anulada_motivo,
+                  u.nombre AS anulada_por_nombre
+             FROM orden_compra_entregas e
+             LEFT JOIN users u ON u.id = e.anulada_por
+            WHERE e.orden_compra_id = $1 AND e.activo = false AND e.anulada_at IS NOT NULL
+            ORDER BY e.anulada_at`,
+          [id],
+        ),
       ]);
 
     res.json({
@@ -552,6 +594,7 @@ router.get(
         aprobaciones: aprobaciones.rows,
         cambios: cambios.rows,
         pagos: pagos.rows,
+        anuladas: anuladas.rows,
       },
     });
   }),
@@ -742,8 +785,7 @@ router.post(
 // ---------------------------------------------------------------------------
 // Antes de mandarla al proveedor la edita quien la creo (y cualquier admin).
 // Despues, SOLO un admin, con motivo obligatorio, y cada campo que cambia queda
-// en orden_compra_cambios. Y nunca se puede bajar un renglon por debajo de lo
-// que ya llego: eso volveria negativo lo recibido.
+// en orden_compra_cambios. Con la primera factura ya no se edita.
 const CAMPOS_EDITABLES = [
   'fecha',
   'proveedor',
@@ -794,12 +836,12 @@ router.put(
       });
       return;
     }
-    // Recibida, ya se debe completa y su vencimiento quedo fijado: cambiarla
+    // Con facturas ya hay deuda con vencimientos fijados: cambiar la orden
     // dejaria la deuda diciendo una cosa y la orden otra.
-    if (await yaRecibida(id)) {
+    if (await tieneFacturas(id)) {
       res.status(400).json({
         success: false,
-        error: 'La orden ya se recibió: ya no se edita',
+        error: 'La orden ya tiene facturas: ya no se edita',
       });
       return;
     }
@@ -878,8 +920,8 @@ router.put(
           return;
         }
 
-        // Los renglones se reescriben: una orden sin recibir no tiene ninguno
-        // del que haya llegado material.
+        // Los renglones se reescriben: aqui solo llega una orden sin facturas,
+        // asi que ninguna recepcion de antes apunta a ellos.
         await client.query('DELETE FROM orden_compra_items WHERE orden_compra_id = $1', [id]);
         for (const r of renglones) {
           await client.query(
@@ -1162,22 +1204,37 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /:id/recibir — llego la orden completa
+// POST /:id/facturas — llego una parte, con su factura
 // ---------------------------------------------------------------------------
-// Se guarda como UNA entrega con todos los renglones y los montos de la orden
-// (con su descuento): eso fija el vencimiento —fecha de llegada + termino— y es
-// a lo que despues se amarra el pago. El vale firmado se adjunta aparte
-// (POST /:id/adjuntos con entrega_id), porque en obra la foto llega del
-// telefono y a veces despues.
+// Cada entrega se registra por su factura (Ivan, 2026-10-05): numero, fecha y
+// monto, sin contar cantidades. Su vencimiento se congela aqui —fecha de la
+// factura + termino— y a ella se amarra despues el pago. El archivo de la
+// factura (y el vale, si lo hay) se sube aparte, con POST /:id/adjuntos y su
+// entrega_id: en obra la foto llega del telefono, y a veces despues.
 router.post(
-  '/:id/recibir',
+  '/:id/facturas',
   authenticateToken,
   checkPermission('ordenes_entregas'),
-  [param('id').isInt(), body('fecha').isDate().withMessage('La fecha en que llegó es obligatoria')],
+  [
+    param('id').isInt(),
+    body('numero_factura')
+      .trim()
+      .notEmpty()
+      .withMessage('El número de factura es obligatorio')
+      .isLength({ max: 100 })
+      .withMessage('El número de factura es demasiado largo'),
+    body('fecha').isDate().withMessage('La fecha de la factura es obligatoria'),
+    body('monto').isFloat({ gt: 0 }).withMessage('El monto de la factura debe ser mayor que cero'),
+  ],
   asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
     if (erroresDeValidacion(req, res)) return;
     const { id } = req.params;
-    const { fecha, nota } = req.body as { fecha: string; nota?: string };
+    const { numero_factura, fecha, nota } = req.body as {
+      numero_factura: string;
+      fecha: string;
+      nota?: string;
+    };
+    const monto = redondear(Number(req.body.monto));
 
     const orden = await traerOrden(id);
     if (!orden) {
@@ -1188,66 +1245,75 @@ router.post(
       res.status(403).json({ success: false, error: 'Sin acceso a esa orden' });
       return;
     }
-    if (orden.estado !== 'enviada') {
-      res.status(400).json({
-        success: false,
-        error: 'Solo se recibe una orden enviada al proveedor',
-      });
-      return;
-    }
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      // Dos personas marcandola a la vez no pueden dejar dos recepciones.
-      await client.query('SELECT 1 FROM ordenes_compra WHERE id = $1 FOR UPDATE', [id]);
-      const previa = await client.query(
-        'SELECT 1 FROM orden_compra_entregas WHERE orden_compra_id = $1 AND activo = true',
-        [id],
-      );
-      if (previa.rows.length > 0) {
+      // Se vuelve a leer con candado: una factura que entra mientras otra
+      // persona la marca como completa tiene que esperar y ver la orden ya
+      // cerrada a facturas.
+      const actual = (
+        await client.query<OrdenRow>('SELECT * FROM ordenes_compra WHERE id = $1 FOR UPDATE', [id])
+      ).rows[0];
+      const problema =
+        actual.estado !== 'enviada'
+          ? 'Solo se registran facturas de una orden enviada al proveedor'
+          : actual.completa_at
+            ? 'La orden ya está completa: no admite más facturas'
+            : null;
+      if (problema) {
         await client.query('ROLLBACK');
-        res.status(400).json({ success: false, error: 'Esa orden ya se marcó como recibida' });
+        res.status(400).json({ success: false, error: problema });
+        return;
+      }
+      // La misma factura dos veces es el error mas facil de cometer cuando se
+      // registran varias del mismo proveedor seguidas.
+      const repetida = await client.query(
+        `SELECT 1 FROM orden_compra_entregas
+          WHERE orden_compra_id = $1 AND activo = true
+            AND lower(trim(numero_factura)) = lower($2)`,
+        [id, numero_factura.trim()],
+      );
+      if (repetida.rows.length > 0) {
+        await client.query('ROLLBACK');
+        res.status(400).json({
+          success: false,
+          error: `La factura ${numero_factura.trim()} ya está registrada en esta orden`,
+        });
         return;
       }
 
-      const entrega = await client.query<{ id: number; vence: string }>(
+      const factura = await client.query<{ id: number; vence: string; monto_total: string }>(
         `INSERT INTO orden_compra_entregas
-           (orden_compra_id, fecha, vence, subtotal, itbms, monto_total, nota, registrada_por)
-         VALUES ($1, $2::date, $2::date + $3::int, $4, $5, $6, $7, $8)
-         RETURNING id, vence`,
+           (orden_compra_id, numero_factura, fecha, vence, monto_total, nota, registrada_por)
+         VALUES ($1, $2, $3::date, $3::date + $4::int, $5, $6, $7)
+         RETURNING id, vence, monto_total`,
         [
           id,
+          numero_factura.trim(),
           fecha,
-          orden.termino_dias,
-          redondear(Number(orden.subtotal) - Number(orden.descuento)),
-          orden.itbms,
-          orden.monto_total,
+          actual.termino_dias,
+          monto,
           nota?.trim() || null,
           req.user!.id,
         ],
       );
-      await client.query(
-        `INSERT INTO orden_compra_entrega_items
-           (entrega_id, item_id, cantidad, precio_unitario, precio_total)
-         SELECT $1, i.id, i.cantidad, i.precio_unitario, i.precio_total
-           FROM orden_compra_items i
-          WHERE i.orden_compra_id = $2`,
-        [entrega.rows[0].id, id],
-      );
       await registrarAudit(
         req.user!.id,
-        'recibir',
+        'registrar_factura',
         'orden_compra',
         Number(id),
-        { numero: orden.numero, entrega_id: entrega.rows[0].id, monto_total: orden.monto_total },
+        {
+          numero: orden.numero,
+          entrega_id: factura.rows[0].id,
+          numero_factura: numero_factura.trim(),
+          fecha,
+          monto_total: monto,
+        },
         client,
       );
       await client.query('COMMIT');
-      res.status(201).json({
-        success: true,
-        data: { id: entrega.rows[0].id, vence: entrega.rows[0].vence, monto_total: orden.monto_total },
-      });
+      res.status(201).json({ success: true, data: factura.rows[0] });
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -1258,15 +1324,208 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /:id/activar-pago — nace la solicitud de pago de lo que ya llego
+// POST /:id/facturas/:facturaId/anular — una factura mal digitada
 // ---------------------------------------------------------------------------
-// El pago se amarra a la recepcion de la orden (su unica entrega), que es la
-// que tiene el vencimiento. Se puede pagar menos y dejar el resto para despues.
+// Se anula y se registra de nuevo, bien (Ivan, 2026-10-07). Solo mientras no
+// tenga una solicitud de pago encima: con una, ya hay plata pedida sobre ese
+// numero. No se borra: queda inactiva, con quien, cuando y por que.
+//
+// Si la orden ya estaba completa vuelve a admitir facturas, porque lo normal es
+// que la corregida tenga que entrar despues; se marca completa otra vez.
+router.post(
+  '/:id/facturas/:facturaId/anular',
+  authenticateToken,
+  checkPermission('ordenes_entregas'),
+  [
+    param('id').isInt(),
+    param('facturaId').isInt(),
+    body('motivo').trim().notEmpty().withMessage('El motivo es obligatorio'),
+  ],
+  asyncHandler(async (req: Request<{ id: string; facturaId: string }>, res: Response) => {
+    if (erroresDeValidacion(req, res)) return;
+    const { id, facturaId } = req.params;
+    const motivo = (req.body.motivo as string).trim();
+
+    const orden = await traerOrden(id);
+    if (!orden) {
+      res.status(404).json({ success: false, error: 'Orden no encontrada' });
+      return;
+    }
+    if (!(await puedeElProyecto(req, orden.proyecto_id))) {
+      res.status(403).json({ success: false, error: 'Sin acceso a esa orden' });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const actual = (
+        await client.query<OrdenRow>('SELECT * FROM ordenes_compra WHERE id = $1 FOR UPDATE', [id])
+      ).rows[0];
+      const factura = (
+        await client.query<{ id: number; numero_factura: string | null; monto_total: string }>(
+          `SELECT id, numero_factura, monto_total FROM orden_compra_entregas
+            WHERE id = $1 AND orden_compra_id = $2 AND activo = true
+            FOR UPDATE`,
+          [facturaId, id],
+        )
+      ).rows[0];
+      // Una solicitud rechazada o devuelta ya no pide nada: esa no estorba.
+      const pedida = factura
+        ? (
+            await client.query(
+              `SELECT 1 FROM solicitud_pago_entregas spe
+                 JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
+                WHERE spe.entrega_id = $1 AND sp.activo = true
+                  AND sp.estado NOT IN ('rechazada', 'devolucion')
+                LIMIT 1`,
+              [factura.id],
+            )
+          ).rows.length > 0
+        : false;
+      const problema =
+        actual.estado !== 'enviada'
+          ? 'Solo se anulan facturas de una orden enviada al proveedor'
+          : !factura
+            ? 'Esa factura no es de esta orden'
+            : pedida
+              ? 'Esa factura ya tiene una solicitud de pago: no se anula'
+              : null;
+      if (problema) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ success: false, error: problema });
+        return;
+      }
+
+      await client.query(
+        `UPDATE orden_compra_entregas
+            SET activo = false, anulada_at = CURRENT_TIMESTAMP, anulada_por = $1, anulada_motivo = $2
+          WHERE id = $3`,
+        [req.user!.id, motivo, factura!.id],
+      );
+      const reabierta = actual.completa_at !== null;
+      if (reabierta) {
+        await client.query(
+          `UPDATE ordenes_compra
+              SET completa_at = NULL, completa_por = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1`,
+          [id],
+        );
+      }
+      await registrarAudit(
+        req.user!.id,
+        'anular_factura',
+        'orden_compra',
+        Number(id),
+        {
+          numero: orden.numero,
+          entrega_id: factura!.id,
+          numero_factura: factura!.numero_factura,
+          monto_total: factura!.monto_total,
+          motivo,
+          reabierta,
+        },
+        client,
+      );
+      await client.query('COMMIT');
+      res.json({ success: true, data: { id: factura!.id, reabierta } });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// POST /:id/completa — el proveedor ya no va a mandar nada mas
+// ---------------------------------------------------------------------------
+// Las facturas no tienen por que sumar la orden (redondeos, material que
+// falto), asi que el sistema no puede saber solo cuando termino de llegar.
+// Desde aqui la orden no admite facturas y lo que queda es pagarla.
+router.post(
+  '/:id/completa',
+  authenticateToken,
+  checkPermission('ordenes_entregas'),
+  [param('id').isInt()],
+  asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
+    if (erroresDeValidacion(req, res)) return;
+    const { id } = req.params;
+
+    const orden = await traerOrden(id);
+    if (!orden) {
+      res.status(404).json({ success: false, error: 'Orden no encontrada' });
+      return;
+    }
+    if (!(await puedeElProyecto(req, orden.proyecto_id))) {
+      res.status(403).json({ success: false, error: 'Sin acceso a esa orden' });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const actual = (
+        await client.query<OrdenRow>('SELECT * FROM ordenes_compra WHERE id = $1 FOR UPDATE', [id])
+      ).rows[0];
+      const facturas = (
+        await client.query<{ n: number; suma: string }>(
+          `SELECT COUNT(*)::int AS n, COALESCE(SUM(monto_total), 0) AS suma
+             FROM orden_compra_entregas WHERE orden_compra_id = $1 AND activo = true`,
+          [id],
+        )
+      ).rows[0];
+      const problema =
+        actual.estado !== 'enviada'
+          ? 'Solo se marca como completa una orden enviada al proveedor'
+          : actual.completa_at
+            ? 'La orden ya está marcada como completa'
+            : facturas.n === 0
+              ? 'Registre al menos una factura antes de marcarla como completa'
+              : null;
+      if (problema) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ success: false, error: problema });
+        return;
+      }
+
+      const r = await client.query<OrdenRow>(
+        `UPDATE ordenes_compra
+            SET completa_at = CURRENT_TIMESTAMP, completa_por = $1, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2 RETURNING *`,
+        [req.user!.id, id],
+      );
+      await registrarAudit(
+        req.user!.id,
+        'completar',
+        'orden_compra',
+        Number(id),
+        { numero: orden.numero, facturas: facturas.n, facturado: facturas.suma, monto_orden: orden.monto_total },
+        client,
+      );
+      await client.query('COMMIT');
+      res.json({ success: true, data: r.rows[0] });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// POST /:id/activar-pago — nace la solicitud de pago de una factura
+// ---------------------------------------------------------------------------
+// El pago se amarra a facturas concretas, que son las que tienen vencimiento
+// (Ivan, 05/10: cada factura se paga por separado). Se puede pagar menos y
+// dejar el resto para despues.
 router.post(
   '/:id/activar-pago',
   authenticateToken,
   checkPermission('ordenes_ver'),
-  [param('id').isInt(), body('entregas').isArray({ min: 1 }).withMessage('Diga qué entregas se pagan')],
+  [param('id').isInt(), body('entregas').isArray({ min: 1 }).withMessage('Diga qué facturas se pagan')],
   asyncHandler(async (req: Request<{ id: string }>, res: Response) => {
     if (erroresDeValidacion(req, res)) return;
     const { id } = req.params;
@@ -1284,61 +1543,69 @@ router.post(
       res.status(403).json({ success: false, error: 'Sin acceso a esa orden' });
       return;
     }
-    if (orden.estado !== 'enviada' || !(await yaRecibida(id))) {
+    if (orden.estado !== 'enviada' || !(await tieneFacturas(id))) {
       res.status(400).json({
         success: false,
-        error: 'Solo se activa un pago sobre una orden ya recibida',
+        error: 'Solo se activa un pago sobre una factura registrada',
       });
       return;
     }
-
-    // Lo que queda por reclamar de cada entrega: su monto menos lo que ya tiene
-    // encima una solicitud que no fue rechazada.
-    const disponibles = await query<{ id: number; disponible: string }>(
-      `SELECT e.id,
-              (e.monto_total - COALESCE((
-                 SELECT SUM(spe.monto)
-                   FROM solicitud_pago_entregas spe
-                   JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
-                  WHERE spe.entrega_id = e.id AND sp.activo = true
-                    AND sp.estado NOT IN ('rechazada', 'devolucion')
-               ), 0)) AS disponible
-         FROM orden_compra_entregas e
-        WHERE e.orden_compra_id = $1 AND e.activo = true`,
-      [id],
-    );
-    const porEntrega = new Map(disponibles.rows.map((r) => [r.id, Number(r.disponible)]));
-
-    let total = 0;
-    for (const e of entregas) {
-      const monto = redondear(Number(e.monto));
-      const disponible = porEntrega.get(Number(e.entrega_id));
-      if (disponible === undefined) {
-        res.status(400).json({ success: false, error: 'Esa recepción no es de esta orden' });
-        return;
-      }
-      if (monto <= 0) {
-        res.status(400).json({ success: false, error: 'El monto a pagar debe ser mayor que cero' });
-        return;
-      }
-      if (monto > disponible) {
-        res.status(400).json({
-          success: false,
-          error: `De esta orden solo quedan ${disponible.toFixed(2)} por pagar`,
-        });
-        return;
-      }
-      total = redondear(total + monto);
+    if (new Set(entregas.map((e) => Number(e.entrega_id))).size !== entregas.length) {
+      res.status(400).json({ success: false, error: 'Una factura va una sola vez en la solicitud' });
+      return;
     }
 
     // La solicitud nace igual que cualquier otra y sigue la misma cadena; lo
-    // unico propio es que sabe de que orden y de que entregas viene.
+    // unico propio es que sabe de que orden y de que facturas viene.
     const { generateNumero } = await import('./solicitudesPago.js');
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Con el candado puesto, dos personas activando a la vez no pueden pedir
+      // las dos el mismo saldo: el disponible se cuenta despues de tomarlo.
       await client.query('SELECT pg_advisory_xact_lock($1)', [orden.proyecto_id]);
+
+      // Lo que queda por reclamar de cada factura: su monto menos lo que ya
+      // tiene encima una solicitud que no fue rechazada.
+      const disponibles = await client.query<{
+        id: number;
+        numero_factura: string | null;
+        fecha: Date;
+        disponible: string;
+      }>(
+        `SELECT e.id, e.numero_factura, e.fecha,
+                (e.monto_total - COALESCE((
+                   SELECT SUM(spe.monto)
+                     FROM solicitud_pago_entregas spe
+                     JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
+                    WHERE spe.entrega_id = e.id AND sp.activo = true
+                      AND sp.estado NOT IN ('rechazada', 'devolucion')
+                 ), 0)) AS disponible
+           FROM orden_compra_entregas e
+          WHERE e.orden_compra_id = $1 AND e.activo = true`,
+        [id],
+      );
+      const porEntrega = new Map(disponibles.rows.map((r) => [r.id, r]));
+
+      let total = 0;
+      for (const e of entregas) {
+        const monto = redondear(Number(e.monto));
+        const factura = porEntrega.get(Number(e.entrega_id));
+        const problema = !factura
+          ? 'Esa factura no es de esta orden'
+          : !(monto > 0)
+            ? 'El monto a pagar debe ser mayor que cero'
+            : monto > Number(factura.disponible)
+              ? `De esta factura solo quedan ${Number(factura.disponible).toFixed(2)} por pagar`
+              : null;
+        if (problema) {
+          await client.query('ROLLBACK');
+          res.status(400).json({ success: false, error: problema });
+          return;
+        }
+        total = redondear(total + monto);
+      }
 
       let numero: string;
       try {
@@ -1355,6 +1622,16 @@ router.post(
         throw err;
       }
 
+      // Las recepciones de antes del 05/10 no tienen numero de factura: se
+      // nombran por el dia en que llegaron.
+      const nombreDe = (f: { numero_factura: string | null; fecha: Date }) =>
+        f.numero_factura
+          ? `factura ${f.numero_factura}`
+          : `recibida el ${new Date(f.fecha).toISOString().split('T')[0]}`;
+      const pagadas = entregas
+        .map((e) => ({ monto: redondear(Number(e.monto)), factura: porEntrega.get(Number(e.entrega_id))! }))
+        .sort((a, b) => new Date(a.factura.fecha).getTime() - new Date(b.factura.fecha).getTime());
+
       const solicitud = await client.query<{ id: number; numero: string }>(
         `INSERT INTO solicitudes_pago (
            proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
@@ -1368,7 +1645,10 @@ router.post(
           orden.proveedor,
           req.user!.id,
           total,
-          observaciones || `Pago de la orden ${orden.numero}`,
+          observaciones ||
+            (pagadas.length === 1
+              ? `Pago de la ${nombreDe(pagadas[0].factura)} de la orden ${orden.numero}`
+              : `Pago de la orden ${orden.numero}`),
           generateCodigoVerificacion(),
           orden.categoria_id,
           id,
@@ -1376,30 +1656,18 @@ router.post(
       );
       const solicitudId = solicitud.rows[0].id;
 
-      for (const e of entregas) {
+      // Un renglon por factura, que diga de que orden y de que factura viene.
+      for (const [i, p] of pagadas.entries()) {
         await client.query(
           `INSERT INTO solicitud_pago_entregas (solicitud_pago_id, entrega_id, monto)
            VALUES ($1, $2, $3)`,
-          [solicitudId, e.entrega_id, redondear(Number(e.monto))],
-        );
-      }
-
-      // Un renglon que diga de que orden y de que recepcion viene.
-      const detalle = await client.query<{ entrega_id: number; fecha: string }>(
-        `SELECT e.id AS entrega_id, e.fecha
-           FROM orden_compra_entregas e
-          WHERE e.id = ANY($1::int[]) ORDER BY e.fecha`,
-        [entregas.map((e) => e.entrega_id)],
-      );
-      for (const [i, d] of detalle.rows.entries()) {
-        const monto = redondear(
-          Number(entregas.find((e) => Number(e.entrega_id) === d.entrega_id)!.monto),
+          [solicitudId, p.factura.id, p.monto],
         );
         await client.query(
           `INSERT INTO solicitud_pago_items
              (solicitud_pago_id, cantidad, unidad, descripcion, precio_unitario, precio_total, orden)
-           VALUES ($1, 1, 'entrega', $2, $3, $3, $4)`,
-          [solicitudId, `${orden.numero} · recibida el ${new Date(d.fecha).toISOString().split('T')[0]}`, monto, i],
+           VALUES ($1, 1, 'factura', $2, $3, $3, $4)`,
+          [solicitudId, `${orden.numero} · ${nombreDe(p.factura)}`, p.monto, i],
         );
       }
 
@@ -1425,7 +1693,8 @@ router.post(
 // ---------------------------------------------------------------------------
 // POST /:id/baja — matar la orden sin borrarla
 // ---------------------------------------------------------------------------
-// Solo antes de recibirla: recibida, ya se debe completa y no hay nada que soltar.
+// Solo antes de la primera factura: con facturas ya hay deuda. Si el proveedor
+// no va a mandar el resto, se marca como completa.
 router.post(
   '/:id/baja',
   authenticateToken,
@@ -1448,10 +1717,10 @@ router.post(
       res.status(400).json({ success: false, error: 'Una orden rechazada no se da de baja' });
       return;
     }
-    if (orden.estado === 'cerrada' || (await yaRecibida(id))) {
+    if (orden.estado === 'cerrada' || (await tieneFacturas(id))) {
       res.status(400).json({
         success: false,
-        error: 'La orden ya se recibió y se debe completa: no se da de baja',
+        error: 'La orden ya tiene facturas: no se da de baja. Si no llegará nada más, márquela como completa',
       });
       return;
     }
@@ -1670,7 +1939,7 @@ router.post(
         [entregaId, id],
       );
       if (e.rows.length === 0) {
-        res.status(400).json({ success: false, error: 'Esa entrega no es de esta orden' });
+        res.status(400).json({ success: false, error: 'Esa factura no es de esta orden' });
         return;
       }
     }

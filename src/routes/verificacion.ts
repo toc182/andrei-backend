@@ -103,12 +103,15 @@ router.get(
         `SELECT o.numero, o.fecha, o.proveedor, o.proveedor_ruc, o.monto_total,
                 o.termino_dias, o.condiciones,
                 COALESCE(p.nombre_corto, p.nombre) AS proyecto_nombre,
+                -- Como en la pantalla, pero sin mirar pagos: quien escanea el
+                -- papel no tiene por que saber si ya se pago.
                 CASE
                   WHEN o.estado <> 'enviada' THEN o.estado
+                  WHEN o.completa_at IS NOT NULL THEN 'recibida'
                   WHEN EXISTS (
                     SELECT 1 FROM orden_compra_entregas e
                      WHERE e.orden_compra_id = o.id AND e.activo = true
-                  ) THEN 'recibida'
+                  ) THEN 'entrega_parcial'
                   ELSE 'enviada'
                 END AS estado
            FROM ordenes_compra o
