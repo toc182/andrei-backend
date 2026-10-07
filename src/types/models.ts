@@ -124,55 +124,6 @@ export type CreateEquipmentDTO = Omit<
 >;
 export type UpdateEquipmentDTO = Partial<CreateEquipmentDTO>;
 
-// ==================== REQUISICION ====================
-export type RequisicionStatus =
-  | 'pendiente'
-  | 'en_cotizacion'
-  | 'por_aprobar'
-  | 'aprobada'
-  | 'pagada'
-  | 'rechazada';
-
-export interface Requisicion {
-  id: number;
-  proyecto_id: number;
-  numero: string;
-  fecha: Date;
-  proveedor?: string;
-  descripcion?: string;
-  subtotal: number;
-  itbms: number;
-  monto_total: number;
-  estado: RequisicionStatus;
-  solicitante_id?: number;
-  archivada: boolean;
-  fecha_archivado?: Date;
-  archivado_por?: number;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export interface RequisicionItem {
-  id: number;
-  requisicion_id: number;
-  descripcion: string;
-  cantidad: number;
-  unidad: string;
-  precio_unitario: number;
-  subtotal: number;
-  orden: number;
-}
-
-export type CreateRequisicionDTO = Omit<
-  Requisicion,
-  | 'id'
-  | 'archivada'
-  | 'fecha_archivado'
-  | 'archivado_por'
-  | 'created_at'
-  | 'updated_at'
->;
-
 // ==================== PROJECT MEMBERS ====================
 export type MemberType = 'usuario' | 'externo';
 export type MemberRole = 'gerente' | 'ingeniero' | 'supervisor' | 'miembro';

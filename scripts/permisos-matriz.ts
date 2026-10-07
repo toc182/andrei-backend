@@ -121,8 +121,8 @@ async function buscarUsuarios(): Promise<{ admin: Quien; usuario: Quien; proyect
 
 function sondas(p: number): Sonda[] {
   return [
-    // --- Miembros: las lecturas las usan los formularios de requisicion,
-    //     solicitud de pago y tareas. Las escrituras, solo la pagina de
+    // --- Miembros: las lecturas las usan los formularios de solicitud de
+    //     pago y tareas. Las escrituras, solo la pagina de
     //     administracion. El corte va entre unas y otras.
     { metodo: 'GET', ruta: `/project-members/project/${p}`, nota: 'leer miembros (3 formularios dependen)' },
     { metodo: 'GET', ruta: '/project-members/users', nota: 'leer usuarios asignables' },
@@ -140,7 +140,7 @@ function sondas(p: number): Sonda[] {
     { metodo: 'GET', ruta: '/requisiciones', nota: 'listado de requisiciones' },
     { metodo: 'GET', ruta: '/clientes', nota: 'listado de clientes' },
     { metodo: 'GET', ruta: `/solicitudes-pago/project/${p}`, nota: 'solicitudes del proyecto' },
-    { metodo: 'GET', ruta: `/requisiciones/project/${p}`, nota: 'requisiciones del proyecto (lo usa tambien el form de solicitud)' },
+    { metodo: 'GET', ruta: `/requisiciones?proyecto_id=${p}`, nota: 'requisiciones del proyecto' },
     { metodo: 'GET', ruta: `/costs/projects/${p}/partidas`, nota: 'partidas de Control de Costos' },
     { metodo: 'GET', ruta: `/clientes/${ID_INEXISTENTE}`, nota: 'detalle de cliente' },
     { metodo: 'GET', ruta: '/clientes/stats/dashboard', nota: 'stats del dashboard (lo llama todo el mundo)' },

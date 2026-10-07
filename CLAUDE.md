@@ -131,6 +131,12 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
 - emailService.ts — sendEmail() via Resend API
 - pdfGenerator.ts — generateSolicitudPDF() via Puppeteer + templates/
 - auditLog.ts — registrarAudit() — call on every create/edit/delete/approve/pay
+- requisicionPdf.ts — the requisition's paper (consortium or Pinellas letterhead, same
+  rule as the daily report). Who may see/edit/approve/attend a requisition depends on
+  the row, so those rules live in routes/requisiciones.ts (puedeVer & co.), not in
+  checkPermission; the decisions behind them are in migration 183. Its quotes also
+  appear in Cotizaciones, one entry per line, written ONLY from requisiciones.ts —
+  cotizaciones.ts answers 409 if anyone tries to change them there.
 - scheduler.ts — cron: Mon-Fri 3:30pm, Sat 11:30am Panama time
 - whatsapp/ — the daily-report assistant on WhatsApp. cliente.ts (send text,
   buttons and documents; download media), firma.ts (X-Hub-Signature-256),

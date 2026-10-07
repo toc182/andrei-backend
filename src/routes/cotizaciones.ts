@@ -81,6 +81,40 @@ function sanitizeFilename(name: string): string {
     .replace(/_+/g, '_');
 }
 
+// Las entradas y ofertas que nacen de una requisición se agregan y se cambian
+// desde la requisición (routes/requisiciones.ts); aquí solo se consultan. Así una
+// misma cotización no tiene dos lugares desde donde cambiarla (Ivan, 2026-10-05).
+const DE_REQUISICION = {
+  cotizacion: `SELECT r.numero FROM cotizaciones c
+                 JOIN requisicion_lineas l ON l.id = c.requisicion_linea_id
+                 JOIN requisiciones r ON r.id = l.requisicion_id
+                WHERE c.id = $1`,
+  oferta: `SELECT r.numero FROM cotizacion_ofertas o
+             JOIN cotizaciones c ON c.id = o.cotizacion_id
+             JOIN requisicion_lineas l ON l.id = c.requisicion_linea_id
+             JOIN requisiciones r ON r.id = l.requisicion_id
+            WHERE o.id = $1`,
+  archivo: `SELECT r.numero FROM cotizacion_archivos a
+              JOIN cotizacion_ofertas o ON o.id = a.oferta_id
+              JOIN cotizaciones c ON c.id = o.cotizacion_id
+              JOIN requisicion_lineas l ON l.id = c.requisicion_linea_id
+              JOIN requisiciones r ON r.id = l.requisicion_id
+             WHERE a.id = $1`,
+} as const;
+
+/** Si viene de una requisición, contesta 409 y devuelve true. */
+async function esDeRequisicion(
+  res: Response,
+  tipo: keyof typeof DE_REQUISICION,
+  id: number,
+): Promise<boolean> {
+  const r = await query<{ numero: string }>(DE_REQUISICION[tipo], [id]);
+  if (r.rows.length === 0) return false;
+  const msg = `Viene de la requisición ${r.rows[0].numero}: se cambia desde allá`;
+  res.status(409).json({ success: false, error: msg, message: msg });
+  return true;
+}
+
 interface OfertaInput {
   proveedor: string;
   monto?: number | null;
@@ -93,9 +127,12 @@ router.get(
   asyncHandler(async (_req: Request, res: Response): Promise<void> => {
     const result = await query(
       `SELECT c.id, c.descripcion, c.descripcion_larga, c.tipo, c.proyecto_id, c.ambito,
-              COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre, c.created_at
+              COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre, c.created_at,
+              rq.id AS requisicion_id, rq.numero AS requisicion_numero
        FROM cotizaciones c
        LEFT JOIN proyectos p ON p.id = c.proyecto_id
+       LEFT JOIN requisicion_lineas rl ON rl.id = c.requisicion_linea_id
+       LEFT JOIN requisiciones rq ON rq.id = rl.requisicion_id
        WHERE c.activo = TRUE
        ORDER BY c.created_at DESC`,
     );
@@ -111,14 +148,17 @@ router.get(
       `SELECT o.id, o.cotizacion_id, o.proveedor, o.monto, o.nota, o.elegida,
               o.created_at, c.descripcion, c.tipo, c.proyecto_id, c.ambito,
               COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre, u.nombre AS agregado_por_nombre,
-              COUNT(a.id)::int AS archivos_count
+              COUNT(a.id)::int AS archivos_count,
+              rq.id AS requisicion_id, rq.numero AS requisicion_numero
        FROM cotizacion_ofertas o
        JOIN cotizaciones c ON c.id = o.cotizacion_id AND c.activo = TRUE
        LEFT JOIN proyectos p ON p.id = c.proyecto_id
+       LEFT JOIN requisicion_lineas rl ON rl.id = c.requisicion_linea_id
+       LEFT JOIN requisiciones rq ON rq.id = rl.requisicion_id
        LEFT JOIN users u ON u.id = o.creado_por
        LEFT JOIN cotizacion_archivos a ON a.oferta_id = o.id
        WHERE o.activo = TRUE
-       GROUP BY o.id, c.descripcion, c.tipo, c.proyecto_id, c.ambito, p.nombre_corto, p.nombre, u.nombre
+       GROUP BY o.id, c.descripcion, c.tipo, c.proyecto_id, c.ambito, p.nombre_corto, p.nombre, u.nombre, rq.id, rq.numero
        ORDER BY o.created_at DESC`,
     );
     res.json({ success: true, data: result.rows });
@@ -229,6 +269,7 @@ router.post(
       const user = req.user!;
       const ofertaId = Number(req.params.ofertaId);
       const files = req.files as Express.Multer.File[];
+      if (await esDeRequisicion(res, 'oferta', ofertaId)) return;
 
       if (!files || files.length === 0) {
         res
@@ -358,6 +399,7 @@ router.put(
       const user = req.user!;
       const ofertaId = Number(req.params.ofertaId);
       const { proveedor, monto, nota } = req.body;
+      if (await esDeRequisicion(res, 'oferta', ofertaId)) return;
 
       const result = await query(
         `UPDATE cotizacion_ofertas
@@ -396,6 +438,7 @@ router.put(
       const user = req.user!;
       const ofertaId = Number(req.params.ofertaId);
       const elegida = req.body.elegida as boolean;
+      if (await esDeRequisicion(res, 'oferta', ofertaId)) return;
 
       const client = await pool.connect();
       try {
@@ -454,6 +497,7 @@ router.delete(
     async (req: Request<{ ofertaId: string }>, res: Response): Promise<void> => {
       const user = req.user!;
       const ofertaId = Number(req.params.ofertaId);
+      if (await esDeRequisicion(res, 'oferta', ofertaId)) return;
 
       // Soft delete: los objetos R2 se conservan (recuperable).
       const result = await query(
@@ -507,6 +551,7 @@ router.delete(
     async (req: Request<{ archivoId: string }>, res: Response): Promise<void> => {
       const user = req.user!;
       const archivoId = Number(req.params.archivoId);
+      if (await esDeRequisicion(res, 'archivo', archivoId)) return;
 
       const result = await query<{
         r2_key: string;
@@ -557,10 +602,14 @@ router.get(
       const { id } = req.params;
 
       const cot = await query(
-        `SELECT c.*, COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre, u.nombre AS pedido_por_nombre
+        `SELECT c.*, COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre, u.nombre AS pedido_por_nombre,
+                rq.id AS requisicion_id, rq.numero AS requisicion_numero, rq.descripcion AS requisicion_descripcion,
+                rl.orden + 1 AS requisicion_linea
          FROM cotizaciones c
          LEFT JOIN proyectos p ON p.id = c.proyecto_id
          LEFT JOIN users u ON u.id = c.creado_por
+         LEFT JOIN requisicion_lineas rl ON rl.id = c.requisicion_linea_id
+         LEFT JOIN requisiciones rq ON rq.id = rl.requisicion_id
          WHERE c.id = $1 AND c.activo = TRUE`,
         [id],
       );
@@ -573,6 +622,7 @@ router.get(
 
       const ofertas = await query(
         `SELECT o.id, o.proveedor, o.monto, o.nota, o.elegida, o.created_at,
+                o.requisicion_cotizacion_id,
                 u.nombre AS creado_por_nombre,
                 COUNT(a.id)::int AS archivos_count
          FROM cotizacion_ofertas o
@@ -614,6 +664,7 @@ router.put(
       const user = req.user!;
       const id = Number(req.params.id);
       const { descripcion, descripcion_larga, tipo, proyecto_id, ambito } = req.body;
+      if (await esDeRequisicion(res, 'cotizacion', id)) return;
 
       const result = await query(
         `UPDATE cotizaciones
@@ -665,6 +716,7 @@ router.post(
       const user = req.user!;
       const id = Number(req.params.id);
       const { proveedor, monto, nota } = req.body;
+      if (await esDeRequisicion(res, 'cotizacion', id)) return;
 
       const parent = await query(
         'SELECT id FROM cotizaciones WHERE id = $1 AND activo = TRUE',
@@ -704,6 +756,7 @@ router.delete(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
       const user = req.user!;
       const id = Number(req.params.id);
+      if (await esDeRequisicion(res, 'cotizacion', id)) return;
 
       // Solo la cotización pasa a inactiva; las ofertas quedan intactas.
       // Ambos listados filtran por c.activo, así que desaparecen de la

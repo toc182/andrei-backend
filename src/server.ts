@@ -132,6 +132,14 @@ app.use('/api/equipos', equiposRoutes);
 app.use('/api/asignaciones', asignacionesRoutes);
 app.use('/api/registro-uso', registroUsoRoutes);
 
+// El papel de la requisición se abre con window.open, que no manda cabeceras:
+// el token viaja en la dirección, igual que en las órdenes y las solicitudes.
+app.use('/api/requisiciones/:id/pdf', (req, res, next) => {
+  if (!req.headers['authorization'] && req.query.token) {
+    req.headers['authorization'] = `Bearer ${req.query.token}`;
+  }
+  next();
+});
 app.use('/api/requisiciones', requisicionesRoutes);
 // El PDF se abre con window.open, que no manda cabeceras: el token viaja en la
 // direccion, igual que en las solicitudes de pago.

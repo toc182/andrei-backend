@@ -29,7 +29,6 @@ const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'clientes_editar',
   'clientes_eliminar',
   'solicitudes_editar_todas',
-  'requisiciones_editar_todas',
   'equipos_ver',
   'equipos_agregar',
   'equipos_editar',
@@ -48,6 +47,8 @@ const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'reportes',
   'solicitudes_ver',
   'requisiciones_ver',
+  'requisiciones_crear',
+  'requisiciones_atender',
   'clientes_ver',
   'costos_ver',
   'ordenes_ver',
@@ -200,9 +201,8 @@ export function checkPermission(permiso: keyof UserPermissions) {
  * Igual que checkPermission, pero deja pasar si el usuario tiene CUALQUIERA de
  * las llaves. Existe porque hay endpoints que sirven a dos perfiles distintos:
  * GET /clientes lo necesita quien ve la seccion de Clientes y tambien quien
- * crea un proyecto, y GET /requisiciones/project/:id lo necesita la seccion de
- * Requisiciones y tambien el formulario de solicitud de pago. Con una sola
- * llave, cerrar el endpoint rompia al otro perfil.
+ * crea un proyecto. Con una sola llave, cerrar el endpoint rompia al otro
+ * perfil.
  */
 export function checkAnyPermission(permisos: (keyof UserPermissions)[]) {
   for (const permiso of permisos) {

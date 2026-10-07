@@ -35,6 +35,7 @@ const PRUEBAS: Record<string, string> = {
   ordenes: 'ordenes-humo.ts',
   adendas: 'adendas-humo.ts',
   avance: 'avance-humo.ts',
+  requisiciones: 'requisiciones-humo.ts',
   'aprobar-clave': 'aprobar-clave-humo.ts',
   'solicitud-acceso': 'solicitud-acceso-humo.ts',
   huecos: 'huecos-humo.ts',

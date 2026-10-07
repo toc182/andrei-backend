@@ -18,7 +18,6 @@ export interface UserPermissions {
   clientes_editar: boolean;
   clientes_eliminar: boolean;
   solicitudes_editar_todas: boolean;
-  requisiciones_editar_todas: boolean;
   equipos_ver: boolean;
   equipos_agregar: boolean;
   equipos_editar: boolean;
@@ -37,6 +36,8 @@ export interface UserPermissions {
   reportes: boolean;
   solicitudes_ver: boolean;
   requisiciones_ver: boolean;
+  requisiciones_crear: boolean;
+  requisiciones_atender: boolean;
   clientes_ver: boolean;
   costos_ver: boolean;
   ordenes_ver: boolean;

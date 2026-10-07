@@ -364,8 +364,9 @@ export async function limpiarAlmacen(): Promise<number> {
   // ningún proyecto porque al llegar todavía no se sabe de cuál es— y los
   // adjuntos de las órdenes de compra, que se guardan por número de orden
   // (ordenes-compra/OC-PRU3-001/...) y no por proyecto: el proveedor y el
-  // número son lo que alguien busca cuando va a buscar ese papel.
-  for (const prefijo of [...PROYECTOS_SEMILLA, 'whatsapp', 'ordenes-compra']) {
+  // número son lo que alguien busca cuando va a buscar ese papel. Las
+  // requisiciones, igual: requisiciones/REQ-PRU3-175/...
+  for (const prefijo of [...PROYECTOS_SEMILLA, 'whatsapp', 'ordenes-compra', 'requisiciones']) {
     let token: string | undefined;
     do {
       const r = await s3.send(
