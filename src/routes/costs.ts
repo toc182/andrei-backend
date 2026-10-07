@@ -209,7 +209,8 @@ router.post(
 //
 // Tres numeros arriba y dos cuadros abajo. De donde sale cada cosa:
 //
-//   contrato    -> proyectos.monto_total, lo que se va a cobrar.
+//   contrato    -> el monto vigente del contrato (proyecto_contrato_vigente):
+//                  el Monto Total con las adendas aprobadas, lo que se va a cobrar.
 //   presupuesto -> el presupuesto marcado con la estrella; lo que se calculo
 //                  que iba a costar. null si el proyecto no tiene ninguno.
 //   gastado     -> las solicitudes de pago ya pagadas. Las cajas menudas no se
@@ -293,11 +294,14 @@ router.get(
       orden_proceder: string | null;
       fecha_fin_estimada: string | null;
     }>(
-      `SELECT id, monto_total,
-              to_char(fecha_inicio, 'YYYY-MM-DD')       AS fecha_inicio,
-              to_char(orden_proceder, 'YYYY-MM-DD')     AS orden_proceder,
-              to_char(fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada
-         FROM proyectos WHERE id = $1`,
+      // Monto y terminación del contrato vigente: con las adendas aprobadas.
+      `SELECT p.id, v.monto_vigente AS monto_total,
+              to_char(p.fecha_inicio, 'YYYY-MM-DD')     AS fecha_inicio,
+              to_char(p.orden_proceder, 'YYYY-MM-DD')   AS orden_proceder,
+              to_char(v.fecha_fin_vigente, 'YYYY-MM-DD') AS fecha_fin_estimada
+         FROM proyectos p
+         JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
+        WHERE p.id = $1`,
       [proyectoId],
     );
     if (!proyecto.rows.length) {

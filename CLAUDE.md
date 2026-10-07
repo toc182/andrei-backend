@@ -92,6 +92,10 @@ res.json({ success: true, data: result.rows });
 - runAllMigrations() runs automatically on server start
 - Local: andrei_db / Production: DATABASE_URL (Railway)
 - MCP postgres tool available for local queries
+- The CURRENT contract of a project (Monto Total + approved addenda, and the end date of the
+  last approved time addendum) comes ONLY from the view `proyecto_contrato_vigente`
+  (migration 185). Every screen reads it; never add up addenda anywhere else. An addendum
+  has ONE signed `monto` with ITBMS (migration 184) and is soft-deleted (`activo`).
 - `pg` returns a DATE column as a JS `Date` object, never a string. Don't `slice()` a
   `fecha` — you get `"Tue Sep 08"` and then `Invalid Date`. Format it explicitly.
 - Never seed accented text through `curl` from the Windows console — it mangles the

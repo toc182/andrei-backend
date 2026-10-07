@@ -508,9 +508,10 @@ router.get(
     const result = await query(
       `SELECT c.*, p.nombre AS proyecto_nombre, cl.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt,
               cl.nombre AS cliente_nombre, cl.abreviatura AS cliente_abreviatura,
-              p.monto_total AS proyecto_monto_total
+              v.monto_vigente AS proyecto_monto_total
        FROM cuentas c
        JOIN proyectos p ON p.id = c.proyecto_id
+       LEFT JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
        ${where}
        ORDER BY c.created_at DESC`,
@@ -564,9 +565,10 @@ router.get(
                     AND c2.activo = TRUE
                     AND c2.numero <= c.numero
                 ) AS monto_acumulado,
-                p.monto_total AS proyecto_monto_total
+                v.monto_vigente AS proyecto_monto_total
          FROM cuentas c
          JOIN proyectos p ON p.id = c.proyecto_id
+         LEFT JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
          WHERE c.id = $1 AND c.activo = TRUE`,
         [id],
@@ -1904,12 +1906,13 @@ async function loadCuadro(cuentaId: number) {
             to_char(c.fecha_presentacion, 'YYYY-MM-DD') AS fecha_presentacion,
             c.desglose_id, d.itbms_tasa,
             p.nombre AS proyecto_nombre,
-            COALESCE(p.monto_total, p.monto_contrato_original) AS proyecto_monto_total,
+            v.monto_vigente AS proyecto_monto_total,
             cl.nombre AS cliente_nombre,
             to_char(p.orden_proceder, 'YYYY-MM-DD') AS orden_proceder,
             p.ajustes_cuenta_impresion AS ajustes_impresion
        FROM cuentas c
        JOIN proyectos p ON p.id = c.proyecto_id
+       LEFT JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
        LEFT JOIN desgloses d ON d.id = c.desglose_id
       WHERE c.id = $1 AND c.activo = TRUE`,

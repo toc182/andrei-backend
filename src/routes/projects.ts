@@ -37,6 +37,12 @@ interface ProjectRow {
   presupuesto_base?: number;
   itbms?: number;
   monto_total?: number;
+  // El contrato vigente, con las adendas aprobadas (vista proyecto_contrato_vigente).
+  monto_vigente?: string | null;
+  monto_adendas?: string;
+  adendas_con_monto?: number;
+  fecha_fin_vigente?: string | null;
+  adenda_fecha_numero?: number | null;
   datos_adicionales?: Record<string, unknown>;
   logo_consorcio?: string | null;
   cliente_nombre?: string;
@@ -208,10 +214,13 @@ router.get(
         COALESCE(p.presupuesto_base, 0) as presupuesto_base,
         COALESCE(p.itbms, 0) as itbms,
         COALESCE(p.monto_total, p.monto_contrato_original) as monto_total,
+        TO_CHAR(v.fecha_fin_vigente, 'YYYY-MM-DD') AS fecha_fin_vigente,
+        v.monto_vigente, v.monto_adendas, v.adendas_con_monto, v.adenda_fecha_numero,
         p.datos_adicionales, p.created_at, p.updated_at,
         c.nombre as cliente_nombre, c.abreviatura as cliente_abreviatura
       FROM proyectos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
+      LEFT JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
       ${whereClause}
       ORDER BY p.created_at DESC
       LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
@@ -227,10 +236,14 @@ router.get(
         TO_CHAR(p.fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada,
         p.estado, p.contratista, p.ingeniero_residente, p.contrato,
         p.acto_publico, p.tipo_contrato, p.tiene_ipt, p.monto_contrato_original, 0 as presupuesto_base, 0 as itbms,
-        p.monto_contrato_original as monto_total, p.datos_adicionales, p.created_at, p.updated_at,
+        p.monto_contrato_original as monto_total,
+        TO_CHAR(v.fecha_fin_vigente, 'YYYY-MM-DD') AS fecha_fin_vigente,
+        v.monto_vigente, v.monto_adendas, v.adendas_con_monto, v.adenda_fecha_numero,
+        p.datos_adicionales, p.created_at, p.updated_at,
         c.nombre as cliente_nombre, c.abreviatura as cliente_abreviatura, c.tipo as cliente_tipo
       FROM proyectos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
+      LEFT JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
       ${whereClause}
       ORDER BY p.created_at DESC
       LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
@@ -301,9 +314,12 @@ router.get(
            TO_CHAR(p.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
            TO_CHAR(p.fecha_fin_estimada, 'YYYY-MM-DD') AS fecha_fin_estimada,
            TO_CHAR(p.orden_proceder, 'YYYY-MM-DD') AS orden_proceder,
+           TO_CHAR(v.fecha_fin_vigente, 'YYYY-MM-DD') AS fecha_fin_vigente,
+           v.monto_vigente, v.monto_adendas, v.adendas_con_monto, v.adenda_fecha_numero,
            c.nombre as cliente_nombre, c.contacto as cliente_contacto,
            c.telefono as cliente_telefono, c.email as cliente_email
     FROM proyectos p LEFT JOIN clientes c ON p.cliente_id = c.id
+    LEFT JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
     WHERE p.id = $1
   `,
         [id],

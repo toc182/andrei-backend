@@ -315,19 +315,22 @@ export interface Oportunidad {
 }
 
 // ==================== ADENDAS ====================
-export type AdendaType = 'tiempo' | 'monto' | 'alcance' | 'otro';
+export type AdendaType = 'tiempo' | 'costo' | 'mixta';
 
+// Migración 184: un solo monto, con ITBMS y con signo (negativo si reduce el
+// contrato). Las fechas viajan como 'YYYY-MM-DD'.
 export interface Adenda {
   id: number;
   proyecto_id: number;
-  numero: number;
+  numero_adenda: number;
   tipo: AdendaType;
-  descripcion: string;
-  monto_adicional?: number;
-  dias_adicionales?: number;
-  fecha_aprobacion?: string;
-  created_at: Date;
-  updated_at: Date;
+  estado: 'en_proceso' | 'aprobada' | 'rechazada';
+  nueva_fecha_fin: string | null;
+  dias_extension: number | null;
+  monto: string | null;
+  observaciones: string | null;
+  fecha_solicitud: string;
+  fecha_aprobacion: string | null;
 }
 
 // ==================== ASIGNACIONES ====================
