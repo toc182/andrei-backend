@@ -43,6 +43,12 @@ interface ProjectRow {
   adendas_con_monto?: number;
   fecha_fin_vigente?: string | null;
   adenda_fecha_numero?: number | null;
+  // El avance físico según las cuentas (vista proyecto_avance_fisico).
+  avance_fisico?: number | null;
+  avance_presentado?: number | null;
+  avance_sin_presentar?: number | null;
+  avance_cuenta_numero?: number | null;
+  avance_cuentas_sin_presentar?: number[] | null;
   datos_adicionales?: Record<string, unknown>;
   logo_consorcio?: string | null;
   cliente_nombre?: string;
@@ -316,10 +322,16 @@ router.get(
            TO_CHAR(p.orden_proceder, 'YYYY-MM-DD') AS orden_proceder,
            TO_CHAR(v.fecha_fin_vigente, 'YYYY-MM-DD') AS fecha_fin_vigente,
            v.monto_vigente, v.monto_adendas, v.adendas_con_monto, v.adenda_fecha_numero,
+           a.avance_acumulado::float8 AS avance_fisico,
+           a.avance_presentado::float8 AS avance_presentado,
+           a.avance_sin_presentar::float8 AS avance_sin_presentar,
+           a.cuenta_numero AS avance_cuenta_numero,
+           a.cuentas_sin_presentar AS avance_cuentas_sin_presentar,
            c.nombre as cliente_nombre, c.contacto as cliente_contacto,
            c.telefono as cliente_telefono, c.email as cliente_email
     FROM proyectos p LEFT JOIN clientes c ON p.cliente_id = c.id
     LEFT JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
+    LEFT JOIN proyecto_avance_fisico a ON a.proyecto_id = p.id
     WHERE p.id = $1
   `,
         [id],

@@ -358,17 +358,25 @@ router.get(
 
     const projectIds = projects.rows.map((p) => p.proyecto_id);
 
-    // Get all active cuentas for these projects
-    const cuentas = await query<CuentaRow & { proyecto_id: number }>(
-      `SELECT c.*
+    // Get all active cuentas for these projects, with their progress from the
+    // one calculation of physical progress (vista cuenta_avance, migración 186).
+    type CuentaConAvance = CuentaRow & {
+      proyecto_id: number;
+      avance_periodo_exacto: number;
+      avance_acumulado_exacto: number;
+    };
+    const cuentas = await query<CuentaConAvance>(
+      `SELECT c.*, ca.avance_periodo::float8 AS avance_periodo_exacto,
+              ca.avance_acumulado::float8 AS avance_acumulado_exacto
        FROM cuentas c
+       JOIN cuenta_avance ca ON ca.cuenta_id = c.id
        WHERE c.proyecto_id = ANY($1) AND c.activo = TRUE
        ORDER BY c.numero ASC`,
       [projectIds],
     );
 
     // Group cuentas by project
-    const cuentasByProject = new Map<number, (CuentaRow & { proyecto_id: number })[]>();
+    const cuentasByProject = new Map<number, CuentaConAvance[]>();
     for (const c of cuentas.rows) {
       if (!cuentasByProject.has(c.proyecto_id)) cuentasByProject.set(c.proyecto_id, []);
       cuentasByProject.get(c.proyecto_id)!.push(c);
@@ -401,19 +409,12 @@ router.get(
       // Pagadas
       const pagadas = sorted.filter((c) => PAGADA_STATES.includes(c.estado));
 
-      // Avance from previous cuentas (sum of all before current)
-      const currentIdx = currentCuenta
-        ? sorted.findIndex((c) => c.id === currentCuenta.id)
-        : sorted.length;
-      const avancePrevio = sorted
-        .slice(0, currentIdx)
-        .reduce((sum, c) => sum + (c.avance_porcentaje ? Number(c.avance_porcentaje) : 0), 0);
-
-      // Accumulated avance: sum of all cuentas including current
-      const avanceAcum = sorted.reduce((sum, c) => {
-        const v = c.avance_porcentaje ? Number(c.avance_porcentaje) : 0;
-        return sum + v;
-      }, 0);
+      // El avance, de cuenta_avance: el mismo número que el Resumen del proyecto.
+      // «Previo» de una cuenta = su acumulado menos su periodo, para que las
+      // barras (previo + esta cuenta) lleguen justo al acumulado.
+      const previoDe = (c: CuentaConAvance) => c.avance_acumulado_exacto - c.avance_periodo_exacto;
+      const avanceAcum = sorted.length ? sorted[sorted.length - 1].avance_acumulado_exacto : 0;
+      const avancePrevio = currentCuenta ? previoDe(currentCuenta) : avanceAcum;
 
       // Days since project started
       const diasInicio = proj.fecha_inicio
@@ -445,10 +446,7 @@ router.get(
         dias_ultimo_envio: diasUltimoEnvio,
         cuenta_actual: currentCuenta,
         pendientes: pendientes.map((c) => {
-          const idx = sorted.findIndex((s) => s.id === c.id);
-          const prevAvance = sorted
-            .slice(0, idx)
-            .reduce((sum, s) => sum + (s.avance_porcentaje ? Number(s.avance_porcentaje) : 0), 0);
+          const prevAvance = previoDe(c);
           return {
             id: c.id,
             numero: c.numero,
@@ -506,12 +504,17 @@ router.get(
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
     const result = await query(
+      // avance_periodo / avance_acumulado: los de cuenta_avance (migración 186),
+      // a precisión completa; avance_porcentaje es su espejo de dos decimales.
       `SELECT c.*, p.nombre AS proyecto_nombre, cl.tipo AS proyecto_tipo, p.tiene_ipt AS proyecto_tiene_ipt,
               cl.nombre AS cliente_nombre, cl.abreviatura AS cliente_abreviatura,
-              v.monto_vigente AS proyecto_monto_total
+              v.monto_vigente AS proyecto_monto_total,
+              ca.avance_periodo::float8 AS avance_periodo,
+              ca.avance_acumulado::float8 AS avance_acumulado
        FROM cuentas c
        JOIN proyectos p ON p.id = c.proyecto_id
        LEFT JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
+       LEFT JOIN cuenta_avance ca ON ca.cuenta_id = c.id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
        ${where}
        ORDER BY c.created_at DESC`,
@@ -538,7 +541,8 @@ router.get(
           proyecto_tiene_ipt: boolean;
           cliente_nombre: string | null;
           cliente_abreviatura: string | null;
-          avance_acumulado: string;
+          avance_acumulado: number | null;
+          avance_periodo: number | null;
           monto_acumulado: string;
           proyecto_monto_total: string | null;
         }
@@ -549,13 +553,9 @@ router.get(
                 p.tiene_ipt AS proyecto_tiene_ipt,
                 cl.nombre AS cliente_nombre,
                 cl.abreviatura AS cliente_abreviatura,
-                (
-                  SELECT COALESCE(SUM(c2.avance_porcentaje), 0)
-                  FROM cuentas c2
-                  WHERE c2.proyecto_id = c.proyecto_id
-                    AND c2.activo = TRUE
-                    AND c2.numero <= c.numero
-                ) AS avance_acumulado,
+                -- El avance, de la única cuenta del avance físico (migración 186).
+                ca.avance_acumulado::float8 AS avance_acumulado,
+                ca.avance_periodo::float8 AS avance_periodo,
                 -- Para la card de avance del proyecto: cuánto se ha cobrado
                 -- hasta esta cuenta y contra qué monto de contrato.
                 (
@@ -569,6 +569,7 @@ router.get(
          FROM cuentas c
          JOIN proyectos p ON p.id = c.proyecto_id
          LEFT JOIN proyecto_contrato_vigente v ON v.proyecto_id = p.id
+         LEFT JOIN cuenta_avance ca ON ca.cuenta_id = c.id
        LEFT JOIN clientes cl ON cl.id = p.cliente_id
          WHERE c.id = $1 AND c.activo = TRUE`,
         [id],
@@ -684,36 +685,14 @@ router.get(
         [cuenta.proyecto_id],
       );
 
-      // Avance leído del cuadro, con los mismos números que muestra el desglose:
-      // "hasta la fecha" ÷ presupuesto, a precisión completa. La columna escalar
+      // Avance leído del cuadro, a precisión completa: lo calcula cuenta_avance
+      // (migración 186), la misma cuenta que el Resumen del proyecto. La columna
       // avance_porcentaje es NUMERIC(5,2) y sumar varias cuentas ya redondeadas
       // se desvía un centésimo — por eso la card no la usa cuando hay desglose.
-      let avance_desglose: { acumulado: number; periodo: number } | null = null;
-      if (cuenta.desglose_id != null) {
-        const a = await query<{ acumulado: string; periodo: string; presupuesto: string }>(
-          `SELECT COALESCE(SUM(
-                    (cl.cantidad_ejecutada + COALESCE((
-                       SELECT SUM(cl2.cantidad_ejecutada)
-                         FROM cuenta_lineas cl2
-                         JOIN cuentas c2 ON c2.id = cl2.cuenta_id
-                        WHERE c2.proyecto_id = $2 AND c2.activo = TRUE AND c2.numero < $3
-                          AND cl2.row_uid = cl.row_uid
-                     ), 0)) * COALESCE(cl.precio_unitario, 0)
-                  ), 0) AS acumulado,
-                  COALESCE(SUM(cl.cantidad_ejecutada * COALESCE(cl.precio_unitario, 0)), 0) AS periodo,
-                  COALESCE(SUM(COALESCE(cl.cantidad_presupuesto, 0) * COALESCE(cl.precio_unitario, 0)), 0) AS presupuesto
-             FROM cuenta_lineas cl
-            WHERE cl.cuenta_id = $1`,
-          [id, cuenta.proyecto_id, cuenta.numero],
-        );
-        const presupuesto = parseFloat(a.rows[0].presupuesto);
-        if (presupuesto > 0) {
-          avance_desglose = {
-            acumulado: (parseFloat(a.rows[0].acumulado) / presupuesto) * 100,
-            periodo: (parseFloat(a.rows[0].periodo) / presupuesto) * 100,
-          };
-        }
-      }
+      const avance_desglose =
+        cuenta.desglose_id != null && cuenta.avance_acumulado != null && cuenta.avance_periodo != null
+          ? { acumulado: cuenta.avance_acumulado, periodo: cuenta.avance_periodo }
+          : null;
 
       res.json({
         success: true,

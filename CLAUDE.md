@@ -96,6 +96,10 @@ res.json({ success: true, data: result.rows });
   last approved time addendum) comes ONLY from the view `proyecto_contrato_vigente`
   (migration 185). Every screen reads it; never add up addenda anywhere else. An addendum
   has ONE signed `monto` with ITBMS (migration 184) and is soft-deleted (`activo`).
+- Physical progress (avance físico) comes ONLY from the views `cuenta_avance` (per cuenta:
+  period and accumulated, full precision from the cuadro when the cuenta has a desglose) and
+  `proyecto_avance_fisico` (migration 186). Borrador cuentas count; their part is reported
+  apart. Never sum `cuentas.avance_porcentaje` (a 2-decimal mirror) for a project total.
 - `pg` returns a DATE column as a JS `Date` object, never a string. Don't `slice()` a
   `fecha` — you get `"Tue Sep 08"` and then `Invalid Date`. Format it explicitly.
 - Never seed accented text through `curl` from the Windows console — it mangles the
