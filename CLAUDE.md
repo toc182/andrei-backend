@@ -137,6 +137,12 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
   checkPermission; the decisions behind them are in migration 183. Its quotes also
   appear in Cotizaciones, one entry per line, written ONLY from requisiciones.ts —
   cotizaciones.ts answers 409 if anyone tries to change them there.
+- requisicionAcceso.ts — who may see/attend a requisition (puedeVer & co.), shared by
+  routes/requisiciones.ts and requisicionCompras.ts.
+- requisicionCompras.ts — the payment request / purchase order born from a requisition:
+  the usual create routes take `desde_requisicion`, link the chosen lines
+  (requisicion_linea_compras, migration 187), mark them and copy the quotes and the
+  requisition's PDF. It is the ONLY way solicitudes_pago.requisicion_id gets written.
 - scheduler.ts — cron: Mon-Fri 3:30pm, Sat 11:30am Panama time
 - whatsapp/ — the daily-report assistant on WhatsApp. cliente.ts (send text,
   buttons and documents; download media), firma.ts (X-Hub-Signature-256),

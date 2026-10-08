@@ -14,6 +14,9 @@
 //     queda en Cotizaciones UNA ENTRADA POR LÍNEA, sin que desde ahí se pueda
 //     cambiar.
 //   * Los globitos cuentan lo que le toca a cada quien.
+//   * La solicitud de pago que Compras crea desde la requisición queda amarrada
+//     a sus líneas, las marca, recuerda a qué cotización le compró y lleva los
+//     archivos y el papel; editarla no la desamarra.
 //
 // Usa el proyecto 3 (PRU3), que en la semilla no tiene nada.
 import { API } from './pruebas/contexto.js';
@@ -327,10 +330,110 @@ const main = async () => {
   const tardeInicial = await pedir('PUT', `/requisiciones/proyecto/${P}/ajustes`, { numero_inicial: 100 });
   c(tardeInicial.estado === 400, 'con requisiciones ya hechas, el número inicial no se baja');
 
+  // ------------------------------- la solicitud de pago desde la requisición
+  // Compras escoge líneas y a qué cotización le compra; la solicitud se crea
+  // por la ruta de siempre con `desde_requisicion` y queda amarrada, con sus
+  // marcas, la cotización comprada y los archivos copiados.
+  await query('INSERT INTO proyecto_ajustes_aprobacion (proyecto_id, user_id, orden) VALUES ($1, $2, 1)', [P, hilario.id]);
+  const cot3 = await subir(
+    `/requisiciones/${id1}/cotizaciones`,
+    { proveedor: 'Aceros del Istmo', monto: '1120', lineas: JSON.stringify([lineas1[0].id, lineas1[1].id]) },
+    tk.martina,
+    'aceros.pdf',
+  );
+  const cuadro2 = await subir(`/requisiciones/${id1}/adjuntos`, { tipo: 'cuadro_comparativo', lineas: JSON.stringify([lineas1[0].id, lineas1[1].id]) }, tk.martina, 'comparativo.pdf');
+  const SOL = {
+    proyecto_id: P,
+    proveedor: 'Aceros del Istmo',
+    solicitado_por: martina.id,
+    urgente: true,
+    items: [{ cantidad: 40, unidad: 'unidad', descripcion: 'Varilla corrugada', precio_unitario: 28 }],
+    ajustes: [],
+  };
+  const desde = {
+    requisicion_id: id1,
+    lineas: [{ id: lineas1[0].id, marca: 'parcial' }, { id: lineas1[1].id }],
+    cotizacion_id: cot3.cuerpo.data.id,
+    adjuntar: { cotizaciones: [cot2.cuerpo.data.id, cot3.cuerpo.data.id], cuadros: [cuadro2.cuerpo.data.id], papel: true },
+  };
+  const lineas4 = ((await pedir('GET', `/requisiciones/${id4}`, undefined, tk.cecilia)).cuerpo.data.lineas) as { id: number }[];
+  c((await pedir('POST', '/solicitudes-pago', { ...SOL, desde_requisicion: desde }, tk.cecilia)).estado === 403, 'desde la requisición, la solicitud la crea Compras');
+  c((await pedir('POST', '/solicitudes-pago', { ...SOL, desde_requisicion: { ...desde, lineas: [{ id: lineas4[0].id }] } }, tk.martina)).estado === 400, 'una línea de otra requisición se rechaza');
+  c((await pedir('POST', '/solicitudes-pago', { ...SOL, desde_requisicion: { ...desde, requisicion_id: id4, lineas: [{ id: lineas4[0].id }], cotizacion_id: null, adjuntar: {} } }, tk.martina)).estado === 400, 'de una requisición por aprobar no se compra');
+  c((await pedir('POST', '/solicitudes-pago', { ...SOL, desde_requisicion: { ...desde, lineas: [{ id: lineas1[1].id }], cotizacion_id: cot2.cuerpo.data.id } }, tk.martina)).estado === 400, 'una cotización que no cubre esas líneas se rechaza');
+  c((await pedir('POST', '/solicitudes-pago', { ...SOL, desde_requisicion: { ...desde, lineas: [{ id: lineas1[1].id, marca: 'cancelada' }] } }, tk.martina)).estado === 400, 'lo que se compra queda Atendida o Parcial, no Cancelada');
+  const antesDeComprar = await query<{ n: string }>('SELECT count(*) n FROM solicitudes_pago WHERE proyecto_id = $1', [P]);
+  c(antesDeComprar.rows[0].n === '0', 'ninguna de las rechazadas dejó una solicitud a medias');
+
+  const sp = await pedir('POST', '/solicitudes-pago', { ...SOL, desde_requisicion: desde }, tk.martina);
+  c(sp.estado === 201, `Martina crea la solicitud desde la requisición (dio ${sp.estado} ${JSON.stringify(sp.cuerpo?.message ?? '')})`);
+  const sid = sp.cuerpo?.solicitud?.id as number;
+  const sNumero = sp.cuerpo?.solicitud?.numero as string;
+  c(Array.isArray(sp.cuerpo?.adjuntos_fallidos) && sp.cuerpo.adjuntos_fallidos.length === 0, `todos los archivos se adjuntaron (faltó ${JSON.stringify(sp.cuerpo?.adjuntos_fallidos)})`);
+  const fila = (await query<{ requisicion_id: number; requisicion_cotizacion_id: number }>('SELECT requisicion_id, requisicion_cotizacion_id FROM solicitudes_pago WHERE id = $1', [sid])).rows[0];
+  c(fila?.requisicion_id === id1 && fila?.requisicion_cotizacion_id === cot3.cuerpo.data.id, 'la solicitud sabe de qué requisición sale y a qué cotización le compra');
+  const adjSol = await query<{ nombre_original: string; r2_key: string }>('SELECT nombre_original, r2_key FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 ORDER BY id', [sid]);
+  c(adjSol.rows.map((a) => a.nombre_original).join() === 'cotizacion.pdf,aceros.pdf,comparativo.pdf,REQ-PRU3-175.pdf', `lleva las dos cotizaciones, el cuadro y el papel (dio ${adjSol.rows.map((a) => a.nombre_original)})`);
+  c(adjSol.rows.every((a) => a.r2_key.startsWith(`solicitudes-pago/${sid}/`)), 'copiados a la carpeta de la solicitud');
+  const { downloadFile, deleteFile } = await import('../src/services/storage.js');
+  const papelSol = adjSol.rows.find((a) => a.nombre_original === 'REQ-PRU3-175.pdf');
+  const bytesPapel = papelSol ? await downloadFile(papelSol.r2_key).catch(() => null) : null;
+  c(!!bytesPapel && bytesPapel.subarray(0, 5).toString() === '%PDF-', 'el papel adjunto es un PDF de verdad');
+  const copia = adjSol.rows.find((a) => a.nombre_original === 'aceros.pdf');
+  const bytesCopia = copia ? await downloadFile(copia.r2_key).catch(() => null) : null;
+  c(!!bytesCopia && bytesCopia.equals(PDF), 'y la cotización copiada es el mismo archivo');
+
+  const tras = (await pedir('GET', `/requisiciones/${id1}`, undefined, tk.martina)).cuerpo.data;
+  c(tras.lineas[0].marca === 'parcial' && tras.lineas[1].marca === 'atendida', `las líneas quedan Parcial y Atendida (dio ${tras.lineas[0].marca}, ${tras.lineas[1].marca})`);
+  c(tras.lineas[0].compras?.[0]?.numero === sNumero && tras.lineas[2].compras?.length === 0, 'cada línea dice en qué solicitud va');
+  c(tras.compras?.length === 1 && tras.compras[0].lineas?.length === 2 && tras.compras[0].tipo === 'solicitud', 'y la requisición la cuenta una vez, con sus dos líneas');
+  const vistaCecilia = (await pedir('GET', `/requisiciones/${id1}`, undefined, tk.cecilia)).cuerpo.data;
+  c(vistaCecilia.lineas[0].compras?.[0]?.numero === sNumero, 'quien la escribió también lo ve');
+
+  const entradaCemento = (await pedir('GET', `/cotizaciones/${entradas.rows[0].id}`)).cuerpo.data;
+  const ofertasCemento = entradaCemento.ofertas as { requisicion_cotizacion_id: number; comprada_en: string[] }[];
+  c(ofertasCemento.find((o) => o.requisicion_cotizacion_id === cot3.cuerpo.data.id)?.comprada_en?.join() === sNumero, 'en Cotizaciones, la de Aceros sale comprada en esa solicitud');
+  c(ofertasCemento.find((o) => o.requisicion_cotizacion_id === cot2.cuerpo.data.id)?.comprada_en?.length === 0, 'y la del cemento no');
+
+  // Editarla con el formulario no le borra la requisición (antes sí).
+  const editada = await pedir('PUT', `/solicitudes-pago/${sid}`, { ...SOL, observaciones: 'Entrega el jueves' }, tk.martina);
+  c(editada.estado === 200, `la solicitud se edita (dio ${editada.estado})`);
+  const trasEditar = (await query<{ requisicion_id: number }>('SELECT requisicion_id FROM solicitudes_pago WHERE id = $1', [sid])).rows[0];
+  c(trasEditar.requisicion_id === id1, 'y sigue amarrada a la requisición');
+  // Y por la puerta de siempre no se amarra nada: el enlace sale solo de aquí.
+  const suelta = await pedir('POST', '/solicitudes-pago', { ...SOL, requisicion_id: id1 }, tk.martina);
+  const sueltaFila = (await query<{ requisicion_id: number | null }>('SELECT requisicion_id FROM solicitudes_pago WHERE id = $1', [suelta.cuerpo?.solicitud?.id])).rows[0];
+  c(suelta.estado === 201 && sueltaFila?.requisicion_id === null, 'una solicitud normal no se puede colgar de una requisición a mano');
+
+  // Las copias viven bajo solicitudes-pago/, que el barrido de las pruebas no
+  // toca (ahí guarda también la copia local): se borran aquí.
+  for (const a of adjSol.rows) await deleteFile(a.r2_key).catch(() => undefined);
+
+  // ------------------------------- la orden de compra desde la requisición
+  // Igual que la solicitud. Aquí, la línea 3 a un proveedor sin cotización.
+  await llaves(martina, { ordenes_ver: true });
+  const ORD = {
+    proyecto_id: P,
+    proveedor: 'Plomería del Centro',
+    items: [{ cantidad: 10, unidad: 'unidades', descripcion: 'Codo de PVC 6 a 90', precio_unitario: 12.5 }],
+  };
+  const desdeOrden = { requisicion_id: id1, lineas: [{ id: lineas1[2].id }], cotizacion_id: null, adjuntar: { papel: true } };
+  c((await pedir('POST', '/ordenes-compra', { ...ORD, desde_requisicion: { ...desdeOrden, cotizacion_id: cot3.cuerpo.data.id } }, tk.martina)).estado === 400, 'la orden tampoco le compra a una cotización que no cubre la línea');
+  const oc = await pedir('POST', '/ordenes-compra', { ...ORD, desde_requisicion: desdeOrden }, tk.martina);
+  c(oc.estado === 201 && oc.cuerpo?.adjuntos_fallidos?.length === 0, `Martina crea la orden desde la requisición (dio ${oc.estado} ${JSON.stringify(oc.cuerpo?.error ?? '')})`);
+  const ocId = oc.cuerpo?.data?.id as number;
+  const ocFila = (await query<{ requisicion_id: number; requisicion_cotizacion_id: number | null }>('SELECT requisicion_id, requisicion_cotizacion_id FROM ordenes_compra WHERE id = $1', [ocId])).rows[0];
+  c(ocFila?.requisicion_id === id1 && ocFila?.requisicion_cotizacion_id === null, 'la orden sabe de qué requisición sale, sin cotización');
+  const adjOc = await query<{ nombre_original: string; descripcion: string; r2_key: string }>('SELECT nombre_original, descripcion, r2_key FROM orden_compra_adjuntos WHERE orden_compra_id = $1', [ocId]);
+  c(adjOc.rows.length === 1 && adjOc.rows[0].nombre_original === 'REQ-PRU3-175.pdf' && adjOc.rows[0].descripcion === 'Requisición REQ-PRU3-175', 'lleva el papel, con su descripción');
+  const conOrden = (await pedir('GET', `/requisiciones/${id1}`, undefined, tk.martina)).cuerpo.data;
+  c(conOrden.lineas[2].marca === 'atendida' && conOrden.lineas[2].compras?.[0]?.tipo === 'orden', 'la línea 3 queda Atendida y dice en qué orden va');
+  c(conOrden.compras?.length === 2, 'la requisición cuenta la solicitud y la orden');
+
   // ------------------------------------------------------------- el rastro
   const rastro = await query<{ accion: string }>("SELECT accion FROM audit_log WHERE entidad = 'requisicion'");
   const acciones = new Set(rastro.rows.map((r) => r.accion));
-  for (const a of ['crear', 'editar', 'aprobar', 'anular', 'marcar', 'agregar_cotizacion', 'quitar_cotizacion', 'adjuntar', 'agregar_cuadro', 'quitar_adjunto']) {
+  for (const a of ['crear', 'editar', 'aprobar', 'anular', 'marcar', 'agregar_cotizacion', 'quitar_cotizacion', 'adjuntar', 'agregar_cuadro', 'quitar_adjunto', 'crear_solicitud', 'crear_orden']) {
     c(acciones.has(a), `queda rastro de «${a}»`);
   }
   const ajustesRastro = await query("SELECT 1 FROM audit_log WHERE accion = 'editar_ajustes_requisiciones' AND entidad_id = $1", [P]);

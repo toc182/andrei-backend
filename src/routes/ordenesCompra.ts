@@ -35,6 +35,7 @@ import {
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { deleteFile, getFileSignedUrl, uploadFile } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
+import { adjuntarCompra, enlazarCompra, leerCompra } from '../services/requisicionCompras.js';
 import { fixFiles } from '../utils/fileEncoding.js';
 
 const router = Router();
@@ -676,6 +677,14 @@ router.post(
       return;
     }
 
+    // La que Compras crea desde una requisición: lo que escogió se revisa
+    // antes de crear nada (services/requisicionCompras.ts).
+    const compra = await leerCompra(req, req.body.desde_requisicion, proyecto_id);
+    if (compra && 'error' in compra) {
+      res.status(compra.status).json({ success: false, error: compra.error });
+      return;
+    }
+
     const tasaRes = await query<{ itbms_tasa: string }>(
       "SELECT '0.07'::numeric AS itbms_tasa",
     );
@@ -769,8 +778,16 @@ router.post(
         { numero, proveedor, monto_total },
         client,
       );
+      if (compra) {
+        await enlazarCompra(client, compra, { tipo: 'orden', id: ordenId, numero, proveedor }, req.user!.id);
+      }
       await client.query('COMMIT');
-      res.status(201).json({ success: true, data: orden.rows[0] });
+      // Lo que va adjunto desde la requisición, ya con la orden creada: si un
+      // archivo falla, ella queda y se dice cuál no se adjuntó.
+      const sinAdjuntar = compra
+        ? await adjuntarCompra(compra, { tipo: 'orden', id: ordenId, numero, proveedor }, req.user!.id)
+        : [];
+      res.status(201).json({ success: true, data: orden.rows[0], adjuntos_fallidos: sinAdjuntar });
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;

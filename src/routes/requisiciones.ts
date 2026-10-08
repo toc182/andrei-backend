@@ -29,53 +29,30 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { getFileSignedUrl, uploadFile } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { fixFiles } from '../utils/fileEncoding.js';
-import { ES_CONSORCIO_SQL, consorcioDelProyecto } from '../services/consorcioProyecto.js';
-import type { UserPermissions } from '../types/auth.js';
+import { papelDeRequisicion } from '../services/requisicionCompras.js';
+import {
+  esAdmin,
+  esAprobador,
+  esAutor,
+  lineasDe,
+  puedeAtender,
+  puedeElProyecto,
+  puedeVer,
+  tiene,
+  traer,
+  veTodosLosProyectos,
+  type Db,
+  type LineaRow,
+  type Marca,
+  type Prioridad,
+  type RequisicionRow,
+} from '../services/requisicionAcceso.js';
 
 const router = Router();
-
-type Estado = 'por_aprobar' | 'aprobada' | 'anulada';
-type Prioridad = 'normal' | 'urgente';
-type Marca = 'pendiente' | 'atendida' | 'parcial' | 'cancelada';
 
 const PRIORIDADES: Prioridad[] = ['normal', 'urgente'];
 const MARCAS: Marca[] = ['pendiente', 'atendida', 'parcial', 'cancelada'];
 const TIPOS_CUENTA = ['ahorro', 'corriente'];
-
-interface RequisicionRow {
-  id: number;
-  proyecto_id: number;
-  consecutivo: number;
-  numero: string;
-  descripcion: string;
-  fecha_requerida: Date;
-  prioridad: Prioridad;
-  notas: string | null;
-  beneficiario: string | null;
-  banco: string | null;
-  tipo_cuenta: string | null;
-  numero_cuenta: string | null;
-  estado: Estado;
-  creado_por: number;
-  aprobada_por: number | null;
-  aprobada_at: Date | null;
-  anulada_por: number | null;
-  anulada_at: Date | null;
-  created_at: Date;
-  updated_at: Date;
-  /** De proyectos: quién aprueba las requisiciones de ese proyecto. */
-  aprobador_id: number | null;
-}
-
-interface LineaRow {
-  id: number;
-  orden: number;
-  cantidad: string;
-  unidad: string | null;
-  descripcion: string;
-  renglon_desglose: string | null;
-  marca: Marca;
-}
 
 interface LineaEntrada {
   cantidad: number;
@@ -111,49 +88,11 @@ const ETIQUETAS: Record<Campo, string> = {
 // ---------------------------------------------------------------------------
 // Quién puede qué
 // ---------------------------------------------------------------------------
-const esAdmin = (req: Request): boolean =>
-  req.user!.rol === 'admin' || req.user!.rol === 'co-admin';
-
-/** Una llave de usuario. admin y co-admin pasan siempre. */
-const tiene = (req: Request, llave: keyof UserPermissions): boolean =>
-  esAdmin(req) || !!req.user!.permissions?.[llave];
-
-const veTodosLosProyectos = (req: Request): boolean =>
-  req.user!.rol !== 'usuario' || !!req.user!.permissions?.acceso_global;
-
-/** Que el usuario pueda tocar ESE proyecto. admin y co-admin pasan siempre. */
-async function puedeElProyecto(req: Request, proyectoId: number): Promise<boolean> {
-  if (veTodosLosProyectos(req)) return true;
-  const r = await query(
-    'SELECT 1 FROM user_project_access WHERE user_id = $1 AND proyecto_id = $2',
-    [req.user!.id, proyectoId],
-  );
-  return r.rows.length > 0;
-}
-
 /** El filtro de proyectos que el usuario puede ver, igual que en órdenes. */
 function filtroProyectos(req: Request, params: unknown[], alias = 'r'): string {
   if (veTodosLosProyectos(req)) return '';
   params.push(req.user!.id);
   return ` AND ${alias}.proyecto_id IN (SELECT proyecto_id FROM user_project_access WHERE user_id = $${params.length})`;
-}
-
-const esAutor = (req: Request, r: RequisicionRow): boolean => r.creado_por === req.user!.id;
-const esAprobador = (req: Request, r: RequisicionRow): boolean =>
-  r.aprobador_id !== null && r.aprobador_id === req.user!.id;
-
-/**
- * Si la puede ver. Por aprobar es de tres personas; aprobada la ve además quien
- * tenga cualquiera de las tres llaves en ese proyecto.
- */
-async function puedeVer(req: Request, r: RequisicionRow): Promise<boolean> {
-  if (esAdmin(req) || esAutor(req, r) || esAprobador(req, r)) return true;
-  if (r.estado !== 'aprobada') return false;
-  const conLlave =
-    tiene(req, 'requisiciones_ver') ||
-    tiene(req, 'requisiciones_crear') ||
-    tiene(req, 'requisiciones_atender');
-  return conLlave && (await puedeElProyecto(req, r.proyecto_id));
 }
 
 const puedeEditar = (req: Request, r: RequisicionRow): boolean =>
@@ -165,37 +104,9 @@ const puedeAprobar = (req: Request, r: RequisicionRow): boolean =>
 const puedeAnular = (req: Request, r: RequisicionRow): boolean =>
   r.estado === 'por_aprobar' && (esAprobador(req, r) || esAdmin(req));
 
-async function puedeAtender(req: Request, r: RequisicionRow): Promise<boolean> {
-  if (r.estado !== 'aprobada') return false;
-  if (esAdmin(req)) return true;
-  return !!req.user!.permissions?.requisiciones_atender && (await puedeElProyecto(req, r.proyecto_id));
-}
-
 // ---------------------------------------------------------------------------
 // Lectura y escritura
 // ---------------------------------------------------------------------------
-type Db = Pick<PoolClient, 'query'>;
-
-async function traer(id: string | number, db: Db = pool, bloquear = false): Promise<RequisicionRow | null> {
-  const r = await db.query<RequisicionRow>(
-    `SELECT r.*, p.requisicion_aprobador_id AS aprobador_id
-       FROM requisiciones r
-       JOIN proyectos p ON p.id = r.proyecto_id
-      WHERE r.id = $1${bloquear ? ' FOR UPDATE OF r' : ''}`,
-    [id],
-  );
-  return r.rows[0] ?? null;
-}
-
-async function lineasDe(id: number, db: Db = pool): Promise<LineaRow[]> {
-  const r = await db.query<LineaRow>(
-    `SELECT id, orden, cantidad, unidad, descripcion, renglon_desglose, marca
-       FROM requisicion_lineas WHERE requisicion_id = $1 ORDER BY orden, id`,
-    [id],
-  );
-  return r.rows;
-}
-
 /**
  * pg arma un DATE como Date a la medianoche LOCAL del servidor: se lee con los
  * getters locales. Con toISOString, un servidor al este de Greenwich lo correría
@@ -673,7 +584,7 @@ router.get(
       return;
     }
 
-    const [cab, lineas, adjuntos, adjLineas, cotiz, cotizLineas, cambios] = await Promise.all([
+    const [cab, lineas, adjuntos, adjLineas, cotiz, cotizLineas, cambios, compras] = await Promise.all([
       query(
         `SELECT COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre,
                 uc.nombre AS creado_por_nombre, ua.nombre AS aprobada_por_nombre,
@@ -687,7 +598,7 @@ router.get(
           WHERE r.id = $1`,
         [r.id],
       ),
-      query(
+      query<{ id: number }>(
         `SELECT l.id, l.orden, l.cantidad, l.unidad, l.descripcion, l.renglon_desglose, l.marca,
                 l.marca_at, u.nombre AS marca_por_nombre
            FROM requisicion_lineas l LEFT JOIN users u ON u.id = l.marca_por
@@ -730,6 +641,30 @@ router.get(
           WHERE c.requisicion_id = $1 ORDER BY c.created_at, c.id`,
         [r.id],
       ),
+      // Las solicitudes y órdenes que salieron de ella, por línea. Una
+      // solicitud eliminada ya no se muestra; el amarre queda en la base.
+      query<{
+        linea_id: number;
+        tipo: 'solicitud' | 'orden';
+        id: number;
+        numero: string;
+        proveedor: string;
+        created_at: Date;
+        creado_por_nombre: string;
+      }>(
+        `SELECT c.linea_id, c.created_at, u.nombre AS creado_por_nombre,
+                CASE WHEN c.solicitud_pago_id IS NOT NULL THEN 'solicitud' ELSE 'orden' END AS tipo,
+                COALESCE(sp.id, oc.id) AS id, COALESCE(sp.numero, oc.numero) AS numero,
+                COALESCE(sp.proveedor, oc.proveedor) AS proveedor
+           FROM requisicion_linea_compras c
+           JOIN requisicion_lineas l ON l.id = c.linea_id
+           JOIN users u ON u.id = c.creado_por
+           LEFT JOIN solicitudes_pago sp ON sp.id = c.solicitud_pago_id AND sp.activo
+           LEFT JOIN ordenes_compra oc ON oc.id = c.orden_compra_id AND oc.activo
+          WHERE l.requisicion_id = $1 AND (sp.id IS NOT NULL OR oc.id IS NOT NULL)
+          ORDER BY c.created_at, c.id`,
+        [r.id],
+      ),
     ]);
 
     const agrupar = (pares: [number, number][]) => {
@@ -740,6 +675,15 @@ router.get(
     const lineasDeAdjunto = agrupar(adjLineas.rows.map((f) => [f.adjunto_id, f.linea_id]));
     const lineasDeCotiz = agrupar(cotizLineas.rows.map((f) => [f.cotizacion_id, f.linea_id]));
 
+    // Cada solicitud u orden una sola vez, con las líneas que lleva.
+    const destinos = new Map<string, { tipo: string; id: number; numero: string; proveedor: string; created_at: Date; creado_por_nombre: string; lineas: number[] }>();
+    for (const c of compras.rows) {
+      const clave = `${c.tipo}-${c.id}`;
+      const d = destinos.get(clave);
+      if (d) d.lineas.push(c.linea_id);
+      else destinos.set(clave, { tipo: c.tipo, id: c.id, numero: c.numero, proveedor: c.proveedor, created_at: c.created_at, creado_por_nombre: c.creado_por_nombre, lineas: [c.linea_id] });
+    }
+
     const { aprobador_id, ...resto } = r;
     res.json({
       success: true,
@@ -748,7 +692,13 @@ router.get(
         fecha_requerida: aDia(r.fecha_requerida),
         aprobador_id,
         ...cab.rows[0],
-        lineas: lineas.rows,
+        lineas: lineas.rows.map((l) => ({
+          ...l,
+          compras: [...destinos.values()]
+            .filter((d) => d.lineas.includes(l.id))
+            .map((d) => ({ tipo: d.tipo, id: d.id, numero: d.numero })),
+        })),
+        compras: [...destinos.values()],
         adjuntos: adjuntos.rows.map((a) => ({ ...a, lineas: lineasDeAdjunto.get(a.id) ?? [] })),
         cotizaciones: cotiz.rows.map((c) => ({ ...c, lineas: lineasDeCotiz.get(c.id) ?? [] })),
         cambios: cambios.rows,
@@ -1560,55 +1510,7 @@ router.get(
       res.status(404).json({ success: false, error: 'Requisición no encontrada' });
       return;
     }
-    const cab = await query<{
-      proyecto_nombre: string;
-      es_consorcio: boolean;
-      contratista: string | null;
-      logo_consorcio: string | null;
-      escrita_por: string;
-      aprobada_por: string | null;
-    }>(
-      `SELECT COALESCE(NULLIF(p.nombre_corto, ''), p.nombre) AS proyecto_nombre,
-              ${ES_CONSORCIO_SQL} AS es_consorcio, p.contratista, p.logo_consorcio,
-              uc.nombre AS escrita_por, ua.nombre AS aprobada_por
-         FROM requisiciones r
-         JOIN proyectos p ON p.id = r.proyecto_id
-         JOIN users uc ON uc.id = r.creado_por
-         LEFT JOIN users ua ON ua.id = r.aprobada_por
-        WHERE r.id = $1`,
-      [r.id],
-    );
-    const c = cab.rows[0];
-    const lineas = await lineasDe(r.id);
-
-    const { generarRequisicionPDF } = await import('../services/requisicionPdf.js');
-    const pdf = await generarRequisicionPDF({
-      numero: r.numero,
-      creada_at: r.created_at,
-      proyecto_nombre: c.proyecto_nombre,
-      consorcio: consorcioDelProyecto(c),
-      descripcion: r.descripcion,
-      fecha_requerida: r.fecha_requerida,
-      prioridad: r.prioridad,
-      estado: r.estado,
-      escrita_por: c.escrita_por,
-      aprobada_por: c.aprobada_por,
-      aprobada_at: r.aprobada_at,
-      notas: r.notas,
-      beneficiario: r.beneficiario,
-      banco: r.banco,
-      tipo_cuenta: r.tipo_cuenta,
-      numero_cuenta: r.numero_cuenta,
-      lineas: lineas.map((l, i) => ({
-        numero: i + 1,
-        cantidad: l.cantidad,
-        unidad: l.unidad,
-        descripcion: l.descripcion,
-        renglon_desglose: l.renglon_desglose,
-        marca: l.marca,
-      })),
-      generado_at: new Date(),
-    });
+    const pdf = await papelDeRequisicion(r);
 
     res.set({
       'Content-Type': 'application/pdf',

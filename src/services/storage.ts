@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -64,6 +65,22 @@ export async function deleteFile(key: string): Promise<void> {
     new DeleteObjectCommand({
       Bucket: getBucket(),
       Key: key,
+    }),
+  );
+}
+
+/**
+ * Copia un archivo dentro del mismo bucket, sin que pase por este servidor. La
+ * copia es de quien la recibe: si después se borra el original, ella sigue.
+ */
+export async function copyFile(origen: string, destino: string): Promise<void> {
+  const client = getClient();
+  const bucket = getBucket();
+  await client.send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      Key: destino,
+      CopySource: `${bucket}/${encodeURIComponent(origen).replace(/%2F/g, '/')}`,
     }),
   );
 }

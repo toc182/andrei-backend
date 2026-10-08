@@ -624,12 +624,27 @@ router.get(
         `SELECT o.id, o.proveedor, o.monto, o.nota, o.elegida, o.created_at,
                 o.requisicion_cotizacion_id,
                 u.nombre AS creado_por_nombre,
-                COUNT(a.id)::int AS archivos_count
+                COUNT(a.id)::int AS archivos_count,
+                -- La que se compró: la solicitud o la orden que salió de la
+                -- requisición con ESTA línea y le compró a ESTA cotización.
+                ARRAY(
+                  SELECT sp.numero FROM requisicion_linea_compras rc
+                    JOIN solicitudes_pago sp ON sp.id = rc.solicitud_pago_id AND sp.activo
+                   WHERE rc.linea_id = c.requisicion_linea_id
+                     AND sp.requisicion_cotizacion_id = o.requisicion_cotizacion_id
+                  UNION
+                  SELECT oc.numero FROM requisicion_linea_compras rc
+                    JOIN ordenes_compra oc ON oc.id = rc.orden_compra_id AND oc.activo
+                   WHERE rc.linea_id = c.requisicion_linea_id
+                     AND oc.requisicion_cotizacion_id = o.requisicion_cotizacion_id
+                  ORDER BY 1
+                ) AS comprada_en
          FROM cotizacion_ofertas o
+         JOIN cotizaciones c ON c.id = o.cotizacion_id
          LEFT JOIN users u ON u.id = o.creado_por
          LEFT JOIN cotizacion_archivos a ON a.oferta_id = o.id
          WHERE o.cotizacion_id = $1 AND o.activo = TRUE
-         GROUP BY o.id, u.nombre
+         GROUP BY o.id, u.nombre, c.requisicion_linea_id
          ORDER BY o.created_at ASC`,
         [id],
       );

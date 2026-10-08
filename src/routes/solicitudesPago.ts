@@ -23,6 +23,7 @@ import {
   soloSolicitudVisible,
 } from '../middleware/solicitudVisible.js';
 import { avisarTurnoUrgente } from '../services/whatsapp/avisoUrgente.js';
+import { adjuntarCompra, enlazarCompra, leerCompra } from '../services/requisicionCompras.js';
 import { fixFiles } from '../utils/fileEncoding.js';
 import { PDFDocument } from 'pdf-lib';
 import bcrypt from 'bcryptjs';
@@ -657,7 +658,13 @@ interface CreateBody {
   fecha?: string;
   proveedor: string;
   solicitado_por?: number;
-  requisicion_id?: number;
+  /**
+   * Solo al crear, y solo cuando Compras la crea desde una requisición: las
+   * líneas, la cotización a la que le compra y lo que va adjunto. Lo revisa
+   * services/requisicionCompras.ts. El enlace con la requisición no se escribe
+   * de ninguna otra manera, y editar la solicitud no lo toca.
+   */
+  desde_requisicion?: unknown;
   observaciones?: string;
   mensaje?: string | null;
   beneficiario?: string;
@@ -1522,7 +1529,6 @@ router.post(
         fecha,
         proveedor,
         solicitado_por,
-        requisicion_id,
         observaciones,
         mensaje,
         beneficiario,
@@ -1547,6 +1553,14 @@ router.post(
           message:
             'Configure aprobadores en la sección de Miembros antes de crear solicitudes',
         });
+        return;
+      }
+
+      // La que Compras crea desde una requisición: lo que escogió se revisa
+      // antes de crear nada.
+      const compra = await leerCompra(req, req.body.desde_requisicion, proyecto_id);
+      if (compra && 'error' in compra) {
+        res.status(compra.status).json({ success: false, message: compra.error, error: compra.error });
         return;
       }
 
@@ -1624,7 +1638,7 @@ router.post(
             proveedor,
             req.user!.id,
             solicitado_por || null,
-            requisicion_id || null,
+            compra ? compra.requisicion.id : null,
             subtotal,
             totalDescuentos,
             totalImpuestos,
@@ -1699,6 +1713,10 @@ router.post(
           );
         }
 
+        if (compra) {
+          await enlazarCompra(client, compra, { tipo: 'solicitud', id: solicitudId, numero, proveedor }, req.user!.id);
+        }
+
         await client.query('COMMIT');
       } catch (err) {
         await client.query('ROLLBACK');
@@ -1707,10 +1725,21 @@ router.post(
         client.release();
       }
 
+      // Lo que va adjunto desde la requisición, ya con la solicitud creada: si
+      // un archivo falla, ella queda y se dice cuál no se adjuntó.
+      const sinAdjuntar = compra
+        ? await adjuntarCompra(
+          compra,
+          { tipo: 'solicitud', id: result.rows[0].id, numero: result.rows[0].numero, proveedor },
+          req.user!.id,
+        )
+        : [];
+
       res.status(201).json({
         success: true,
         message: 'Solicitud de pago creada',
         solicitud: result.rows[0],
+        adjuntos_fallidos: sinAdjuntar,
       });
 
       // Y por WhatsApp, a quien le toca firmar (services/whatsapp/avisoUrgente.ts).
@@ -1841,7 +1870,6 @@ router.put(
         fecha,
         proveedor,
         solicitado_por,
-        requisicion_id,
         observaciones,
         beneficiario,
         banco,
@@ -1886,18 +1914,17 @@ router.put(
       const result = await query<SolicitudRow>(
         `
     UPDATE solicitudes_pago SET
-      fecha = $1, proveedor = $2, solicitado_por = $3, requisicion_id = $4,
-      subtotal = $5, descuentos = $6, impuestos = $7, monto_total = $8,
-      observaciones = $9, beneficiario = $10, banco = $11, tipo_cuenta = $12,
-      numero_cuenta = $13, urgente = $14, pinellas_paga = $15,
-      categoria_id = $16, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $17 AND activo = true RETURNING *
+      fecha = $1, proveedor = $2, solicitado_por = $3,
+      subtotal = $4, descuentos = $5, impuestos = $6, monto_total = $7,
+      observaciones = $8, beneficiario = $9, banco = $10, tipo_cuenta = $11,
+      numero_cuenta = $12, urgente = $13, pinellas_paga = $14,
+      categoria_id = $15, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $16 AND activo = true RETURNING *
   `,
         [
           fecha || new Date().toISOString().split('T')[0],
           proveedor,
           solicitado_por || null,
-          requisicion_id || null,
           subtotal,
           totalDescuentos,
           totalImpuestos,
