@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import QRCode from 'qrcode';
+import { fecha, fechaDeMomento } from '../utils/fechas.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -117,15 +118,6 @@ const PAGE_BOTTOM = 752; // 792 - 40 margin
 
 function formatMoney(amount: number): string {
   return `B/. ${Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString('es-PA', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
 }
 
 // --- Main generator ---
@@ -263,7 +255,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     };
 
     // Row 1: Fecha | Proyecto
-    y = drawField('Fecha', formatDate(data.solicitud.fecha), colLeft, y, colW);
+    y = drawField('Fecha', fecha(data.solicitud.fecha), colLeft, y, colW);
     drawField(
       'Proyecto',
       data.solicitud.proyecto_nombre || '-',
@@ -592,7 +584,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
           lineBreak: false,
         });
         doc.font('Helvetica').fontSize(7.5).fillColor('#78350f');
-        doc.text(` — ${formatDate(corr.fecha)} por ${corr.usuario_nombre} — `, {
+        doc.text(` — ${fechaDeMomento(corr.fecha)} por ${corr.usuario_nombre} — `, {
           continued: true,
           lineBreak: false,
         });
@@ -803,12 +795,12 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
           bgColor = '#dcfce7';
           textColor = '#166534';
           icon = '\u2022';
-          statusText = `Aprobado — ${formatDate(aprobacion.fecha)}`;
+          statusText = `Aprobado — ${fechaDeMomento(aprobacion.fecha)}`;
         } else if (aprobacion && aprobacion.accion === 'rechazado') {
           bgColor = '#fee2e2';
           textColor = '#991b1b';
           icon = '\u2022';
-          statusText = `Rechazado — ${formatDate(aprobacion.fecha)}`;
+          statusText = `Rechazado — ${fechaDeMomento(aprobacion.fecha)}`;
         } else {
           bgColor = '#fffbeb';
           textColor = '#92400e';
@@ -850,7 +842,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
           });
           doc.font('Helvetica').fontSize(7).fillColor('#1e40af');
           doc.text(
-            `Fecha: ${formatDate(data.reembolso.fecha_reembolso)}`,
+            `Fecha: ${fecha(data.reembolso.fecha_reembolso)}`,
             reembX + 8,
             apStartY + 19,
             { width: reembW - 16, lineBreak: false },
@@ -905,7 +897,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
       doc.font('Helvetica').fontSize(7.5).fillColor('#1e40af');
       doc.text(
-        `Fecha de pago: ${formatDate(data.comprobante.fecha_pago)}  —  Registrado por: ${data.comprobante.registrado_por_nombre}`,
+        `Fecha de pago: ${fecha(data.comprobante.fecha_pago)}  —  Registrado por: ${data.comprobante.registrado_por_nombre}`,
         tableX + 8,
         y + 18,
         { width: pageWidth - 16, lineBreak: false },
@@ -924,7 +916,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       }
 
       const FACTURA_BG = '#eff6ff';
-      let factText = `Fecha de factura: ${formatDate(data.factura.fecha_factura)}`;
+      let factText = `Fecha de factura: ${fecha(data.factura.fecha_factura)}`;
       if (data.factura.numero_factura) {
         factText += `  —  Nro: ${data.factura.numero_factura}`;
       }
@@ -979,7 +971,7 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
 
       doc.font('Helvetica').fontSize(7.5).fillColor('#7f1d1d');
       doc.text(
-        `Fecha: ${formatDate(data.devolucion.fecha_devolucion)}  —  Registrado por: ${data.devolucion.registrado_por_nombre}`,
+        `Fecha: ${fecha(data.devolucion.fecha_devolucion)}  —  Registrado por: ${data.devolucion.registrado_por_nombre}`,
         tableX + 8,
         y + 18,
         { width: pageWidth - 16, lineBreak: false },

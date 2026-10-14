@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import QRCode from 'qrcode';
+import { fecha } from '../utils/fechas.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -74,23 +75,6 @@ const cantidad = (n: number | string): string => {
     ? v.toLocaleString('en-US')
     : v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 3 });
 };
-
-/**
- * dd/mm/aaaa, armada a mano y en UTC.
- *
- * Con toLocaleDateString esta fecha salia dos veces mal: el 2026-08-18 se
- * imprimia «08/17/2026». Lo primero es que `new Date('2026-08-18')` es
- * medianoche UTC, y visto desde Panama (UTC-5) todavia es el 17. Lo segundo es
- * que el formato de es-PA depende del ICU que traiga el Node de turno, y en
- * Railway no tiene por que ser el mismo que aqui. Un papel que le llega al
- * proveedor no puede decir un dia distinto segun donde se genere.
- */
-function fecha(valor: string | Date): string {
-  const d = valor instanceof Date ? valor : new Date(`${String(valor).slice(0, 10)}T00:00:00Z`);
-  const dia = String(d.getUTCDate()).padStart(2, '0');
-  const mes = String(d.getUTCMonth() + 1).padStart(2, '0');
-  return `${dia}/${mes}/${d.getUTCFullYear()}`;
-}
 
 function terminoEnPalabras(dias: number): string {
   if (dias === 0) return 'Contado';

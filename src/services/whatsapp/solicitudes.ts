@@ -22,6 +22,7 @@ import { query } from '../../database/config.js';
 import { loadUserPermissions } from '../../middleware/auth.js';
 import type { Usuario } from './herramientas.js';
 import { llano } from './preguntasFijas.js';
+import { fecha } from '../../utils/fechas.js';
 
 /** Columnas de solicitudes_pago que no salen por WhatsApp. La prueba las busca
  *  en las consultas de este archivo. */
@@ -199,8 +200,6 @@ export interface Consulta {
 }
 type Rechazo = Extract<Respuesta, { ok: false }>;
 
-const fechaDicha = (iso: string): string => iso.split('-').reverse().join('/');
-
 /**
  * Arma la consulta de solicitudes a partir de lo que pidio el modelo, con los
  * permisos de la persona. La usan buscarSolicitudes (la respuesta por escrito)
@@ -304,7 +303,7 @@ export async function consultaDeSolicitudes(
     if (v === undefined) continue;
     if (!FECHA.test(v)) return { ok: false, error: `${clave} va como AAAA-MM-DD` };
     donde.push(`sp.fecha ${op} ${p(v)}::date`);
-    descripcion.push(`${clave} el ${fechaDicha(v)}`);
+    descripcion.push(`${clave} el ${fecha(v)}`);
   }
 
   if (f.urgentes) {

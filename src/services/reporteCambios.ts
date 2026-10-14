@@ -9,6 +9,7 @@
  * Modulo puro a proposito, sin base de datos, para poder verificarlo con
  * scripts/reporte-cambios.spec.ts.
  */
+import { fecha } from '../utils/fechas.js';
 
 /** Los nombres con los que la gente conoce cada campo. */
 export const CAMPO_LABELS: Record<string, string> = {
@@ -387,8 +388,6 @@ const CONTEXTO = 6;
  */
 const MAX_CELDAS = 250_000;
 
-const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-
 const trozo = (tipo: Trozo['tipo'], texto: string): Trozo => ({ tipo, texto });
 
 type Paso<T> = { tipo: 'igual' | 'quitado' | 'agregado'; valor: T };
@@ -572,10 +571,7 @@ export function cambiosDeTexto(antes: string | null, despues: string | null): Tr
 /** Un valor corto —el clima, un numero, una fila de equipo— como se lee. */
 function valorCorto(campo: string, v: string | number): string {
   const s = String(v);
-  if (campo === 'fecha' && /^\d{4}-\d{2}-\d{2}$/.test(s)) {
-    const [y, m, d] = s.split('-').map(Number);
-    return `${d} ${MESES[m - 1]} ${y}`;
-  }
+  if (campo === 'fecha' && /^\d{4}-\d{2}-\d{2}$/.test(s)) return fecha(s);
   return s;
 }
 

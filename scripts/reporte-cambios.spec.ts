@@ -127,7 +127,7 @@ const trabajo = (antes: string | null, despues: string | null) =>
   const c = diffCampos({ fecha: '2026-09-08' }, { fecha: '2026-09-07' });
   ok(c.fecha.antes === '2026-09-08' && c.fecha.despues === '2026-09-07',
      'corregir la fecha si queda registrado');
-  ok(leer(c) === 'Fecha: [-8 sep 2026] [+7 sep 2026]', 'y se lee como fecha, no como 2026-09-08');
+  ok(leer(c) === 'Fecha: [-08/sep/2026] [+07/sep/2026]', 'y se lee como fecha, no como 2026-09-08');
 }
 
 // ---- los campos que no existen se ignoran ----

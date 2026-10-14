@@ -3,6 +3,7 @@ import { authenticateToken } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { sendDailyNotifications } from '../services/dailyNotification.js';
 import { sendEmail } from '../services/emailService.js';
+import { fechaHora } from '../utils/fechas.js';
 
 const router = Router();
 
@@ -51,7 +52,7 @@ router.post(
       <div style="background: white; padding: 24px; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 8px 8px;">
         <p style="margin: 0 0 12px; font-size: 15px; color: #4a5568;">Hola <strong>${userName}</strong>,</p>
         <p style="margin: 0 0 12px; font-size: 15px; color: #4a5568;">Este es un email de prueba del Sistema Andrei. Si lo recibes, la configuración SMTP está funcionando correctamente.</p>
-        <p style="margin: 0; font-size: 13px; color: #a0aec0;">Enviado: ${new Date().toLocaleString('es-PA', { timeZone: 'America/Panama' })}</p>
+        <p style="margin: 0; font-size: 13px; color: #a0aec0;">Enviado: ${fechaHora(new Date())}</p>
       </div>
     </div>
   `;

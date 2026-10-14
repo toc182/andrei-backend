@@ -23,8 +23,8 @@ import { datosDeLaSemana, type DatosSemana } from './reporteSemanalDatos.js';
 import {
   generateReporteSemanalPDF, type MetaPdf, type ReporteSemanalPdfInput,
 } from './reporteSemanalPdf.js';
-import { HORA_PANAMA } from './reportePdfComun.js';
 import type { CambioLegible } from './reporteCambios.js';
+import { fechaDeMomento, hora } from '../utils/fechas.js';
 
 const CORREO_ADMINISTRACION =
   process.env.REPORTES_EMAIL_TO || 'ivan@pinellaspanama.com';
@@ -218,12 +218,8 @@ export async function buildSemanalPdfInput(
     // La fecha y la hora, ya escritas en la de Panamá: el papel no puede
     // depender de en qué zona corra el servidor.
     correcciones: correcciones.rows.map((c) => ({
-      fecha: c.created_at.toLocaleDateString('es-PA', {
-        ...HORA_PANAMA, day: 'numeric', month: 'short', year: 'numeric',
-      }),
-      hora: c.created_at.toLocaleTimeString('es-PA', {
-        ...HORA_PANAMA, hour: 'numeric', minute: '2-digit',
-      }),
+      fecha: fechaDeMomento(c.created_at),
+      hora: hora(c.created_at),
       quien: c.quien,
       cambios: c.cambios ?? [],
     })),

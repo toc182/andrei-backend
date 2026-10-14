@@ -16,6 +16,7 @@
  */
 
 import { cambiosDeTexto, type CambioLegible, type Trozo } from './reporteCambios.js';
+import { fecha } from '../utils/fechas.js';
 
 /** Cuántos cambios se muestran de una misma sección antes de decir «y N más». */
 const MAX_CAMBIOS = 3;
@@ -76,11 +77,11 @@ function planComoTexto(m: { texto: string; cantidad: number | null; unidad: stri
   return `${texto(m.texto)}${cuanto}`;
 }
 
-/** Un problema, como se lee: «9 sept · la planta no despachó · pendiente». */
+/** Un problema, como se lee: «09/sep/2026 · la planta no despachó · pendiente». */
 function problemaComoTexto(
   p: { fecha: string | null; problema: string; accion: string | null; pendiente: boolean | null },
 ): string {
-  const dia = p.fecha ? `${p.fecha} · ` : '';
+  const dia = p.fecha ? `${fecha(p.fecha)} · ` : '';
   const accion = texto(p.accion) ? ` · ${texto(p.accion)}` : '';
   // Marcar o desmarcar «sigue pendiente» es una corrección como cualquier otra:
   // cambia lo que hay que seguir mirando.

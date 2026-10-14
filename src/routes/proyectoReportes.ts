@@ -43,7 +43,6 @@ import {
   generateReportePDF,
   claveReducida,
   reducirFoto,
-  HORA_PANAMA,
   type ReportePdfInput,
 } from '../services/reportePdf.js';
 import { FOTOS_MAX } from '../services/reportePdfComun.js';
@@ -73,6 +72,7 @@ import {
   type TrabajoGuardado,
   type TrabajoPedido,
 } from '../services/reporteTrabajos.js';
+import { fecha as fechaTexto, fechaDeMomento, hora } from '../utils/fechas.js';
 
 const router = Router();
 
@@ -1802,11 +1802,7 @@ export async function buildReportePdfInput(
         year: 'numeric',
       }),
     ),
-    fechaCorta: fecha.toLocaleDateString('es-PA', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    }),
+    fechaCorta: fechaTexto(cruda as Date | string),
     // El nombre corto, no el largo: el largo de una licitacion ocupa cinco
     // lineas en la tirilla del PDF y no le dice nada a nadie.
     proyectoNombre: row.proyecto_corto,
@@ -1849,17 +1845,8 @@ export async function buildReportePdfInput(
     novedades: row.novedades,
     fotos: fotos.rows,
     correcciones: corr.map((c) => ({
-      fecha: new Date(c.created_at).toLocaleDateString('es-PA', {
-        ...HORA_PANAMA,
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-      }),
-      hora: new Date(c.created_at).toLocaleTimeString('es-PA', {
-        ...HORA_PANAMA,
-        hour: 'numeric',
-        minute: '2-digit',
-      }),
+      fecha: fechaDeMomento(c.created_at),
+      hora: hora(c.created_at),
       quien: c.usuario_nombre,
       cambios: c.cambios,
     })),

@@ -95,7 +95,7 @@ interface ListaRow {
 async function listaPresupuestos(proyectoId: number): Promise<PresupuestoListaWire[]> {
   const r = await query<ListaRow>(
     `SELECT p.id, p.nombre, p.origen, p.es_principal,
-            to_char(p.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS creado_at,
+            to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS creado_at,
             SUM(rr.cantidad * rr.costo_unitario)  AS costo,
             SUM(rr.cantidad * rr.precio_unitario) AS precio,
             COUNT(rr.id)::text AS renglones,
@@ -163,7 +163,7 @@ interface MetaRow {
 }
 
 const META_COLS = `id, proyecto_id, nombre, origen, es_principal, desglose_id,
-  to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS creado_at,
+  to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS creado_at,
   ${updatedAtSql()} AS updated_at`;
 
 /** Un presupuesto concreto, comprobando que es del proyecto de la URL:

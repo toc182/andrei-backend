@@ -263,7 +263,7 @@ const main = async () => {
     [id, K1]);
   const primera = (await buildReportePdfInput(id))?.correcciones[0];
   const cuando = `${primera?.fecha} | ${primera?.hora}`.replace(/\s/g, ' ');
-  c(/^15 sept?\.? 2026 \| 9:04 ?p\. ?m\.$/u.test(cuando),
+  c(/^15\/sep\/2026 \| 9:04 p\. m\.$/u.test(cuando),
     `el PDF dice el 15, y a las 9:04 p. m. en su propio renglon, no el 16 (dice «${cuando}»)`);
 
   // ---- 8. la migracion 166 copia las correcciones de antes, y solo esas ----

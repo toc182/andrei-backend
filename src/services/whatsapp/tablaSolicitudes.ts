@@ -16,12 +16,13 @@ import PDFDocument from 'pdfkit';
 import { query } from '../../database/config.js';
 import type { Usuario } from './herramientas.js';
 import { consultaDeSolicitudes, dinero, ESTADOS, ORDENES, type Filtros } from './solicitudes.js';
+import { fecha, fechaDeMomento } from '../../utils/fechas.js';
 
 /** Las columnas que se pueden pedir. El monto va siempre, al final. */
 export const COLUMNAS = {
   numero: { titulo: 'Número', sql: 'sp.numero', ancho: 13 },
   obra: { titulo: 'Obra', sql: "COALESCE(NULLIF(pr.nombre_corto, ''), pr.nombre)", ancho: 16 },
-  fecha: { titulo: 'Fecha', sql: "to_char(sp.fecha, 'DD/MM/YYYY')", ancho: 11 },
+  fecha: { titulo: 'Fecha', sql: "to_char(sp.fecha, 'YYYY-MM-DD')", ancho: 11 },
   proveedor: { titulo: 'Proveedor', sql: 'sp.proveedor', ancho: 26 },
   que_se_compro: {
     titulo: 'Qué se compró',
@@ -33,7 +34,7 @@ export const COLUMNAS = {
   le_toca_a: { titulo: 'Le toca firmar a', sql: 'sig.nombre', ancho: 20 },
   fecha_pago: {
     titulo: 'Fecha de pago',
-    sql: `(SELECT to_char(MAX(c.fecha_pago), 'DD/MM/YYYY') FROM comprobantes_pago c
+    sql: `(SELECT to_char(MAX(c.fecha_pago), 'YYYY-MM-DD') FROM comprobantes_pago c
             WHERE c.solicitud_pago_id = sp.id)`,
     ancho: 12,
   },
@@ -139,12 +140,16 @@ export async function armarTabla(
   for (const r of filas.rows) {
     const celdas = columnas.map((c) => {
       const v = r[c] ?? '';
-      return c === 'estado' ? estadoDicho(v) : v;
+      if (c === 'estado') return estadoDicho(v);
+      // La base las da como AAAA-MM-DD y aquí se escriben «07/oct/2026», como en
+      // todo el sistema: el to_char de Postgres pondría los meses en inglés.
+      if (c === 'fecha' || c === 'fecha_pago') return fecha(v, '');
+      return v;
     });
     grupos.get(r.grupo)?.filas.push({ celdas, monto: Number(r.monto) });
   }
 
-  const hoy = new Date().toLocaleDateString('en-GB', { timeZone: 'America/Panama' });
+  const hoy = fechaDeMomento(new Date());
   return {
     ok: true,
     tabla: {

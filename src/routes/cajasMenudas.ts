@@ -16,6 +16,7 @@ import { fixUploadEncoding } from '../utils/fileEncoding.js';
 import { PDFDocument } from 'pdf-lib';
 import { generateConstanciaCierreCajaMenuda } from '../services/constanciaPdf.js';
 import { generateNumero } from './solicitudesPago.js';
+import { fecha } from '../utils/fechas.js';
 
 const router = Router();
 
@@ -1696,11 +1697,6 @@ router.post(
         const fechaMin = gastosResult.rows[0].fecha;
         const fechaMax = gastosResult.rows[gastosResult.rows.length - 1].fecha;
 
-        const formatFecha = (f: string | Date) => {
-          const d = f instanceof Date ? f : new Date(f + 'T00:00:00');
-          return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-        };
-
         // Generate solicitud numero (reembolso → uses M-suffixed sequence)
         let numero: string;
         try {
@@ -1726,7 +1722,7 @@ router.post(
         }
 
         // Create solicitud de pago
-        const descripcionItem = `Reembolso de caja menuda ${caja.nombre} — ${formatFecha(fechaMin)} a ${formatFecha(fechaMax)}`;
+        const descripcionItem = `Reembolso de caja menuda ${caja.nombre} — ${fecha(fechaMin)} a ${fecha(fechaMax)}`;
 
         const solicitudResult = await client.query<{ id: number }>(
           `INSERT INTO solicitudes_pago (

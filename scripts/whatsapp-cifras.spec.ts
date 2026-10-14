@@ -35,6 +35,16 @@ exigir(
   cifrasSinFuente('3 días, del 28 al 30 de septiembre de 2026.', [pregunta, torre]).length === 0,
   'lo que sí devolvió la base pasa, fechas incluidas',
 );
+// Las fechas se escriben «28/sep/2026» (Ivan, 2026-10-08): el mes en letras no es
+// cifra, y el día y el año salen de la fecha AAAA-MM-DD que dio la base.
+exigir(
+  cifrasSinFuente('3 días, del 22/sep/2026 al 30/sep/2026.', [pregunta, torre]).length === 0,
+  'una fecha escrita 22/sep/2026 pasa cuando la base la dio como 2026-09-22',
+);
+exigir(
+  igual(cifrasSinFuente('Del 23/sep/2026 al 30/sep/2026.', [pregunta, torre]), ['23']),
+  'pero un día que la base no dio se marca igual',
+);
 
 // La Toyota Hilux de la segunda hoja de respuestas: en el JSON, «18,2» son dos
 // numeros (18 horas, 2 dias), no uno.

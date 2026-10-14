@@ -26,10 +26,10 @@ import {
   aPdf, esc, incrustarFotos, logoPinellas, pieDeFoto,
   type FotoDelReporte, type FotoIncrustada,
 } from './reportePdfComun.js';
-import { HORA_PANAMA } from './reportePdfComun.js';
 import { nombreEmisor, nombrePropio, type Consorcio } from './consorcioProyecto.js';
 import type { DatosSemana } from './reporteSemanalDatos.js';
 import type { CambioLegible, Trozo } from './reporteCambios.js';
+import { fechaHora } from '../utils/fechas.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -108,10 +108,7 @@ function celda(valor: number | null, sufijo = ''): string {
  * el PDF entero, que es como se revisó contra la maqueta que Ivan aprobó.
  */
 export function armarHtmlSemanal(d: ReporteSemanalPdfInput, fotos: FotoIncrustada[], logo: string, omitidas: number): string {
-  const emitido = new Date().toLocaleString('es-PA', {
-    ...HORA_PANAMA,
-    day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit',
-  });
+  const emitido = fechaHora(new Date());
 
   const datos = d.datos;
   // El domingo solo ocupa columna si alguien reportó ese día: se asume libre.

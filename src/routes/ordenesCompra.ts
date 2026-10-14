@@ -37,6 +37,7 @@ import { deleteFile, getFileSignedUrl, uploadFile } from '../services/storage.js
 import { registrarAudit } from '../services/auditLog.js';
 import { adjuntarCompra, enlazarCompra, leerCompra } from '../services/requisicionCompras.js';
 import { fixFiles } from '../utils/fileEncoding.js';
+import { fecha } from '../utils/fechas.js';
 
 const router = Router();
 
@@ -1644,7 +1645,7 @@ router.post(
       const nombreDe = (f: { numero_factura: string | null; fecha: Date }) =>
         f.numero_factura
           ? `factura ${f.numero_factura}`
-          : `recibida el ${new Date(f.fecha).toISOString().split('T')[0]}`;
+          : `recibida el ${fecha(f.fecha)}`;
       const pagadas = entregas
         .map((e) => ({ monto: redondear(Number(e.monto)), factura: porEntrega.get(Number(e.entrega_id))! }))
         .sort((a, b) => new Date(a.factura.fecha).getTime() - new Date(b.factura.fecha).getTime());

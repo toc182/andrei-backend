@@ -12,7 +12,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
-  GRAY, HORA_PANAMA, LIGHT_BG, NAVY, RULE, WARN,
+  GRAY, LIGHT_BG, NAVY, RULE, WARN,
   aPdf, esc, incrustarFotos, logoPinellas, pieDeFoto,
   type FotoIncrustada,
 } from './reportePdfComun.js';
@@ -21,6 +21,7 @@ import { nombreEmisor, nombrePropio, type Consorcio } from './consorcioProyecto.
 import type { CambioLegible, Trozo } from './reporteCambios.js';
 import { agruparTrabajos, type TrabajoGuardado } from './reporteTrabajos.js';
 import type { ColumnaEmpresa } from './siglasEmpresas.js';
+import { fechaHora } from '../utils/fechas.js';
 
 // Las piezas comunes se siguen pudiendo importar desde aqui: rutas y pruebas
 // las piden a este modulo desde antes de que existiera el reporte semanal.
@@ -162,14 +163,7 @@ export function armarHtml(
   logo: string,
   omitidas: number,
 ): string {
-  const emitido = new Date().toLocaleString('es-PA', {
-    ...HORA_PANAMA,
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  const emitido = fechaHora(new Date());
 
   const horas =
     d.horasPerdidas && d.horasPerdidas > 0

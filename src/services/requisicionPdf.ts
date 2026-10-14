@@ -13,8 +13,9 @@
  */
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { aPdf, esc, HORA_PANAMA, logoPinellas, NAVY, GRAY, RULE } from './reportePdfComun.js';
+import { aPdf, esc, logoPinellas, NAVY, GRAY, RULE } from './reportePdfComun.js';
 import { nombreEmisor, nombrePropio, type Consorcio } from './consorcioProyecto.js';
+import { fecha, fechaDeMomento, fechaHora } from '../utils/fechas.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,31 +62,6 @@ const ETIQUETA_MARCA: Record<MarcaLinea, string> = {
   cancelada: 'Cancelada',
 };
 
-/** Una fecha DATE de la base: pg la arma a la medianoche local, y así se lee. */
-function dia(valor: Date | string): string {
-  if (typeof valor === 'string') {
-    const [a, m, d] = valor.slice(0, 10).split('-');
-    return `${d}/${m}/${a}`;
-  }
-  return `${String(valor.getDate()).padStart(2, '0')}/${String(valor.getMonth() + 1).padStart(2, '0')}/${valor.getFullYear()}`;
-}
-
-/** El día de un momento (TIMESTAMPTZ), en la hora de Panamá. */
-function diaDe(valor: Date | string): string {
-  return DIA.format(typeof valor === 'string' ? new Date(valor) : valor);
-}
-
-// es-PA escribe el mes primero (10/06/2026 es el 6 de octubre): la fecha se
-// arma con en-GB, que es día/mes/año, en la hora de Panamá.
-const DIA = new Intl.DateTimeFormat('en-GB', { ...HORA_PANAMA, day: '2-digit', month: '2-digit', year: 'numeric' });
-const HORA = new Intl.DateTimeFormat('es-PA', { ...HORA_PANAMA, hour: 'numeric', minute: '2-digit' });
-
-/** Un momento (TIMESTAMPTZ), en la hora de Panamá. */
-function momento(valor: Date | string): string {
-  const d = typeof valor === 'string' ? new Date(valor) : valor;
-  return `${DIA.format(d)} ${HORA.format(d)}`;
-}
-
 function cantidad(valor: string | number): string {
   const n = Number(valor);
   return Number.isInteger(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { maximumFractionDigits: 3 });
@@ -127,7 +103,7 @@ function armarHtml(d: RequisicionPdfInput, logo: string): string {
 
   const aprobacion =
     d.estado === 'aprobada' && d.aprobada_por && d.aprobada_at
-      ? bloque('Aprobada por', d.aprobada_por, `${momento(d.aprobada_at)} · con su contraseña en el sistema`)
+      ? bloque('Aprobada por', d.aprobada_por, `${fechaHora(d.aprobada_at)} · con su contraseña en el sistema`)
       : d.estado === 'anulada'
         ? bloque('Estado', 'Anulada')
         : bloque('Estado', 'Por aprobar');
@@ -164,7 +140,7 @@ function armarHtml(d: RequisicionPdfInput, logo: string): string {
       <div>
         <h1>REQUISICIÓN</h1>
         <div class="num-doc">N° <b>${esc(d.numero)}</b></div>
-        <div class="num-doc">Fecha ${diaDe(d.creada_at)}</div>
+        <div class="num-doc">Fecha ${fechaDeMomento(d.creada_at)}</div>
       </div>
     </div>
     ${
@@ -175,8 +151,8 @@ function armarHtml(d: RequisicionPdfInput, logo: string): string {
     <div class="datos">
       ${bloque('Proyecto', d.proyecto_nombre, d.consorcio?.nombre ?? null)}
       ${bloque('Descripción', d.descripcion)}
-      ${bloque('Fecha requerida', `${dia(d.fecha_requerida)} · ${d.prioridad === 'urgente' ? 'Urgente' : 'Normal'}`)}
-      ${bloque('Escrita por', d.escrita_por, momento(d.creada_at))}
+      ${bloque('Fecha requerida', `${fecha(d.fecha_requerida)} · ${d.prioridad === 'urgente' ? 'Urgente' : 'Normal'}`)}
+      ${bloque('Escrita por', d.escrita_por, fechaHora(d.creada_at))}
       ${aprobacion}
       ${bancarios ? bloque('Datos bancarios', d.beneficiario ?? '', cuenta) : ''}
     </div>
@@ -193,7 +169,7 @@ function armarHtml(d: RequisicionPdfInput, logo: string): string {
       <tbody>${filas}</tbody>
     </table>
     ${d.notas ? `<div class="notas"><div class="etq">Notas</div>${esc(d.notas)}</div>` : ''}
-    <div class="pie">Generado el ${momento(d.generado_at)} por el sistema.</div>
+    <div class="pie">Generado el ${fechaHora(d.generado_at)} por el sistema.</div>
   </body></html>`;
 }
 

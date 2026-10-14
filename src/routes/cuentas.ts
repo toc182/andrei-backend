@@ -8,6 +8,7 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { uploadFile, deleteFile, downloadFile } from '../services/storage.js';
 import { registrarAudit } from '../services/auditLog.js';
 import { fixUploadEncoding } from '../utils/fileEncoding.js';
+import { fecha } from '../utils/fechas.js';
 
 const router = Router();
 router.use(authenticateToken, checkPermission('cuentas'));
@@ -193,16 +194,11 @@ function formatValue(field: string, val: unknown): string {
     return val ? 'Sí' : 'No';
   }
   if (DATE_FIELDS.has(field)) {
-    // pg returns DATE columns as JS Date at UTC midnight. Form values
-    // arrive as "YYYY-MM-DD" strings. Normalize both to DD/MM/YYYY.
-    if (val instanceof Date) {
-      const dd = String(val.getUTCDate()).padStart(2, '0');
-      const mm = String(val.getUTCMonth() + 1).padStart(2, '0');
-      return `${dd}/${mm}/${val.getUTCFullYear()}`;
-    }
-    if (typeof val === 'string') {
-      const [y, m, d] = val.slice(0, 10).split('-');
-      if (y && m && d) return `${d}/${m}/${y}`;
+    // pg entrega un DATE como Date y el formulario como «YYYY-MM-DD»: los dos
+    // se escriben «07/oct/2026», como toda fecha del sistema.
+    if (val instanceof Date || typeof val === 'string') {
+      const t = fecha(val, '');
+      if (t) return t;
     }
   }
   return String(val);

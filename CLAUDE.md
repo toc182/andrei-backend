@@ -130,6 +130,11 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
 - storage.ts — uploadFile(), downloadFile(), deleteFile() via Cloudflare R2
 - emailService.ts — sendEmail() via Resend API
 - pdfGenerator.ts — generateSolicitudPDF() via Puppeteer + templates/
+- utils/fechas.ts — every date a person reads (PDF, email, WhatsApp, Excel, saved history
+  text) is written «07/oct/2026», with time «07/oct/2026 3:05 p. m.» in Panama time
+  (Ivan, 2026-10-08). fecha() for a DATE column, fechaDeMomento()/fechaHora() for a
+  timestamp. Never toLocaleDateString: es-PA writes the month first. Same rule as the
+  screens (andrei-frontend/src/lib/fechas.ts).
 - auditLog.ts — registrarAudit() — call on every create/edit/delete/approve/pay
 - requisicionPdf.ts — the requisition's paper (consortium or Pinellas letterhead, same
   rule as the daily report). Who may see/edit/approve/attend a requisition depends on

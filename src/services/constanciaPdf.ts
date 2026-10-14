@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { PDFDocument, rgb } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
+import { fechaHora } from '../utils/fechas.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -106,7 +107,10 @@ export async function generateConstanciaCierreCajaMenuda(
 
   // Key-value table.
   y -= 28;
+  // Escrita a propósito («07 de octubre de 2026»), pero del día en Panamá: el
+  // servidor corre en UTC y una caja cerrada a las 8 de la noche salía con mañana.
   const fechaTxt = data.fechaCierre.toLocaleDateString('es-PA', {
+    timeZone: 'America/Panama',
     day: '2-digit',
     month: 'long',
     year: 'numeric',
@@ -139,11 +143,7 @@ export async function generateConstanciaCierreCajaMenuda(
   }
 
   // Footer: auto-gen note, right-aligned, muted.
-  const now = new Date();
-  const generadoTxt = `Documento generado automáticamente · ${now.toLocaleDateString(
-    'es-PA',
-    { day: '2-digit', month: '2-digit', year: 'numeric' },
-  )} ${now.toLocaleTimeString('es-PA', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  const generadoTxt = `Documento generado automáticamente · ${fechaHora(new Date())}`;
   const footerWidth = sansRegular.widthOfTextAtSize(generadoTxt, 9);
   const footerY = 56;
   page.drawLine({
