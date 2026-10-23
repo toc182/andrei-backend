@@ -2023,6 +2023,64 @@ router.get(
   }),
 );
 
+// El nombre que se lee en Documentos («Factura F-5521», «Cotización firmada»).
+// Vacío, vuelve a leerse el nombre del archivo. Vale igual para los de la orden
+// y los de una factura: todos viven en orden_compra_adjuntos.
+router.patch(
+  '/:id/adjuntos/:adjuntoId',
+  authenticateToken,
+  checkPermission('ordenes_ver'),
+  [
+    param('id').isInt(),
+    param('adjuntoId').isInt(),
+    body('descripcion')
+      .isString()
+      .withMessage('Diga el nombre del archivo')
+      .trim()
+      .isLength({ max: 255 })
+      .withMessage('El nombre pasa de 255 letras'),
+  ],
+  asyncHandler(
+    async (req: Request<{ id: string; adjuntoId: string }>, res: Response) => {
+      if (erroresDeValidacion(req, res)) return;
+      const { id, adjuntoId } = req.params;
+      const orden = await traerOrden(id);
+      if (!orden) {
+        res.status(404).json({ success: false, error: 'Orden no encontrada' });
+        return;
+      }
+      if (!(await puedeElProyecto(req, orden.proyecto_id))) {
+        res.status(403).json({ success: false, error: 'Sin acceso a esa orden' });
+        return;
+      }
+      const adj = await query<{ nombre_original: string; descripcion: string | null }>(
+        'SELECT nombre_original, descripcion FROM orden_compra_adjuntos WHERE id = $1 AND orden_compra_id = $2',
+        [adjuntoId, id],
+      );
+      if (adj.rows.length === 0) {
+        res.status(404).json({ success: false, error: 'Adjunto no encontrado' });
+        return;
+      }
+
+      const antes = adj.rows[0].descripcion;
+      const despues = (req.body.descripcion as string) || null;
+      const r = await query(
+        'UPDATE orden_compra_adjuntos SET descripcion = $1 WHERE id = $2 RETURNING *',
+        [despues, adjuntoId],
+      );
+      if (antes !== despues) {
+        await registrarAudit(req.user!.id, 'renombrar_adjunto', 'orden_compra', Number(id), {
+          numero: orden.numero,
+          archivo: adj.rows[0].nombre_original,
+          antes,
+          despues,
+        });
+      }
+      res.json({ success: true, data: r.rows[0] });
+    },
+  ),
+);
+
 router.delete(
   '/:id/adjuntos/:adjuntoId',
   authenticateToken,

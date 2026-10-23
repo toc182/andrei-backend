@@ -722,6 +722,68 @@ const main = async () => {
       .estado === 403,
     'quien no tiene acceso al proyecto no recibe enlaces',
   );
+
+  // Renombrar: el nombre que se lee en Documentos (Ivan, 2026-10-23: «uno debe
+  // poder darle nombre al archivo»). Vale igual para el de una factura.
+  const idPapel = papel.cuerpo.data.id;
+  const renombrado = await pedir('PATCH', `/ordenes-compra/${id}/adjuntos/${idPapel}`, {
+    descripcion: '  Factura F-1001 y vale  ',
+  });
+  c(
+    renombrado.estado === 200 && renombrado.cuerpo?.data?.descripcion === 'Factura F-1001 y vale',
+    `el papel de una factura se renombra, sin espacios de sobra (dio ${renombrado.estado}, «${renombrado.cuerpo?.data?.descripcion}»)`,
+  );
+  const releido = (await ver()).entregas.find((x: { id: number }) => x.id === idF1)?.adjuntos?.[0];
+  c(
+    releido?.descripcion === 'Factura F-1001 y vale' && releido?.nombre_original === 'factura.pdf',
+    'la orden lo trae con su nombre nuevo, y el archivo sigue siendo el mismo',
+  );
+  const sinNombre = await pedir('PATCH', `/ordenes-compra/${id}/adjuntos/${idPapel}`, {
+    descripcion: '   ',
+  });
+  c(
+    sinNombre.estado === 200 && sinNombre.cuerpo?.data?.descripcion === null,
+    'dejarlo en blanco le quita el nombre (vuelve a leerse el del archivo)',
+  );
+  c(
+    (await pedir('PATCH', `/ordenes-compra/${id}/adjuntos/${idPapel}`, {})).estado === 400,
+    'sin decir el nombre no se toca nada',
+  );
+  c(
+    (await pedir('PATCH', `/ordenes-compra/${id}/adjuntos/${idPapel}`, { descripcion: 'x'.repeat(256) }))
+      .estado === 400,
+    'un nombre de mas de 255 letras no entra',
+  );
+  c(
+    (await pedir('PATCH', `/ordenes-compra/${enOtro.cuerpo.data.id}/adjuntos/${idPapel}`, { descripcion: 'Ajeno' }))
+      .estado === 404,
+    'un adjunto no se renombra desde otra orden',
+  );
+  c(
+    (
+      await pedir(
+        'PATCH',
+        `/ordenes-compra/${id}/adjuntos/${idPapel}`,
+        { descripcion: 'Sin acceso' },
+        firmar(sinLlaves),
+      )
+    ).estado === 403,
+    'quien no tiene acceso al proyecto no renombra',
+  );
+  const rastroNombre = await query<{ detalles: { antes: string | null; despues: string | null } }>(
+    `SELECT detalles FROM audit_log
+      WHERE entidad = 'orden_compra' AND entidad_id = $1 AND accion = 'renombrar_adjunto'
+      ORDER BY id`,
+    [id],
+  );
+  c(
+    rastroNombre.rows.length === 2 &&
+      rastroNombre.rows[0].detalles.antes === 'Factura F-1001' &&
+      rastroNombre.rows[0].detalles.despues === 'Factura F-1001 y vale' &&
+      rastroNombre.rows[1].detalles.despues === null,
+    `cada nombre que cambia queda en el rastro con el de antes (hay ${rastroNombre.rows.length})`,
+  );
+
   c(
     (await pedir('DELETE', `/ordenes-compra/${id}/adjuntos/${cotizacion.cuerpo.data.id}`)).estado === 200,
     'y un adjunto se puede quitar',
@@ -750,6 +812,7 @@ const main = async () => {
     'registrar_factura',
     'completar',
     'anular_factura',
+    'renombrar_adjunto',
     'editar',
     'dar_de_baja',
   ]) {
