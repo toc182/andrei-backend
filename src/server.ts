@@ -97,6 +97,9 @@ app.use(
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
+    // Sin esto el navegador olvida la respuesta del OPTIONS a los 5 s y casi
+    // cada petición cuesta dos viajes. Chrome no guarda más de 2 h.
+    maxAge: 7200,
   }),
 );
 
