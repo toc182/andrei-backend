@@ -33,6 +33,7 @@ const PRUEBAS: Record<string, string> = {
   listas: 'listas-humo.ts',
   aprobadores: 'aprobadores-transaccion-humo.ts',
   ordenes: 'ordenes-humo.ts',
+  'ordenes-aprobadores': 'ordenes-aprobadores-humo.ts',
   adendas: 'adendas-humo.ts',
   avance: 'avance-humo.ts',
   requisiciones: 'requisiciones-humo.ts',

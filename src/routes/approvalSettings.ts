@@ -202,6 +202,42 @@ router.put(
             [ids],
           );
 
+          // Las ordenes de compra firman con la misma cadena y vuelven a cero
+          // igual: las que esperan firmas y las aprobadas que todavia no salieron
+          // al proveedor. Sin esto una orden se quedaba esperando la firma de
+          // alguien que ya no estaba en la lista, sin que a nadie le tocara
+          // (Ivan, 2026-10-26, OC-PBR-002). Las enviadas, rechazadas y dadas de
+          // baja no se tocan.
+          const ordenes = await client.query<{ id: number; numero: string; estado: string }>(
+            `SELECT id, numero, estado FROM ordenes_compra
+              WHERE proyecto_id = $1 AND estado IN ('pendiente', 'por_enviar') AND activo = true
+              ORDER BY id
+              FOR UPDATE`,
+            [projectId],
+          );
+          const idsOrdenes = ordenes.rows.map((r) => r.id);
+          const firmasOrdenes = await client.query<{
+            orden_compra_id: number;
+            user_id: number;
+            nombre: string;
+            orden: number;
+            accion: string;
+            fecha: Date;
+          }>(
+            `WITH borradas AS (
+               DELETE FROM orden_compra_aprobaciones WHERE orden_compra_id = ANY($1::int[])
+               RETURNING orden_compra_id, user_id, orden, accion, fecha
+             )
+             SELECT b.*, u.nombre FROM borradas b JOIN users u ON u.id = b.user_id
+             ORDER BY b.orden_compra_id, b.orden`,
+            [idsOrdenes],
+          );
+          await client.query(
+            `UPDATE ordenes_compra SET estado = 'pendiente', updated_at = CURRENT_TIMESTAMP
+              WHERE id = ANY($1::int[]) AND estado = 'por_enviar'`,
+            [idsOrdenes],
+          );
+
           await client.query(
             'DELETE FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1',
             [projectId],
@@ -248,6 +284,18 @@ router.put(
                 s.aprobaciones.length > 0 ||
                 s.revisiones.length > 0,
             );
+          const ordenesReiniciadas = ordenes.rows
+            .map((o) => ({
+              id: o.id,
+              numero: o.numero,
+              estado_antes: o.estado,
+              aprobaciones: firmasOrdenes.rows
+                .filter((a) => a.orden_compra_id === o.id)
+                .map(({ user_id, nombre, orden, accion, fecha }) => ({
+                  user_id, nombre, orden, accion, fecha,
+                })),
+            }))
+            .filter((o) => o.estado_antes !== 'pendiente' || o.aprobaciones.length > 0);
 
           // Dentro de la transaccion: el rastro y el cambio se guardan juntos
           // o no se guarda ninguno.
@@ -260,6 +308,7 @@ router.put(
               antes: antes.rows,
               despues: despues.rows,
               solicitudes_reiniciadas: reiniciadas,
+              ordenes_reiniciadas: ordenesReiniciadas,
             },
             client,
           );
