@@ -216,9 +216,11 @@ const ES_DE_HOY = new Set([
 /** Lo que habla de OTRO dia: eso lo resuelve el modelo preguntando cual. «no»
  *  solo como respuesta —«no», «no es de hoy»—: «no se perdieron horas» no habla
  *  de la fecha. Se mira sobre el texto ya llano(), asi que «25/09» llega como
- *  «25 09». */
+ *  «25 09», «25/09/2026» como «25 09 2026» y «07/oct/2026» como «07 oct 2026».
+ *  Una fecha escrita entera tambien cuenta: hasta el 2026-10-26 se tomaba como
+ *  «no contesto» y el reporte quedaba con la fecha de hoy. */
 const OTRO_DIA =
-  /^no$|^no (es|fue|era)\b|^(el )?\d{1,2}( \d{1,2})?$|\b(otra fecha|otro dia|ayer|anteayer|antier|anoche|pasado|lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/;
+  /^no$|^no (es|fue|era)\b|^(el )?\d{1,2}( \d{1,2}( \d{2,4})?)?$|^(el )?\d{4} \d{1,2} \d{1,2}$|\b\d{1,2} (de )?(ene|feb|mar|abr|may|jun|jul|ago|sep|sept|set|oct|nov|dic)\b|\b(otra fecha|otro dia|ayer|anteayer|antier|anoche|pasado|lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/;
 
 /** «No hubo nada» dicho de las maneras de siempre. */
 const NADA = new Set([

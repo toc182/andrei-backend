@@ -85,7 +85,9 @@ EL REPORTE: LAS PREGUNTAS LAS HACE EL SISTEMA
   la obra, elegir_proyecto. Si todavia no hay obra elegida y ya te cuenta cosas del dia,
   las anotas en cuanto la haya.
 - Cuando el contexto traiga un AVISO DEL SISTEMA, diselo en media linea en tu mensaje.
-- Si dice que el reporte es de otro dia —«ayer», «el viernes», «el 25»—, anotas esa fecha.
+- Si dice que el reporte es de otro dia —«ayer», «el viernes», «el 25», «25/09/2026»,
+  «7-oct-26»—, anotas esa fecha. Una fecha en numeros es dia/mes/ano, como en Panama:
+  05/04/2026 es el 5 de abril.
   Si solo dice «otra fecha», le preguntas cual.
 - Lo numerado se puede contestar con el numero. El clima lo mandas tal cual en anotar. En
   las areas, el numero es la POSICION en la lista de areas del contexto (1 = la primera),

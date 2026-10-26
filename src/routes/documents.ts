@@ -120,7 +120,7 @@ router.post(
     res: Response,
   ): Promise<void> => {
     try {
-      const { projectName, day, month, year } = req.body;
+      const { projectName, day, dayOfMonth, month, year } = req.body;
 
       const htmlPath = path.resolve(
         __dirname,
@@ -130,6 +130,7 @@ router.post(
 
       htmlContent = htmlContent
         .replace(/{{projectName}}/g, projectName || '')
+        .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
         .replace(/{{day}}/g, day || '')
         .replace(/{{month}}/g, month || '')
         .replace(/{{year}}/g, year || '');
@@ -160,7 +161,7 @@ router.post(
   ): Promise<void> => {
     let browser: Browser | undefined;
     try {
-      const { projectName, day, month, year } = req.body;
+      const { projectName, day, dayOfMonth, month, year } = req.body;
 
       browser = await puppeteer.launch(getPuppeteerConfig());
       const page = await browser.newPage();
@@ -173,6 +174,7 @@ router.post(
 
       htmlContent = htmlContent
         .replace(/{{projectName}}/g, projectName || '')
+        .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
         .replace(/{{day}}/g, day || '')
         .replace(/{{month}}/g, month || '')
         .replace(/{{year}}/g, year || '');
@@ -336,7 +338,7 @@ router.post(
     res: Response,
   ): Promise<void> => {
     try {
-      const { day, month, year } = req.body;
+      const { day, dayOfMonth, month, year } = req.body;
 
       const htmlPath = path.resolve(
         __dirname,
@@ -345,6 +347,7 @@ router.post(
       let htmlContent = fs.readFileSync(htmlPath, 'utf8');
 
       htmlContent = htmlContent
+        .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
         .replace(/{{day}}/g, day || '')
         .replace(/{{month}}/g, month || '')
         .replace(/{{year}}/g, year || '');
@@ -375,7 +378,7 @@ router.post(
   ): Promise<void> => {
     let browser: Browser | undefined;
     try {
-      const { day, month, year } = req.body;
+      const { day, dayOfMonth, month, year } = req.body;
 
       browser = await puppeteer.launch(getPuppeteerConfig());
       const page = await browser.newPage();
@@ -387,6 +390,7 @@ router.post(
       let htmlContent = fs.readFileSync(htmlPath, 'utf8');
 
       htmlContent = htmlContent
+        .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
         .replace(/{{day}}/g, day || '')
         .replace(/{{month}}/g, month || '')
         .replace(/{{year}}/g, year || '');
@@ -677,7 +681,7 @@ router.post(
     res: Response,
   ): Promise<void> => {
     try {
-      const { projectName, day, month, year } = req.body;
+      const { projectName, day, dayOfMonth, month, year } = req.body;
 
       const imagePath = path.resolve(
         __dirname,
@@ -693,6 +697,7 @@ router.post(
 
       htmlContent = htmlContent
         .replace(/{{projectName}}/g, projectName || '')
+        .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
         .replace(/{{day}}/g, day || '')
         .replace(/{{month}}/g, month || '')
         .replace(/{{year}}/g, year || '')
@@ -724,7 +729,7 @@ router.post(
   ): Promise<void> => {
     let browser: Browser | undefined;
     try {
-      const { projectName, day, month, year } = req.body;
+      const { projectName, day, dayOfMonth, month, year } = req.body;
 
       const imagePath = path.resolve(
         __dirname,
@@ -743,6 +748,7 @@ router.post(
 
       htmlContent = htmlContent
         .replace(/{{projectName}}/g, projectName || '')
+        .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
         .replace(/{{day}}/g, day || '')
         .replace(/{{month}}/g, month || '')
         .replace(/{{year}}/g, year || '')
@@ -788,7 +794,7 @@ router.post(
     res: Response,
   ): Promise<void> => {
     try {
-      const { projectName, day, month, year } = req.body;
+      const { projectName, day, dayOfMonth, month, year } = req.body;
 
       const htmlPath = path.resolve(
         __dirname,
@@ -798,6 +804,7 @@ router.post(
 
       htmlContent = htmlContent
         .replace(/{{projectName}}/g, projectName || '')
+        .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
         .replace(/{{day}}/g, day || '')
         .replace(/{{month}}/g, month || '')
         .replace(/{{year}}/g, year || '');
@@ -828,7 +835,7 @@ router.post(
   ): Promise<void> => {
     let browser: Browser | undefined;
     try {
-      const { projectName, day, month, year } = req.body;
+      const { projectName, day, dayOfMonth, month, year } = req.body;
 
       browser = await puppeteer.launch(getPuppeteerConfig());
       const page = await browser.newPage();
@@ -841,6 +848,7 @@ router.post(
 
       htmlContent = htmlContent
         .replace(/{{projectName}}/g, projectName || '')
+        .replace(/{{dayOfMonth}}/g, dayOfMonth || '')
         .replace(/{{day}}/g, day || '')
         .replace(/{{month}}/g, month || '')
         .replace(/{{year}}/g, year || '');

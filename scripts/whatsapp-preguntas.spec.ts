@@ -113,6 +113,11 @@ const leer = (datos: DatosReporte, dicho: string, mensajes = 1) =>
   for (const otra of ['Otra fecha', 'No, es de ayer', 'el 25', 'fue el viernes', 'No']) {
     exigir(leer(f, otra).tipo === 'modelo', `«${otra}» lo lee el modelo`);
   }
+  // Una fecha escrita entera (2026-10-08: antes se tomaba como «no contestó» y el
+  // reporte quedaba con la de hoy).
+  for (const otra of ['25/09/2026', 'El 25/09/2026', '25-09-26', '2026-09-25', '07/oct/2026', '7-oct-26', 'el 7 de oct', '25 sept 2026', '25.09.2026']) {
+    exigir(leer(f, otra).tipo === 'modelo', `«${otra}» lo lee el modelo`);
+  }
   const otraCosa = leer(f, 'Hoy colocamos 6 zapatas');
   exigir(otraCosa.tipo === 'aviso' && (otraCosa.datos.preguntadas ?? []).includes('fecha'), 'si contesta otra cosa, queda la de hoy y el modelo lo dice');
   exigir(leer(f, 'No se perdieron horas').tipo === 'aviso', '«no se perdieron horas» no es «no» a la fecha');
