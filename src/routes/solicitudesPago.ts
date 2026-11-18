@@ -10,7 +10,6 @@ import {
 } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import {
-  deleteFile,
   downloadFile,
   uploadFile,
   getFileSignedUrl,
@@ -25,6 +24,7 @@ import {
 import { avisarTurnoUrgente } from '../services/whatsapp/avisoUrgente.js';
 import { adjuntarCompra, enlazarCompra, leerCompra } from '../services/requisicionCompras.js';
 import { fixFiles } from '../utils/fileEncoding.js';
+import { borrarArchivos, retirarSolicitud } from '../services/solicitudRetiro.js';
 import { PDFDocument } from 'pdf-lib';
 import bcrypt from 'bcryptjs';
 
@@ -1456,7 +1456,10 @@ router.get(
       const isEstadoEditable =
         sol.estado === 'pendiente' || sol.estado === 'aprobada';
       let puede_eliminar = false;
-      if (isAdmin) {
+      if (sol.tipo === 'apertura') {
+        // La apertura o un aumento de caja menuda nunca se elimina sola (ver DELETE /:id)
+        puede_eliminar = false;
+      } else if (isAdmin) {
         // Admin can delete anything except protected states outside test project
         puede_eliminar =
           !isEstadoProtegido || sol.proyecto_id === testProjectId;
@@ -4262,13 +4265,26 @@ router.delete(
       const existing = await query<
         SolicitudRow & { preparado_por: number; proyecto_id: number }
       >(
-        'SELECT id, numero, estado, preparado_por, proyecto_id FROM solicitudes_pago WHERE id = $1 AND activo = true',
+        'SELECT id, numero, estado, preparado_por, proyecto_id, tipo FROM solicitudes_pago WHERE id = $1 AND activo = true',
         [id],
       );
       if (existing.rows.length === 0) {
         res
           .status(404)
           .json({ success: false, message: 'Solicitud no encontrada' });
+        return;
+      }
+
+      // La apertura (o un aumento) de una caja menuda no se quita sola: la caja
+      // quedaría con un monto que nadie le va a transferir (Ivan, 2026-11-18).
+      // Una caja abierta por error se elimina entera desde Cajas Menudas, y
+      // eso se lleva su apertura; un aumento equivocado se rechaza.
+      if (existing.rows[0].tipo === 'apertura') {
+        res.status(400).json({
+          success: false,
+          message:
+            'Esta solicitud es de una caja menuda y no se elimina sola. Si la caja se abrió por error, elimínela desde Cajas Menudas.',
+        });
         return;
       }
 
@@ -4316,70 +4332,28 @@ router.delete(
         }
       }
 
-      // Delete R2 files before deleting from DB (ON DELETE CASCADE only removes DB rows)
-      const adjuntosToDelete = await query<{ r2_key: string }>(
-        'SELECT r2_key FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1',
-        [id],
-      );
-      for (const adj of adjuntosToDelete.rows) {
-        try {
-          await deleteFile(adj.r2_key);
-        } catch (err) {
-          console.error('Error deleting R2 file:', adj.r2_key, err);
-        }
-      }
-
-      // Limpiar tablas relacionadas que no tengan ON DELETE CASCADE
-      await query(
-        'DELETE FROM devoluciones_solicitud WHERE solicitud_pago_id = $1',
-        [id],
-      );
-      await query('DELETE FROM reembolsos_pinellas WHERE solicitud_pago_id = $1', [
-        id,
-      ]);
-      await query(
-        'DELETE FROM comprobantes_pago WHERE solicitud_pago_id = $1',
-        [id],
-      );
-      await query(
-        'DELETE FROM facturas_solicitud WHERE solicitud_pago_id = $1',
-        [id],
-      );
-      await query(
-        'DELETE FROM solicitud_aprobaciones WHERE solicitud_pago_id = $1',
-        [id],
-      );
-      await query(
-        'DELETE FROM solicitud_revisiones WHERE solicitud_pago_id = $1',
-        [id],
-      );
-      await query(
-        'DELETE FROM correcciones_solicitud WHERE solicitud_pago_id = $1',
-        [id],
-      );
-
-      // Unlink caja menuda gastos and adjuntos so they return to current expenses
-      await query(
-        'UPDATE cajas_menudas_gastos SET solicitud_reembolso_id = NULL WHERE solicitud_reembolso_id = $1',
-        [id],
-      );
-      await query(
-        'UPDATE cajas_menudas_adjuntos SET solicitud_reembolso_id = NULL WHERE solicitud_reembolso_id = $1',
-        [id],
-      );
-
       const { numero, estado } = existing.rows[0];
-      await query(
-        'UPDATE solicitudes_pago SET activo = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-        [id],
-      );
-      await registrarAudit(
-        req.user!.id,
-        'eliminar',
-        'solicitud_pago',
-        parseInt(id),
-        { numero, estado_al_eliminar: estado },
-      );
+      let archivos: string[] = [];
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        archivos = await retirarSolicitud(client, Number(id));
+        await registrarAudit(
+          req.user!.id,
+          'eliminar',
+          'solicitud_pago',
+          Number(id),
+          { numero, estado_al_eliminar: estado },
+          client,
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+      await borrarArchivos(archivos);
 
       res.json({ success: true, message: 'Solicitud eliminada' });
     },

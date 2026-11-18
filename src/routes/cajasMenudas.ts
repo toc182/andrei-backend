@@ -2,8 +2,9 @@ import { Router, Request, Response } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import multer from 'multer';
 import crypto from 'crypto';
+import type { PoolClient } from 'pg';
 import { query, pool } from '../database/config.js';
-import { authenticateToken, checkPermission } from '../middleware/auth.js';
+import { authenticateToken, checkPermission, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import {
   uploadFile,
@@ -17,6 +18,7 @@ import { PDFDocument } from 'pdf-lib';
 import { generateConstanciaCierreCajaMenuda } from '../services/constanciaPdf.js';
 import { generateNumero } from './solicitudesPago.js';
 import { fecha } from '../utils/fechas.js';
+import { borrarArchivos, retirarSolicitud } from '../services/solicitudRetiro.js';
 
 const router = Router();
 
@@ -42,6 +44,39 @@ router.param('id', (_req, res, next, id: string) => {
     .catch(next);
 });
 
+// ─── Eliminar una caja ───────────────────────────────────────────────────────
+//
+// Una caja abierta por error se elimina entera —ella, sus gastos, su apertura,
+// sus aumentos y sus reembolsos sin pagar— pero solo mientras no ha salido
+// dinero por ella (Ivan, 2026-11-18). Una caja que ya recibió dinero se cierra
+// de la forma normal. «Eliminar» aquí es quitar: activo = false (migración 189).
+
+// Solicitudes de la caja: su apertura, sus aumentos y sus reembolsos (por los
+// gastos y por los archivos). Espera la caja como `cm`.
+const SOLICITUDES_DE_LA_CAJA = `(
+  SELECT cm.solicitud_apertura_id
+  UNION SELECT h.solicitud_pago_id FROM cajas_menudas_historial_monto h WHERE h.caja_menuda_id = cm.id
+  UNION SELECT g.solicitud_reembolso_id FROM cajas_menudas_gastos g WHERE g.caja_menuda_id = cm.id
+  UNION SELECT a.solicitud_reembolso_id FROM cajas_menudas_adjuntos a WHERE a.caja_menuda_id = cm.id
+)`;
+
+// Por qué la caja ya no se puede eliminar, o NULL si se puede. Lo leen las dos
+// listas (el menú lo muestra) y DELETE /:id, que es quien manda.
+const MOTIVO_NO_ELIMINAR = `(
+  SELECT CASE sp.tipo
+           WHEN 'apertura' THEN CASE WHEN sp.id = cm.solicitud_apertura_id
+                                     THEN 'La apertura ya fue transferida'
+                                     ELSE 'Un aumento ya fue transferido' END
+           ELSE 'Ya se pagó un reembolso'
+         END
+  FROM solicitudes_pago sp
+  WHERE sp.id IN ${SOLICITUDES_DE_LA_CAJA}
+    AND sp.activo = true
+    AND sp.estado IN ('transferida', 'reembolsada', 'pagada', 'facturada', 'devolucion')
+  ORDER BY (sp.id = cm.solicitud_apertura_id) IS TRUE DESC, (sp.tipo = 'apertura') DESC, sp.id
+  LIMIT 1
+)`;
+
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
 interface CajaMenudaRow {
@@ -63,6 +98,7 @@ interface CajaMenudaRow {
   solicitud_apertura_numero?: string | null;
   historial_pendiente_transferencia?: boolean;
   tiene_reembolso_pendiente?: boolean;
+  motivo_no_eliminar?: string | null;
 }
 
 interface GastoRow {
@@ -141,6 +177,7 @@ router.get(
               cm.solicitud_apertura_id,
               sa.estado AS solicitud_apertura_estado,
               sa.numero AS solicitud_apertura_numero,
+              ${MOTIVO_NO_ELIMINAR} AS motivo_no_eliminar,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
                 WHERE h.caja_menuda_id = cm.id
@@ -236,6 +273,7 @@ router.get(
               cm.solicitud_apertura_id,
               sa.estado AS solicitud_apertura_estado,
               sa.numero AS solicitud_apertura_numero,
+              ${MOTIVO_NO_ELIMINAR} AS motivo_no_eliminar,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
                 WHERE h.caja_menuda_id = cm.id
@@ -313,6 +351,7 @@ router.get(
               cm.solicitud_apertura_id,
               sa.estado AS solicitud_apertura_estado,
               sa.numero AS solicitud_apertura_numero,
+              ${MOTIVO_NO_ELIMINAR} AS motivo_no_eliminar,
               EXISTS (
                 SELECT 1 FROM cajas_menudas_historial_monto h
                 WHERE h.caja_menuda_id = cm.id
@@ -1909,6 +1948,159 @@ router.post(
       } finally {
         client.release();
       }
+    },
+  ),
+);
+
+// ─── Eliminar una caja (ver MOTIVO_NO_ELIMINAR arriba) ──────────────────────
+
+interface SolicitudDeLaCaja {
+  id: number;
+  numero: string;
+  tipo: string;
+  estado: string;
+  es_apertura: boolean;
+}
+
+// Lo que se va con la caja y si se puede: lo muestra la confirmación y lo
+// vuelve a leer DELETE /:id dentro de su transacción.
+async function leerEliminacion(client: PoolClient, id: number) {
+  const caja = await client.query<{ nombre: string; motivo: string | null; gastos: string }>(
+    `SELECT cm.nombre, ${MOTIVO_NO_ELIMINAR} AS motivo,
+            (SELECT COUNT(*) FROM cajas_menudas_gastos g WHERE g.caja_menuda_id = cm.id)::text AS gastos
+       FROM cajas_menudas cm
+      WHERE cm.id = $1`,
+    [id],
+  );
+  const solicitudes = await client.query<SolicitudDeLaCaja>(
+    `SELECT sp.id, sp.numero, sp.tipo, sp.estado,
+            (sp.id = cm.solicitud_apertura_id) IS TRUE AS es_apertura
+       FROM cajas_menudas cm
+       JOIN solicitudes_pago sp ON sp.id IN ${SOLICITUDES_DE_LA_CAJA}
+      WHERE cm.id = $1 AND sp.activo = true
+      ORDER BY es_apertura DESC, sp.id`,
+    [id],
+  );
+  const { nombre, motivo, gastos } = caja.rows[0];
+  return { nombre, motivo, gastos: Number(gastos), solicitudes: solicitudes.rows };
+}
+
+// GET /:id/eliminacion — qué se va con la caja, o por qué no se puede eliminar
+router.get(
+  '/:id/eliminacion',
+  requireAdmin,
+  [param('id').isInt()],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+        return;
+      }
+      const client = await pool.connect();
+      try {
+        res.json({ success: true, data: await leerEliminacion(client, Number(req.params.id)) });
+      } finally {
+        client.release();
+      }
+    },
+  ),
+);
+
+// DELETE /:id — eliminar (quitar) una caja abierta por error, con todo lo suyo
+router.delete(
+  '/:id',
+  requireAdmin,
+  [param('id').isInt()],
+  asyncHandler(
+    async (req: Request<{ id: string }>, res: Response): Promise<void> => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        res.status(400).json({ success: false, error: 'Datos inválidos', details: errors.array() });
+        return;
+      }
+
+      const id = Number(req.params.id);
+      const user = req.user!;
+      let archivos: string[] = [];
+      let eliminacion: Awaited<ReturnType<typeof leerEliminacion>>;
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // La caja y sus solicitudes quedan trabadas: nadie registra un pago
+        // ni un gasto a mitad de la eliminación.
+        const caja = await client.query(
+          'SELECT 1 FROM cajas_menudas WHERE id = $1 AND activo = true FOR UPDATE',
+          [id],
+        );
+        if (caja.rows.length === 0) {
+          await client.query('ROLLBACK');
+          res.status(404).json({ success: false, error: 'Caja menuda no encontrada' });
+          return;
+        }
+        await client.query(
+          `SELECT sp.id FROM cajas_menudas cm
+             JOIN solicitudes_pago sp ON sp.id IN ${SOLICITUDES_DE_LA_CAJA}
+            WHERE cm.id = $1
+            FOR UPDATE OF sp`,
+          [id],
+        );
+
+        eliminacion = await leerEliminacion(client, id);
+        if (eliminacion.motivo) {
+          await client.query('ROLLBACK');
+          res.status(409).json({
+            success: false,
+            error: `No se puede eliminar la caja: ${eliminacion.motivo.toLowerCase()}. Ciérrela de la forma normal.`,
+          });
+          return;
+        }
+
+        for (const s of eliminacion.solicitudes) {
+          archivos.push(...(await retirarSolicitud(client, s.id)));
+          await registrarAudit(
+            user.id,
+            'eliminar',
+            'solicitud_pago',
+            s.id,
+            { numero: s.numero, estado_al_eliminar: s.estado, por_eliminar_caja_menuda: id },
+            client,
+          );
+        }
+
+        await client.query(
+          'UPDATE cajas_menudas SET activo = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+          [id],
+        );
+        await registrarAudit(
+          user.id,
+          'eliminar',
+          'caja_menuda',
+          id,
+          {
+            nombre: eliminacion.nombre,
+            gastos: eliminacion.gastos,
+            solicitudes: eliminacion.solicitudes.map((s) => s.numero),
+          },
+          client,
+        );
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        archivos = [];
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      await borrarArchivos(archivos);
+      res.json({
+        success: true,
+        data: { id, solicitudes: eliminacion.solicitudes.map((s) => s.numero) },
+      });
     },
   ),
 );
