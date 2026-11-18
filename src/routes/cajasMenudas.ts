@@ -22,6 +22,26 @@ const router = Router();
 
 router.use(authenticateToken, checkPermission('caja_menuda'));
 
+// Una caja quitada (activo = false, migración 189) no existe para nadie: no se
+// abre ni recibe gastos, archivos, reembolsos o cambios. Toda ruta con :id pasa
+// por aquí, así que ninguna puede olvidarse de mirarlo. Un :id que no es número
+// sigue de largo para que su propia validación responda 400.
+router.param('id', (_req, res, next, id: string) => {
+  if (!/^\d+$/.test(id)) {
+    next();
+    return;
+  }
+  query('SELECT 1 FROM cajas_menudas WHERE id = $1 AND activo = true', [id])
+    .then((r) => {
+      if (r.rows.length === 0) {
+        res.status(404).json({ success: false, error: 'Caja menuda no encontrada' });
+        return;
+      }
+      next();
+    })
+    .catch(next);
+});
+
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
 interface CajaMenudaRow {
@@ -104,11 +124,11 @@ router.get(
     const user = req.user!;
     const isAdmin = user.rol === 'admin' || user.rol === 'co-admin';
 
-    let whereClause = '';
+    let whereClause = 'WHERE cm.activo = true';
     const params: unknown[] = [];
 
     if (!isAdmin) {
-      whereClause = `WHERE cm.proyecto_id IN (
+      whereClause += ` AND cm.proyecto_id IN (
         SELECT proyecto_id FROM user_project_access WHERE user_id = $1
       )`;
       params.push(user.id);
@@ -255,7 +275,7 @@ router.get(
        FROM cajas_menudas cm
        JOIN users u ON u.id = cm.responsable_id
        LEFT JOIN solicitudes_pago sa ON sa.id = cm.solicitud_apertura_id AND sa.activo = true
-       WHERE cm.proyecto_id = $1
+       WHERE cm.proyecto_id = $1 AND cm.activo = true
        ORDER BY cm.created_at DESC`,
         [proyectoId],
       );
