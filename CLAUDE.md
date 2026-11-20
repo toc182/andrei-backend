@@ -1,12 +1,12 @@
 # Andrei Backend
 
 Express + TypeScript API. Port 5000 (dev), 8080 (Railway).
-36 route files, PostgreSQL via pg pool, auto-migrations on server start.
+38 route files, PostgreSQL via pg pool, auto-migrations on server start.
 
 ## Structure
 
 src/
-├── routes/ # 36 route files — one per domain
+├── routes/ # 38 route files — one per domain
 ├── middleware/ # auth.ts (JWT + permissions), asyncHandler.ts
 ├── services/ # storage.ts, emailService.ts, pdfGenerator.ts, auditLog.ts, dailyNotification.ts, cronogramaEngine.ts, partidasProyecto.ts, constanciaPdf.ts, asistentePagos/
 │                # reporte diario: reportePdf.ts, reporteNumero.ts, reporteCambios.ts, reporteEnvio.ts,
@@ -147,6 +147,14 @@ then by `entidad_id`. Do not try to "fix" this with a FK.
   timestamp. Never toLocaleDateString: es-PA writes the month first. Same rule as the
   screens (andrei-frontend/src/lib/fechas.ts).
 - auditLog.ts — registrarAudit() — call on every create/edit/delete/approve/pay
+- perfiles.ts — permission profiles (migration 190, routes/perfiles.ts at
+  /api/permission-profiles). A profile is NOT another source of permissions: the system
+  always checks the person's keys in user_permissions; a profile only fills them
+  (LLAVES_DE_PERFIL — every key except acceso_global, proyectos_eliminar and
+  oportunidades_ver, which a profile never touches). Editing a profile rewrites the keys of
+  everyone who has it. users.permission_profile_id NULL = «Personalizado». Gerencia
+  (co-admin) and the owner (admin) never carry a profile. Ivan, 2026-11-18: how
+  permissions are shown and assigned must not change what anyone can do.
 - requisicionPdf.ts — the requisition's paper (consortium or Pinellas letterhead, same
   rule as the daily report). Who may see/edit/approve/attend a requisition depends on
   the row, so those rules live in routes/requisiciones.ts (puedeVer & co.), not in

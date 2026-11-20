@@ -1,8 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { query, pool } from '../database/config.js';
-import { authenticateToken, requireAdmin } from '../middleware/auth.js';
+import { authenticateToken, requireAdmin, VALID_PERMISSIONS } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { registrarAudit } from '../services/auditLog.js';
+import { coincideConPerfil, escribirLlavesDePerfil, llavesDelPerfil } from '../services/perfiles.js';
 import type { UserPermissions } from '../types/auth.js';
 
 const router = Router();
@@ -16,6 +17,8 @@ interface UserWithPermissions {
   email: string;
   rol: string;
   activo: boolean;
+  permission_profile_id: number | null;
+  proyectos: number[];
   acceso_global: boolean | null;
   proyectos_crear: boolean | null;
   proyectos_editar: boolean | null;
@@ -55,7 +58,11 @@ router.get(
   '/users',
   asyncHandler(async (_req: Request, res: Response): Promise<void> => {
     const result = await query<UserWithPermissions>(
-      `SELECT u.id, u.nombre, u.email, u.rol, u.activo,
+      `SELECT u.id, u.nombre, u.email, u.rol, u.activo, u.permission_profile_id,
+            -- Los proyectos de cada persona, para la lista de Personas sin una
+            -- llamada por persona.
+            COALESCE((SELECT array_agg(upa.proyecto_id ORDER BY upa.proyecto_id)
+                        FROM user_project_access upa WHERE upa.user_id = u.id), '{}') AS proyectos,
             up.acceso_global, up.proyectos_crear, up.proyectos_editar, up.proyectos_eliminar,
             up.clientes_agregar, up.clientes_editar, up.clientes_eliminar,
             up.solicitudes_editar_todas,
@@ -113,102 +120,113 @@ router.get(
   ),
 );
 
-// PUT /:userId — actualizar permisos (UPSERT)
+// PUT /:userId — actualizar permisos y perfil.
+//
+// Escribe SOLO las llaves que llegan (la regla de los PUT: lo que no vino no se
+// toca). La pantalla vieja manda todas y le sale igual que antes; la nueva no
+// manda las que no muestra, y quedan como estaban. Una llave que falta en una
+// fila nueva nace con el valor de la columna (false; equipos_ver, true), igual
+// que antes.
+//
+// permission_profile_id:
+//   un número  la persona toma ese perfil: sus llaves de perfil pasan a ser las
+//              del perfil, digan lo que digan las que llegaron.
+//   null       «Personalizado»: deja el perfil y se queda con sus llaves.
+//   no viene   se queda en su perfil mientras sus llaves sigan siendo las del
+//              perfil; si cambió alguna, pasa a «Personalizado».
 router.put(
   '/:userId',
   asyncHandler(
     async (req: Request<{ userId: string }>, res: Response): Promise<void> => {
-      const { userId } = req.params;
-      const permissions = req.body as Partial<UserPermissions>;
+      const userId = parseInt(req.params.userId, 10);
+      const cuerpo = (req.body ?? {}) as Record<string, unknown>;
+      const perfilPedido = cuerpo.permission_profile_id;
+      if (
+        !Number.isInteger(userId) ||
+        (perfilPedido !== undefined && perfilPedido !== null && !Number.isInteger(perfilPedido))
+      ) {
+        res.status(400).json({ success: false, message: 'Datos inválidos' });
+        return;
+      }
 
-      const result = await query(
-        `INSERT INTO user_permissions (user_id, acceso_global, proyectos_crear, proyectos_editar, proyectos_eliminar,
-       clientes_agregar, clientes_editar, clientes_eliminar,
-       solicitudes_editar_todas,
-       equipos_ver, equipos_agregar, equipos_editar, equipos_eliminar,
-       equipos_asignacion, equipos_uso, equipos_editar_asignacion,
-       documentos_acceso, oportunidades_ver, registrar_pago, caja_menuda, cuentas, cotizaciones, cronogramas_ver, desglose_ver, reportes, solicitudes_ver, requisiciones_ver, requisiciones_crear, requisiciones_atender, clientes_ver, costos_ver, ordenes_ver, ordenes_entregas, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, CURRENT_TIMESTAMP)
-     ON CONFLICT (user_id) DO UPDATE SET
-       acceso_global = EXCLUDED.acceso_global,
-       proyectos_crear = EXCLUDED.proyectos_crear,
-       proyectos_editar = EXCLUDED.proyectos_editar,
-       proyectos_eliminar = EXCLUDED.proyectos_eliminar,
-       clientes_agregar = EXCLUDED.clientes_agregar,
-       clientes_editar = EXCLUDED.clientes_editar,
-       clientes_eliminar = EXCLUDED.clientes_eliminar,
-       solicitudes_editar_todas = EXCLUDED.solicitudes_editar_todas,
-       equipos_ver = EXCLUDED.equipos_ver,
-       equipos_agregar = EXCLUDED.equipos_agregar,
-       equipos_editar = EXCLUDED.equipos_editar,
-       equipos_eliminar = EXCLUDED.equipos_eliminar,
-       equipos_asignacion = EXCLUDED.equipos_asignacion,
-       equipos_uso = EXCLUDED.equipos_uso,
-       equipos_editar_asignacion = EXCLUDED.equipos_editar_asignacion,
-       documentos_acceso = EXCLUDED.documentos_acceso,
-       oportunidades_ver = EXCLUDED.oportunidades_ver,
-       registrar_pago = EXCLUDED.registrar_pago,
-       caja_menuda = EXCLUDED.caja_menuda,
-       cuentas = EXCLUDED.cuentas,
-       cotizaciones = EXCLUDED.cotizaciones,
-       cronogramas_ver = EXCLUDED.cronogramas_ver,
-       desglose_ver = EXCLUDED.desglose_ver,
-       reportes = EXCLUDED.reportes,
-       solicitudes_ver = EXCLUDED.solicitudes_ver,
-       requisiciones_ver = EXCLUDED.requisiciones_ver,
-       requisiciones_crear = EXCLUDED.requisiciones_crear,
-       requisiciones_atender = EXCLUDED.requisiciones_atender,
-       clientes_ver = EXCLUDED.clientes_ver,
-       costos_ver = EXCLUDED.costos_ver,
-       ordenes_ver = EXCLUDED.ordenes_ver,
-       ordenes_entregas = EXCLUDED.ordenes_entregas,
-       updated_at = CURRENT_TIMESTAMP`,
-        [
-          userId,
-          permissions.acceso_global ?? false,
-          permissions.proyectos_crear ?? false,
-          permissions.proyectos_editar ?? false,
-          permissions.proyectos_eliminar ?? false,
-          permissions.clientes_agregar ?? false,
-          permissions.clientes_editar ?? false,
-          permissions.clientes_eliminar ?? false,
-          permissions.solicitudes_editar_todas ?? false,
-          permissions.equipos_ver ?? true,
-          permissions.equipos_agregar ?? false,
-          permissions.equipos_editar ?? false,
-          permissions.equipos_eliminar ?? false,
-          permissions.equipos_asignacion ?? false,
-          permissions.equipos_uso ?? false,
-          permissions.equipos_editar_asignacion ?? false,
-          permissions.documentos_acceso ?? false,
-          permissions.oportunidades_ver ?? false,
-          permissions.registrar_pago ?? false,
-          permissions.caja_menuda ?? false,
-          permissions.cuentas ?? false,
-          permissions.cotizaciones ?? false,
-          permissions.cronogramas_ver ?? false,
-          permissions.desglose_ver ?? false,
-          permissions.reportes ?? false,
-          permissions.solicitudes_ver ?? false,
-          permissions.requisiciones_ver ?? false,
-          permissions.requisiciones_crear ?? false,
-          permissions.requisiciones_atender ?? false,
-          permissions.clientes_ver ?? false,
-          permissions.costos_ver ?? false,
-          permissions.ordenes_ver ?? false,
-          permissions.ordenes_entregas ?? false,
-        ],
+      const persona = await query<{ rol: string; permission_profile_id: number | null }>(
+        'SELECT rol, permission_profile_id FROM users WHERE id = $1',
+        [userId],
       );
+      if (persona.rows.length === 0) {
+        res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+        return;
+      }
+      if (typeof perfilPedido === 'number' && persona.rows[0].rol !== 'usuario') {
+        res.status(400).json({
+          success: false,
+          message: 'Gerencia y el dueño no llevan perfil: ya pueden todo',
+        });
+        return;
+      }
 
-      await registrarAudit(req.user!.id, 'editar_permisos', 'user', parseInt(userId, 10), {
-        ...permissions,
-      });
+      // Los nombres de columna salen de la lista blanca, nunca del cuerpo.
+      const llaves = VALID_PERMISSIONS.filter((k) => typeof cuerpo[k] === 'boolean');
+      const perfilAntes = persona.rows[0].permission_profile_id;
 
-      res.json({
-        success: true,
-        message: 'Permisos actualizados',
-        rowCount: result.rowCount,
-      });
+      const db = await pool.connect();
+      try {
+        await db.query('BEGIN');
+        if (llaves.length > 0) {
+          await db.query(
+            `INSERT INTO user_permissions (user_id, ${llaves.join(', ')}, updated_at)
+             VALUES ($1, ${llaves.map((_, i) => `$${i + 2}`).join(', ')}, CURRENT_TIMESTAMP)
+             ON CONFLICT (user_id) DO UPDATE SET
+               ${llaves.map((k) => `${k} = EXCLUDED.${k}`).join(', ')},
+               updated_at = CURRENT_TIMESTAMP`,
+            [userId, ...llaves.map((k) => cuerpo[k] as boolean)],
+          );
+        }
+
+        let perfilDespues = perfilAntes;
+        let cambiosDelPerfil: Awaited<ReturnType<typeof escribirLlavesDePerfil>> = [];
+        if (typeof perfilPedido === 'number') {
+          const delPerfil = await llavesDelPerfil(db, perfilPedido);
+          if (!delPerfil) {
+            await db.query('ROLLBACK');
+            res.status(400).json({ success: false, message: 'Ese perfil no existe' });
+            return;
+          }
+          cambiosDelPerfil = await escribirLlavesDePerfil(db, userId, delPerfil);
+          perfilDespues = perfilPedido;
+        } else if (perfilPedido === null) {
+          perfilDespues = null;
+        } else if (perfilAntes !== null) {
+          const delPerfil = await llavesDelPerfil(db, perfilAntes);
+          if (!delPerfil || !(await coincideConPerfil(db, userId, delPerfil))) perfilDespues = null;
+        }
+        if (perfilDespues !== perfilAntes) {
+          await db.query('UPDATE users SET permission_profile_id = $1 WHERE id = $2', [
+            perfilDespues,
+            userId,
+          ]);
+        }
+
+        await registrarAudit(req.user!.id, 'editar_permisos', 'user', userId, {
+          ...Object.fromEntries(llaves.map((k) => [k, cuerpo[k]])),
+          ...(perfilDespues !== perfilAntes
+            ? { perfil_antes: perfilAntes, perfil_despues: perfilDespues }
+            : {}),
+          // Lo que el perfil le cambió de verdad, llave por llave.
+          ...(cambiosDelPerfil.length > 0 ? { cambios_del_perfil: cambiosDelPerfil } : {}),
+        }, db);
+        await db.query('COMMIT');
+        res.json({
+          success: true,
+          message: 'Permisos actualizados',
+          permission_profile_id: perfilDespues,
+        });
+      } catch (err) {
+        await db.query('ROLLBACK');
+        throw err;
+      } finally {
+        db.release();
+      }
     },
   ),
 );

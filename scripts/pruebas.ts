@@ -43,6 +43,7 @@ const PRUEBAS: Record<string, string> = {
   'pagos-parciales': 'pagos-parciales-humo.ts',
   'pagos-parciales-gasto': 'pagos-parciales-gasto-humo.ts',
   'pagos-correccion': 'pagos-correccion-humo.ts',
+  perfiles: 'perfiles-humo.ts',
   'reporte-baja': 'reporte-baja-humo.ts',
   'reporte-borrador': 'reporte-borrador-humo.ts',
   'reporte-cola': 'reporte-cola-humo.ts',

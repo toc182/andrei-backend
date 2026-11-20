@@ -20,7 +20,8 @@ interface UserRow {
 // (a) checkPermission() y (b) las columnas que se leen desde user_permissions.
 // Cada string DEBE coincidir exactamente con el nombre de columna en la tabla.
 // Agregar un permiso nuevo aquí lo expone automáticamente en login y verify.
-const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
+// routes/permissions.ts la usa para no escribir una columna que no sea de aquí.
+export const VALID_PERMISSIONS: (keyof UserPermissions)[] = [
   'acceso_global',
   'proyectos_crear',
   'proyectos_editar',

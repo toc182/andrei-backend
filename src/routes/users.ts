@@ -395,6 +395,8 @@ router.put(
       if (rol !== undefined) {
         fields.push(`rol = $${paramIndex++}`);
         values.push(rol);
+        // Gerencia (co-admin) y el dueño pasan todo: no llevan perfil.
+        if (cambiaRol && rol !== 'usuario') fields.push('permission_profile_id = NULL');
       }
       if (whatsapp !== undefined) {
         fields.push(`whatsapp = $${paramIndex++}`);
