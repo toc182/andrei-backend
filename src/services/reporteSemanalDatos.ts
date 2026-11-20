@@ -298,26 +298,20 @@ export async function datosDeLaSemana(
 
   // ---- pagos ----
   //
-  // Las mismas solicitudes que cuenta la pantalla de Costos: pagadas o
-  // facturadas, con la fecha de pago resuelta desde sus comprobantes. Es a
-  // propósito «lo registrado en el sistema» y no «lo gastado»: hay pagos que
-  // todavía no entran por aquí, y el papel lo dice con esas palabras.
+  // Los mismos pagos que cuenta la pantalla de Costos (vista
+  // comprobante_pago_gasto, migración 191): cada pago en su fecha y por su
+  // monto, así que una solicitud abonada en dos semanas sale en las dos con lo
+  // que se pagó en cada una. Es a propósito «lo registrado en el sistema» y no
+  // «lo gastado»: hay pagos que todavía no entran por aquí, y el papel lo dice
+  // con esas palabras.
   const pagosRows = await query<{ categoria: string | null; solicitudes: string; monto: string }>(
-    `WITH pagadas AS (
-       SELECT s.id, s.monto_total, s.categoria_id,
-              COALESCE(MAX(c.fecha_pago), s.fecha) AS fecha_pago
-         FROM solicitudes_pago s
-         LEFT JOIN comprobantes_pago c ON c.solicitud_pago_id = s.id
-        WHERE s.proyecto_id = $1 AND s.activo = TRUE
-          AND s.estado IN ('pagada', 'facturada')
-        GROUP BY s.id
-     )
-     SELECT cg.nombre AS categoria,
-            COUNT(*)::text AS solicitudes,
-            SUM(pg.monto_total)::text AS monto
-       FROM pagadas pg
-       LEFT JOIN categorias_gastos cg ON cg.id = pg.categoria_id
-      WHERE pg.fecha_pago BETWEEN $2 AND $3
+    `SELECT cg.nombre AS categoria,
+            COUNT(DISTINCT p.solicitud_pago_id)::text AS solicitudes,
+            SUM(p.monto)::text AS monto
+       FROM comprobante_pago_gasto p
+       LEFT JOIN categorias_gastos cg ON cg.id = p.categoria_id
+      WHERE p.proyecto_id = $1
+        AND p.fecha_pago BETWEEN $2 AND $3
       GROUP BY cg.nombre, cg.orden
       ORDER BY cg.orden NULLS LAST, cg.nombre NULLS LAST`,
     [proyectoId, lunes, domingo],

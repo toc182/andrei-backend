@@ -43,7 +43,7 @@ export const COLUMNAS_PROHIBIDAS = [
 export interface PagoContexto {
   id: number;
   numero: string | null;
-  /** La del comprobante de pago; si no hay comprobante, la de la solicitud. */
+  /** La de su último pago. */
   fecha: string;
   proveedor: string | null;
   monto: number;
@@ -93,8 +93,11 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
       `SELECT codigo, nombre FROM categorias_gastos
         WHERE activo = TRUE ORDER BY orden NULLS LAST, nombre`,
     ),
-    // Los mismos pagos que suman "Gastado hasta hoy": pagada o facturada, y
-    // activos. Columnas escritas a mano, sin datos bancarios.
+    // Los mismos pagos que suman "Gastado hasta hoy" (vista
+    // solicitud_pago_gasto, migracion 191): abonadas, pagadas y facturadas.
+    // El monto es el TOTAL de la solicitud: el reparto en partidas se hace
+    // sobre la solicitud entera, tambien en una abonada. Columnas escritas a
+    // mano, sin datos bancarios.
     query<{
       id: number; numero: string | null; fecha: string; proveedor: string | null;
       monto: string; concepto: string | null;
@@ -104,21 +107,17 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
       // parrafo entero se lleve el sitio de los demas pagos.
       `SELECT s.id,
               s.numero,
-              to_char(COALESCE(MAX(c.fecha_pago), s.fecha), 'YYYY-MM-DD') AS fecha,
+              to_char(g.ultima_fecha_pago, 'YYYY-MM-DD') AS fecha,
               s.proveedor,
-              s.monto_total::text AS monto,
+              g.monto_total::text AS monto,
               LEFT(s.observaciones, 300) AS concepto,
               cat.codigo AS categoria_codigo,
               cat.nombre AS categoria_nombre
-         FROM solicitudes_pago s
-         LEFT JOIN comprobantes_pago c ON c.solicitud_pago_id = s.id
+         FROM solicitud_pago_gasto g
+         JOIN solicitudes_pago s ON s.id = g.solicitud_pago_id
          LEFT JOIN categorias_gastos cat ON cat.id = s.categoria_id
-        WHERE s.proyecto_id = $1
-          AND s.activo = TRUE
-          AND s.estado IN ('pagada', 'facturada')
-        GROUP BY s.id, s.numero, s.fecha, s.proveedor, s.monto_total,
-                 s.observaciones, cat.codigo, cat.nombre
-        ORDER BY COALESCE(MAX(c.fecha_pago), s.fecha) DESC, s.id DESC`,
+        WHERE g.proyecto_id = $1
+        ORDER BY g.ultima_fecha_pago DESC, s.id DESC`,
       [proyectoId],
     ),
     query<{
@@ -131,13 +130,12 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
       `SELECT sp.solicitud_pago_id, sp.row_uid, sp.monto::text AS monto,
               r.codigo AS item, r.descripcion
          FROM solicitud_pago_partidas sp
-         JOIN solicitudes_pago s ON s.id = sp.solicitud_pago_id
+         JOIN solicitud_pago_gasto g ON g.solicitud_pago_id = sp.solicitud_pago_id
          LEFT JOIN presupuestos p
                 ON p.id = sp.presupuesto_id AND p.activo AND p.es_principal
          LEFT JOIN presupuesto_renglones r
                 ON r.presupuesto_id = p.id AND r.row_uid = sp.row_uid
-        WHERE s.proyecto_id = $1 AND s.activo = TRUE
-          AND s.estado IN ('pagada', 'facturada')
+        WHERE g.proyecto_id = $1
         ORDER BY sp.id`,
       [proyectoId],
     ),
@@ -161,10 +159,8 @@ export async function cargarContexto(proyectoId: number): Promise<ContextoProyec
               ) AS descripcion,
               i.precio_total::text AS precio
          FROM solicitud_pago_items i
-         JOIN solicitudes_pago s ON s.id = i.solicitud_pago_id
-        WHERE s.proyecto_id = $1
-          AND s.activo = TRUE
-          AND s.estado IN ('pagada', 'facturada')
+         JOIN solicitud_pago_gasto g ON g.solicitud_pago_id = i.solicitud_pago_id
+        WHERE g.proyecto_id = $1
         ORDER BY i.solicitud_pago_id, i.orden NULLS LAST, i.id`,
       [proyectoId],
     ),

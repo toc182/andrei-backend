@@ -396,8 +396,18 @@ const main = async () => {
   });
   c(pidiendoDosVeces.estado === 400, 'no se puede pedir dos veces la misma plata');
 
-  // El pago se marca pagado como lo haria la pantalla de solicitudes.
-  await query("UPDATE solicitudes_pago SET estado = 'pagada' WHERE id = $1", [solicitudId]);
+  // El pago se marca pagado como lo haria la pantalla de solicitudes: un pago
+  // por el total (comprobantes_pago, migracion 191) y la solicitud pagada. Lo
+  // pagado sale de los pagos; sin el pago, el estado solo no cuenta.
+  const marcarPagada = async (id: number) => {
+    await query(
+      `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por, monto)
+       SELECT id, CURRENT_DATE, preparado_por, monto_total FROM solicitudes_pago WHERE id = $1`,
+      [id],
+    );
+    await query("UPDATE solicitudes_pago SET estado = 'pagada' WHERE id = $1", [id]);
+  };
+  await marcarPagada(solicitudId);
   orden = await ver();
   c(Number(orden.pagado) === 300, `pagado 300.00 (dio ${orden.pagado})`);
   c(Number(orden.por_pagar) === 2050.25, `por pagar 2050.25 (dio ${orden.por_pagar})`);
@@ -544,7 +554,7 @@ const main = async () => {
   const pagoD = await pedir('POST', `/ordenes-compra/${idD}/activar-pago`, {
     entregas: [{ entrega_id: facturaD.cuerpo.data.id, monto: 2140 }],
   });
-  await query("UPDATE solicitudes_pago SET estado = 'pagada' WHERE id = $1", [pagoD.cuerpo.data.id]);
+  await marcarPagada(pagoD.cuerpo.data.id);
   const pagadaD = await verD();
   c(
     pagadaD.estado_calculado === 'cerrada' && pagadaD.estado === 'enviada',

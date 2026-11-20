@@ -196,7 +196,7 @@ export function armarHtmlSemanal(d: ReporteSemanalPdfInput, fotos: FotoIncrustad
 
   // ---- pagos ----
   const bloquePagos = datos.pagos.filas.length
-    ? `<p class="sub">Solo las solicitudes marcadas como pagadas en el sistema. No incluye pagos
+    ? `<p class="sub">Solo los pagos registrados en el sistema. No incluye pagos
          hechos por fuera.</p>
        <table class="t">
          <thead><tr><th>Categoría</th><th class="n w">Solicitudes</th><th class="n w">Monto</th></tr></thead>

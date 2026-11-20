@@ -49,11 +49,11 @@ const fuente = readFileSync(join(aqui, '..', 'src', 'services', 'asistentePagos'
 // ---- B. sobre el resultado ----
 {
   const p = await query<{ id: number; n: string }>(
-    `SELECT s.proyecto_id AS id, COUNT(*)::text AS n
-       FROM solicitudes_pago s
-      WHERE s.activo = TRUE AND s.estado IN ('pagada','facturada')
-        AND s.proyecto_id IS NOT NULL
-      GROUP BY s.proyecto_id ORDER BY COUNT(*) DESC LIMIT 1`,
+    // Los mismos pagos que ve el asistente (vista solicitud_pago_gasto, migracion 191).
+    `SELECT g.proyecto_id AS id, COUNT(*)::text AS n
+       FROM solicitud_pago_gasto g
+      WHERE g.proyecto_id IS NOT NULL
+      GROUP BY g.proyecto_id ORDER BY COUNT(*) DESC LIMIT 1`,
   );
   if (!p.rows.length) {
     console.log('FAIL  no hay ningun proyecto con pagos para revisar el resultado');

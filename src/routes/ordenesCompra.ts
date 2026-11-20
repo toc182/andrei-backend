@@ -118,8 +118,10 @@ async function tieneFacturas(ordenId: string | number): Promise<boolean> {
  *
  *   facturas  — cuantas facturas tiene.
  *   recibido  — la suma de las facturas. Es el costo y es la deuda.
- *   pagado    — lo que ya salio del banco. Misma regla que control de costos:
- *               cuentan 'pagada' y 'facturada'; una devolucion no.
+ *   pagado    — lo que ya salio del banco. Misma regla que control de costos
+ *               (vista solicitud_pago_gasto, migracion 191): cuentan abonada,
+ *               pagada y facturada; una devolucion no. De una abonada cuenta su
+ *               parte de la factura en proporcion a lo pagado (parte_pagada).
  *   reclamado — lo que ya tiene una solicitud encima, aunque todavia no se haya
  *               pagado. Es el tope para activar otra: sin esto se podria pedir
  *               dos veces la misma plata.
@@ -133,12 +135,11 @@ const MONTOS = `
       (SELECT COALESCE(SUM(e.monto_total), 0)
          FROM orden_compra_entregas e
         WHERE e.orden_compra_id = o.id AND e.activo = true) AS recibido,
-      (SELECT COALESCE(SUM(spe.monto), 0)
+      (SELECT COALESCE(SUM(parte_pagada(spe.monto, g.pagado, g.monto_total)), 0)
          FROM solicitud_pago_entregas spe
          JOIN orden_compra_entregas e ON e.id = spe.entrega_id AND e.activo = true
-         JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
-        WHERE e.orden_compra_id = o.id AND sp.activo = true
-          AND sp.estado IN ('pagada', 'facturada')) AS pagado,
+         JOIN solicitud_pago_gasto g ON g.solicitud_pago_id = spe.solicitud_pago_id
+        WHERE e.orden_compra_id = o.id) AS pagado,
       (SELECT COALESCE(SUM(spe.monto), 0)
          FROM solicitud_pago_entregas spe
          JOIN orden_compra_entregas e ON e.id = spe.entrega_id AND e.activo = true
@@ -180,11 +181,10 @@ const VENCE = `
     FROM orden_compra_entregas e
     WHERE e.orden_compra_id = o.id AND e.activo = true
       AND e.monto_total > COALESCE((
-        SELECT SUM(spe.monto)
+        SELECT SUM(parte_pagada(spe.monto, g.pagado, g.monto_total))
           FROM solicitud_pago_entregas spe
-          JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
-         WHERE spe.entrega_id = e.id AND sp.activo = true
-           AND sp.estado IN ('pagada', 'facturada')
+          JOIN solicitud_pago_gasto g ON g.solicitud_pago_id = spe.solicitud_pago_id
+         WHERE spe.entrega_id = e.id
       ), 0)
   ) v ON true`;
 
@@ -494,11 +494,10 @@ router.get(
         query(
           `SELECT e.*, u.nombre AS registrada_por_nombre,
                   COALESCE((
-                    SELECT SUM(spe.monto)
+                    SELECT SUM(parte_pagada(spe.monto, g.pagado, g.monto_total))
                       FROM solicitud_pago_entregas spe
-                      JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
-                     WHERE spe.entrega_id = e.id AND sp.activo = true
-                       AND sp.estado IN ('pagada', 'facturada')
+                      JOIN solicitud_pago_gasto g ON g.solicitud_pago_id = spe.solicitud_pago_id
+                     WHERE spe.entrega_id = e.id
                   ), 0) AS pagado,
                   COALESCE((
                     SELECT SUM(spe.monto)

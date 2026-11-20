@@ -19,12 +19,15 @@
 //   filtro dicho arriba, sin datos bancarios; por WhatsApp como archivo, y por
 //   correo SOLO a la direccion que la persona tiene en el sistema;
 // - y por WhatsApp de verdad: el modelo recibe la lista de proyectos que la
-//   persona puede ver, llama a la herramienta y su respuesta sale.
+//   persona puede ver, llama a la herramienta y su respuesta sale;
+// - una abonada (pagada en parte, pagos parciales): sale en «lo que falta pagar»
+//   por su saldo y en «lo pagado» por lo pagado, sin contar un pago anulado; su
+//   detalle trae cada pago, y la tabla las columnas Pagado y Saldo.
 import { API } from './pruebas/contexto.js';
 import { SECRETOS_PRUEBA } from './pruebas/entorno.js';
 import crypto from 'crypto';
 import { query, pool } from '../src/database/config.js';
-import { buscarSolicitudes, verSolicitud } from '../src/services/whatsapp/solicitudes.js';
+import { ESTADOS, buscarSolicitudes, verSolicitud } from '../src/services/whatsapp/solicitudes.js';
 import { ejecutarHerramienta, type Usuario } from '../src/services/whatsapp/herramientas.js';
 import { conversacionViva } from '../src/services/whatsapp/conversacion.js';
 import { armarTabla, tablaEnExcel, tablaEnPdf } from '../src/services/whatsapp/tablaSolicitudes.js';
@@ -43,11 +46,14 @@ const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Lo que devuelven las funciones, en la forma en que se lee aqui.
 interface Busqueda {
-  total: { cantidad: number; monto: string };
+  total: { cantidad: number; monto: string; pagado?: string; falta_por_pagar?: string };
   pendientes_por_quien_firma_ahora?: { le_toca_a: string; cantidad: number }[];
   por_estado: { estado: string; cantidad: number; monto: string }[];
   por_proyecto?: { proyecto: string; cantidad: number }[];
-  solicitudes: { numero: string; monto: string; le_toca_aprobar_a?: string }[];
+  solicitudes: {
+    numero: string; monto: string; estado: string; le_toca_aprobar_a?: string;
+    pagado?: string; falta_por_pagar?: string;
+  }[];
 }
 const buscar = async (u: Usuario, f: object) => {
   const r = await buscarSolicitudes(u, f);
@@ -87,8 +93,8 @@ const main = async () => {
   );
 
   let n = 0;
-  const crear = async (proyecto: number, estado: string, monto: number, proveedor: string) =>
-    (
+  const crear = async (proyecto: number, estado: string, monto: number, proveedor: string) => {
+    const fila = (
       await query<{ id: number; numero: string }>(
         `INSERT INTO solicitudes_pago
            (proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por, estado,
@@ -100,6 +106,16 @@ const main = async () => {
           estado, monto, crypto.randomBytes(5).toString('hex').toUpperCase()],
       )
     ).rows[0];
+    // Una pagada tiene su pago registrado, como en el sistema de verdad.
+    if (estado === 'pagada') {
+      await query(
+        `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por, monto)
+         VALUES ($1, '2026-09-25', $2, $3)`,
+        [fila.id, admin.id, monto],
+      );
+    }
+    return fila;
+  };
 
   // Proyecto 1: tres pendientes, dos aprobadas sin pagar, una pagada.
   // Proyecto 2: una pendiente grande que el ingeniero no puede ver.
@@ -226,12 +242,18 @@ const main = async () => {
   // ── todas, y en el orden pedido ─────────────────────────────────────────
   // Treinta pagadas más: con el tope de antes (25) no se habrían visto todas.
   for (let i = 1; i <= 30; i += 1) {
-    await query(
+    const vieja = await query<{ id: number }>(
       `INSERT INTO solicitudes_pago
          (proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por, estado,
           monto_total, subtotal, codigo_verificacion)
-       VALUES (1, $1, '2026-08-01', 'Proveedor viejo', $2, $2, 'pagada', $3, $3, $4)`,
+       VALUES (1, $1, '2026-08-01', 'Proveedor viejo', $2, $2, 'pagada', $3, $3, $4)
+       RETURNING id`,
       [`PRU1-${100 + i}`, admin.id, i * 10, crypto.randomBytes(5).toString('hex').toUpperCase()],
+    );
+    await query(
+      `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por, monto)
+       VALUES ($1, '2026-08-05', $2, $3)`,
+      [vieja.rows[0].id, admin.id, i * 10],
     );
   }
   const todas = await buscar(ingeniero, {});
@@ -393,6 +415,61 @@ const main = async () => {
     { listas: null },
   );
   exigir(!tablaAjena.ok, 'una tabla de una obra que no es suya no se arma');
+
+  // ── abonada: pagada en parte (pagos parciales) ──────────────────────────
+  // Va al final: hasta aquí las cuentas de arriba no la llevan. Tiene un pago
+  // de 1,293.75 que cuenta y uno de 500 anulado, que no cuenta en nada.
+  const abonada = await crear(1, 'abonada', 2587.5, 'John Harold Carruido');
+  await query(
+    `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por, monto)
+     VALUES ($1, '2026-11-18', $2, 1293.75)`,
+    [abonada.id, admin.id],
+  );
+  await query(
+    `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por, monto,
+                                    activo, anulado_por, anulado_at, motivo_anulacion)
+     VALUES ($1, '2026-11-19', $2, 500, false, $2, now(), 'El banco la rechazó')`,
+    [abonada.id, admin.id],
+  );
+
+  const faltaPagar = await buscar(ingeniero, { estados: ['aprobada'] });
+  const enFalta = faltaPagar.ok ? faltaPagar.c.solicitudes.find((s) => s.numero === abonada.numero) : undefined;
+  exigir(
+    faltaPagar.ok && enFalta?.estado === ESTADOS.abonada && enFalta.pagado === 'B/. 1,293.75' &&
+      enFalta.falta_por_pagar === 'B/. 1,293.75' && faltaPagar.c.total.falta_por_pagar === 'B/. 4,293.75',
+    '«lo que falta pagar» trae también la abonada, por su saldo: 1,000 + 2,000 + 1,293.75',
+    faltaPagar.ok ? { total: faltaPagar.c.total, abonada: enFalta } : faltaPagar,
+  );
+  const yaPagado = await buscar(ingeniero, { estados: ['pagada'] });
+  exigir(
+    yaPagado.ok && yaPagado.c.solicitudes.some((s) => s.numero === abonada.numero) &&
+      yaPagado.c.total.pagado === 'B/. 10,943.75',
+    '«lo pagado» trae la abonada y cuenta solo lo pagado: 5,000 + 4,650 + 1,293.75 (el anulado no)',
+    yaPagado.ok ? yaPagado.c.total : yaPagado,
+  );
+  const detalleAbonada = await verSolicitud(ingeniero, abonada.numero);
+  const da = detalleAbonada.ok
+    ? (detalleAbonada.contenido as { estado: string; pagos?: { fecha: string; monto: string }[]; pagado?: string; falta_por_pagar?: string })
+    : null;
+  exigir(
+    da?.estado === ESTADOS.abonada && da.pagos?.length === 1 && da.pagos[0].monto === 'B/. 1,293.75' &&
+      da.pagado === 'B/. 1,293.75' && da.falta_por_pagar === 'B/. 1,293.75',
+    'el detalle de la abonada trae su pago, lo pagado y lo que falta, sin el anulado',
+    da,
+  );
+  const tablaAbonada = await armarTabla(ingeniero, {
+    filtros: { estados: ['aprobada'] },
+    columnas: ['numero', 'estado', 'pagado', 'saldo'],
+  });
+  const filaAbonada = tablaAbonada.ok
+    ? tablaAbonada.tabla.grupos.flatMap((g) => g.filas).find((f) => f.celdas[0] === abonada.numero)
+    : undefined;
+  exigir(
+    JSON.stringify(filaAbonada?.celdas) ===
+      JSON.stringify([abonada.numero, ESTADOS.abonada, 'B/. 1,293.75', 'B/. 1,293.75']),
+    'la tabla lleva Pagado y Saldo de la abonada',
+    filaAbonada,
+  );
 
   await pool.end();
   console.log(fallos === 0 ? '\nTodo bien' : `\n${fallos} fallo(s)`);

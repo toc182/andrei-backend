@@ -132,9 +132,9 @@ async function main(): Promise<void> {
       );
       if (['pagada', 'facturada'].includes(estado)) {
         await base.query(
-          `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por)
-           VALUES ($1, $2::date + 3, $3)`,
-          [s.rows[0].id, fecha, admin],
+          `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por, monto)
+           VALUES ($1, $2::date + 3, $3, $4)`,
+          [s.rows[0].id, fecha, admin, monto],
         );
       }
       if (estado === 'rechazada') {

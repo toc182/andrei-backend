@@ -100,6 +100,17 @@ res.json({ success: true, data: result.rows });
   period and accumulated, full precision from the cuadro when the cuenta has a desglose) and
   `proyecto_avance_fisico` (migration 186). Borrador cuentas count; their part is reported
   apart. Never sum `cuentas.avance_porcentaje` (a 2-decimal mirror) for a project total.
+- Payment requests can be paid in parts (migration 191, tema 19): `comprobantes_pago` is ONE
+  ROW PER PAYMENT with its `monto`; a regular request with a balance is `abonada`. What a
+  request has paid and its balance come ONLY from the view `solicitud_pago_saldo`; what
+  counts as SPENT for a project (Control de Costos, purchase orders, weekly report, payments
+  assistant) ONLY from `solicitud_pago_gasto` (per request) and `comprobante_pago_gasto`
+  (each payment on its date). A share given to a budget line or an order invoice counts in
+  proportion via `parte_pagada()`. The state payments leave a request in comes ONLY from
+  `estadoSegunPagos()` (services/pagosSolicitud.ts). A payment is never deleted: an admin
+  fixes or cancels it (`activo = false`, with the reason) through «Corregir solicitud»
+  (services/pagosCorreccion.ts). Pinellas' reimbursement and the supplier's refund only
+  once paid in full.
 - `pg` returns a DATE column as a JS `Date` object, never a string. Don't `slice()` a
   `fecha` — you get `"Tue Sep 08"` and then `Invalid Date`. Format it explicitly.
 - Never seed accented text through `curl` from the Windows console — it mangles the

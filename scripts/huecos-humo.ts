@@ -444,7 +444,22 @@ const main = async () => {
     const delAdmin = await adjunto(pendiente, admin, 'adjunto');
     const delAprobador = await adjunto(pendiente, aprobador, 'adjunto');
     const viejo = await adjunto(pendiente, admin, null);
-    const comprobante = await adjunto(pagada, admin, 'comprobante');
+    // Un comprobante es el archivo de un pago (migración 191): primero el pago, después su archivo.
+    const pagoId = (
+      await query<{ id: number }>(
+        `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por, monto)
+         SELECT id, CURRENT_DATE, $2, monto_total FROM solicitudes_pago WHERE id = $1 RETURNING id`,
+        [pagada, admin.id],
+      )
+    ).rows[0].id;
+    const comprobante = (
+      await query<{ id: number }>(
+        `INSERT INTO solicitud_pago_adjuntos
+           (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto, comprobante_pago_id)
+         VALUES ($1, 'comprobante.pdf', $2, 'application/pdf', 10, $3, 'comprobante', $4) RETURNING id`,
+        [pagada, `PRUEBAS2/no-existe-${randomUUID()}.pdf`, admin.id, pagoId],
+      )
+    ).rows[0].id;
 
     const cesarBorra = await pedir('DELETE', `/solicitudes-pago/adjuntos/${delAdmin}`, cesar);
     c(cesarBorra.estado === 404, `César no borra un adjunto (dio ${cesarBorra.estado})`);

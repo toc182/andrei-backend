@@ -202,8 +202,10 @@ const FILTROS_SOLICITUDES: Record<string, unknown> = {
     type: 'array',
     items: { type: 'string', enum: Object.keys(ESTADOS) },
     description:
-      'pagada trae TODO lo ya pagado (tambien facturadas y cajas menudas pagadas). ' +
-      'pendiente = esperando aprobacion; aprobada = aprobada, falta pagarla',
+      'pagada trae TODO lo que ya tiene pagos (tambien abonadas, facturadas y cajas menudas ' +
+      'pagadas); cuanto se pago de verdad es total.pagado, no total.monto. ' +
+      'aprobada trae lo que falta pagar (tambien las abonadas, por su saldo); cuanto falta es ' +
+      'total.falta_por_pagar. abonada = pagada en parte. pendiente = esperando aprobacion',
   },
   proveedor: { type: 'string', description: 'Parte del nombre del proveedor' },
   texto: {
@@ -477,7 +479,8 @@ export const HERRAMIENTAS: Anthropic.Tool[] = [
           items: { type: 'string', enum: Object.keys(COLUMNAS) },
           description:
             'Las que pidio; si no dijo, se ponen numero, obra, fecha, proveedor y estado. ' +
-            'El monto va siempre.',
+            'El monto (el total de cada una) va siempre; pagado y saldo, si pregunta cuanto ' +
+            'se ha pagado o cuanto falta.',
         },
         agrupar_por: {
           type: 'string',

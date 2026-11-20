@@ -234,10 +234,12 @@ router.post(
       // FOR UPDATE: dos personas aplicando a la vez se ponen en fila en vez de
       // pisarse. Y el WHERE deja fuera lo que no es de este proyecto o no esta
       // pagado, asi que un id colado no llega a la escritura.
+      // Pagado = cuenta como gasto (vista solicitud_pago_gasto, migracion 191):
+      // tambien una abonada, que se reparte sobre su total.
       const pagos = await client.query<{ id: number; monto_total: string; numero: string | null }>(
-        `SELECT id, monto_total, numero FROM solicitudes_pago
-          WHERE id = ANY($1::int[]) AND proyecto_id = $2 AND activo = TRUE
-            AND estado IN ('pagada', 'facturada')
+        `SELECT s.id, s.monto_total, s.numero FROM solicitudes_pago s
+          WHERE s.id = ANY($1::int[]) AND s.proyecto_id = $2
+            AND EXISTS (SELECT 1 FROM solicitud_pago_gasto g WHERE g.solicitud_pago_id = s.id)
           FOR UPDATE`,
         [ids, proyectoId],
       );

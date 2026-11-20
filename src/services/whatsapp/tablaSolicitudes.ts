@@ -35,9 +35,13 @@ export const COLUMNAS = {
   fecha_pago: {
     titulo: 'Fecha de pago',
     sql: `(SELECT to_char(MAX(c.fecha_pago), 'YYYY-MM-DD') FROM comprobantes_pago c
-            WHERE c.solicitud_pago_id = sp.id)`,
+            WHERE c.solicitud_pago_id = sp.id AND c.activo)`,
     ancho: 12,
   },
+  // Lo pagado y el saldo de cada una (pagos parciales, migración 191): la vista
+  // solicitud_pago_saldo, la misma cuenta de todo el sistema.
+  pagado: { titulo: 'Pagado', sql: 'sv.pagado::text', ancho: 14 },
+  saldo: { titulo: 'Saldo', sql: 'sv.saldo::text', ancho: 14 },
   categoria: {
     titulo: 'Categoría',
     sql: '(SELECT cg.nombre FROM categorias_gastos cg WHERE cg.id = sp.categoria_id)',
@@ -144,6 +148,7 @@ export async function armarTabla(
       // La base las da como AAAA-MM-DD y aquí se escriben «07/oct/2026», como en
       // todo el sistema: el to_char de Postgres pondría los meses en inglés.
       if (c === 'fecha' || c === 'fecha_pago') return fecha(v, '');
+      if (c === 'pagado' || c === 'saldo') return v === '' ? '' : dinero(v);
       return v;
     });
     grupos.get(r.grupo)?.filas.push({ celdas, monto: Number(r.monto) });

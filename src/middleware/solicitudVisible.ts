@@ -12,8 +12,8 @@
 //   3. esa persona firma en la cadena del proyecto, o ya la firmo;
 //   4. tiene el proyecto y «Ver solicitudes de pago» o «Registrar pagos y
 //      facturas»;
-//   5. tiene el proyecto y «Ver control de costos», y la solicitud esta pagada o
-//      facturada (Control de costos > Pagos abre esas);
+//   5. tiene el proyecto y «Ver control de costos», y la solicitud esta abonada,
+//      pagada o facturada (Control de costos > Pagos abre esas);
 //   6. tiene el proyecto y «Acceso a cajas menudas», y es la apertura, un
 //      aumento o un reembolso de una caja (el boton «Descargar» de la caja).
 // César tiene Santa Isabel para hacer reportes: no ve sus pagos. Hilario firma
@@ -70,7 +70,8 @@ export async function puedeVerSolicitud(u: AuthUser, s: SolicitudAcceso): Promis
   if (esAdmin(u) || s.preparado_por === u.id) return true;
   if (await firma(u, s)) return true;
   const p = u.permissions;
-  const porCostos = !!p?.costos_ver && (s.estado === 'pagada' || s.estado === 'facturada');
+  const porCostos =
+    !!p?.costos_ver && ['abonada', 'pagada', 'facturada'].includes(s.estado);
   const porCaja = !!p?.caja_menuda && (s.tipo === 'apertura' || s.tipo === 'reembolso');
   if (!p?.solicitudes_ver && !p?.registrar_pago && !porCostos && !porCaja) return false;
   return tieneElProyecto(u, s.proyecto_id);

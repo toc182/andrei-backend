@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { body, param, validationResult } from 'express-validator';
 import multer from 'multer';
 import crypto from 'crypto';
+import type { PoolClient, QueryResultRow } from 'pg';
 import { query, pool } from '../database/config.js';
 import {
   authenticateToken,
@@ -25,14 +26,34 @@ import { avisarTurnoUrgente } from '../services/whatsapp/avisoUrgente.js';
 import { adjuntarCompra, enlazarCompra, leerCompra } from '../services/requisicionCompras.js';
 import { fixFiles } from '../utils/fileEncoding.js';
 import { borrarArchivos, retirarSolicitud } from '../services/solicitudRetiro.js';
+import {
+  aCentavos,
+  deCentavos,
+  dineroCentavos,
+  estadoSegunPagos,
+  leerMonto,
+  leerSaldoBloqueando,
+  type EstadoPorPagos,
+  type SaldoSolicitud,
+} from '../services/pagosSolicitud.js';
+import {
+  corregirPagos,
+  leerPedidoPagos,
+  type CambioPago,
+} from '../services/pagosCorreccion.js';
 import { PDFDocument } from 'pdf-lib';
 import bcrypt from 'bcryptjs';
 
 const router = Router();
 
-// Helper: generate full PDF (solicitud + adjuntos merged) for a given solicitud ID
-async function generateFullPDF(solicitudId: number): Promise<Buffer> {
-  const solicitud = await query<SolicitudRow>(
+// Helper: generate full PDF (solicitud + adjuntos merged) for a given solicitud ID.
+// Con `db` —el cliente de una transacción abierta— lee DENTRO de ella: al
+// registrar el último pago, la copia archivada sale con ese pago y su
+// comprobante, que todavía no se han guardado.
+async function generateFullPDF(solicitudId: number, db?: PoolClient): Promise<Buffer> {
+  const leer = <T extends QueryResultRow>(sql: string, params: unknown[]) =>
+    db ? db.query<T>(sql, params) : query<T>(sql, params);
+  const solicitud = await leer<SolicitudRow>(
     `
     SELECT sp.*,
       COALESCE(p.nombre_corto, p.nombre) as proyecto_nombre,
@@ -51,17 +72,17 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
 
   const sol = solicitud.rows[0];
 
-  const items = await query<ItemRow>(
+  const items = await leer<ItemRow>(
     'SELECT * FROM solicitud_pago_items WHERE solicitud_pago_id = $1 ORDER BY orden, id',
     [solicitudId],
   );
 
-  const ajustes = await query<AjusteRow>(
+  const ajustes = await leer<AjusteRow>(
     'SELECT * FROM solicitud_pago_ajustes WHERE solicitud_pago_id = $1 ORDER BY orden, id',
     [solicitudId],
   );
 
-  const aprobaciones = await query<{
+  const aprobaciones = await leer<{
     usuario_nombre: string;
     accion: string;
     fecha: string;
@@ -76,13 +97,13 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     [solicitudId],
   );
 
-  const totalAprobadoresResult = await query<{ count: string }>(
+  const totalAprobadoresResult = await leer<{ count: string }>(
     'SELECT COUNT(*) as count FROM proyecto_ajustes_aprobacion WHERE proyecto_id = $1 AND activo = true',
     [sol.proyecto_id],
   );
   const totalAprobadores = parseInt(totalAprobadoresResult.rows[0].count);
 
-  const aprobadoresProyecto = await query<{
+  const aprobadoresProyecto = await leer<{
     user_id: number;
     nombre: string;
     orden: number;
@@ -91,31 +112,45 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     [sol.proyecto_id],
   );
 
-  let pdfComprobante:
-    | { fecha_pago: string; registrado_por_nombre: string }
+  // Los pagos, uno por línea, con lo pagado y el saldo de la vista
+  // solicitud_pago_saldo (pagos parciales, migración 191). Los anulados no van.
+  let pdfPagos:
+    | {
+        lista: { fecha_pago: string; monto: string; registrado_por_nombre: string }[];
+        pagado: number;
+        saldo: number;
+      }
     | undefined;
-  if (
-    sol.estado === 'pagada' ||
-    sol.estado === 'facturada' ||
-    sol.estado === 'devolucion'
-  ) {
-    const compResult = await query<{
+  if (['abonada', 'pagada', 'facturada', 'devolucion'].includes(sol.estado)) {
+    const pagosResult = await leer<{
       fecha_pago: string;
+      monto: string;
       registrado_por_nombre: string;
     }>(
       `
-      SELECT cp.fecha_pago, u.nombre as registrado_por_nombre
+      SELECT to_char(cp.fecha_pago, 'YYYY-MM-DD') AS fecha_pago, cp.monto::text,
+             u.nombre as registrado_por_nombre
       FROM comprobantes_pago cp
       LEFT JOIN users u ON cp.registrado_por = u.id
-      WHERE cp.solicitud_pago_id = $1
+      WHERE cp.solicitud_pago_id = $1 AND cp.activo
+      ORDER BY cp.fecha_pago, cp.id
     `,
       [solicitudId],
     );
-    if (compResult.rows.length > 0) {
-      pdfComprobante = compResult.rows[0];
+    const saldoResult = await leer<{ pagado: string; saldo: string }>(
+      'SELECT pagado::text, saldo::text FROM solicitud_pago_saldo WHERE solicitud_pago_id = $1',
+      [solicitudId],
+    );
+    if (pagosResult.rows.length > 0) {
+      pdfPagos = {
+        lista: pagosResult.rows,
+        pagado: Number(saldoResult.rows[0].pagado),
+        saldo: Number(saldoResult.rows[0].saldo),
+      };
     }
   }
 
+  // La factura, si tiene: también una abonada puede tenerla.
   let pdfFactura:
     | {
         fecha_factura: string;
@@ -123,8 +158,8 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
         registrado_por_nombre: string;
       }
     | undefined;
-  if (sol.estado === 'facturada' || sol.estado === 'devolucion') {
-    const factResult = await query<{
+  if (['abonada', 'facturada', 'devolucion'].includes(sol.estado)) {
+    const factResult = await leer<{
       fecha_factura: string;
       numero_factura: string | null;
       registrado_por_nombre: string;
@@ -150,7 +185,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     | { fecha_reembolso: string; registrado_por_nombre: string }
     | undefined;
   if (sol.pinellas_paga) {
-    const reembResult = await query<{
+    const reembResult = await leer<{
       fecha_reembolso: string;
       registrado_por_nombre: string;
     }>(
@@ -168,7 +203,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
   }
 
   // Fetch correcciones
-  const correccionesResult = await query<{
+  const correccionesResult = await leer<{
     motivo: string;
     cambios: string;
     created_at: string;
@@ -200,6 +235,10 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     cantidad: 'Cantidad',
     unidad: 'Unidad',
     descripcion: 'Descripción',
+    monto: 'Monto',
+    estado: 'Estado',
+    comprobante: 'Comprobante',
+    factura: 'Factura',
   };
 
   const MONEY_FIELDS = [
@@ -225,7 +264,8 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     ch: any,
   ): { campo: string; anterior: string; nuevo: string }[] {
     const label = (f: string) => FIELD_LABELS[f] || f;
-    if (ch.campo === 'item' && Array.isArray(ch.cambios)) {
+    // Un renglón o un pago con varios campos cambiados: «Pago del 18/nov/2026 — Monto».
+    if (Array.isArray(ch.cambios)) {
       return ch.cambios.map(
         (sub: { campo: string; anterior: string; nuevo: string }) => ({
           campo: `${ch.descripcion || 'Item'} — ${label(sub.campo)}`,
@@ -233,6 +273,15 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
           nuevo: formatVal(sub.campo, sub.nuevo),
         }),
       );
+    }
+    if (ch.campo === 'pago_anulado') {
+      return [
+        {
+          campo: `Pago anulado: ${ch.descripcion || ''}`,
+          anterior: '',
+          nuevo: '',
+        },
+      ];
     }
     if (ch.campo === 'item_agregado') {
       return [
@@ -254,7 +303,10 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     }
     return [
       {
-        campo: label(ch.campo || ''),
+        // El comprobante nuevo de un pago dice de qué pago es.
+        campo: ch.descripcion
+          ? `${ch.descripcion} — ${label(ch.campo || '')}`
+          : label(ch.campo || ''),
         anterior: formatVal(ch.campo, ch.anterior),
         nuevo: formatVal(ch.campo, ch.nuevo),
       },
@@ -290,7 +342,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
       }
     | undefined;
   if (sol.estado === 'devolucion') {
-    const devResult = await query<{
+    const devResult = await leer<{
       fecha_devolucion: string;
       motivo: string;
       registrado_por_nombre: string;
@@ -330,7 +382,7 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
     items: items.rows,
     ajustes: ajustes.rows,
     aprobaciones: aprobaciones.rows,
-    comprobante: pdfComprobante,
+    pagos: pdfPagos,
     factura: pdfFactura,
     codigo_verificacion: sol.codigo_verificacion,
     total_aprobadores: totalAprobadores,
@@ -341,17 +393,22 @@ async function generateFullPDF(solicitudId: number): Promise<Buffer> {
   });
 
   // Merge adjuntos into the PDF
-  const adjuntos = await query<{
+  const adjuntos = await leer<{
     r2_key: string;
     tipo_mime: string;
     nombre_original: string;
   }>(
-    `SELECT r2_key, tipo_mime, nombre_original FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 ORDER BY CASE tipo_adjunto WHEN 'comprobante' THEN 1 WHEN 'factura' THEN 2 ELSE 3 END, created_at`,
+    // Los comprobantes de un pago anulado no van: el papel dice solo los pagos que cuentan.
+    `SELECT a.r2_key, a.tipo_mime, a.nombre_original
+       FROM solicitud_pago_adjuntos a
+       LEFT JOIN comprobantes_pago cp ON cp.id = a.comprobante_pago_id
+      WHERE a.solicitud_pago_id = $1 AND (cp.id IS NULL OR cp.activo)
+      ORDER BY CASE a.tipo_adjunto WHEN 'comprobante' THEN 1 WHEN 'factura' THEN 2 ELSE 3 END, a.created_at`,
     [solicitudId],
   );
 
   // Also fetch devolucion comprobante if exists
-  const devolucionComp = await query<{
+  const devolucionComp = await leer<{
     comprobante_url: string;
     comprobante_nombre: string;
   }>(
@@ -1250,8 +1307,10 @@ router.get(
       u3.nombre as mensaje_autor_nombre,
       cg.nombre as categoria_nombre,
       r.numero as requisicion_numero,
-      (SELECT COUNT(*) FROM correcciones_solicitud WHERE solicitud_pago_id = sp.id) as correcciones_count
+      (SELECT COUNT(*) FROM correcciones_solicitud WHERE solicitud_pago_id = sp.id) as correcciones_count,
+      saldo.pagado, saldo.saldo
     FROM solicitudes_pago sp
+    JOIN solicitud_pago_saldo saldo ON saldo.solicitud_pago_id = sp.id
     LEFT JOIN proyectos p ON sp.proyecto_id = p.id
     LEFT JOIN users u1 ON sp.preparado_por = u1.id
     LEFT JOIN users u2 ON sp.solicitado_por = u2.id
@@ -1332,7 +1391,8 @@ router.get(
       SELECT cp.fecha_pago, u.nombre as registrado_por_nombre
       FROM comprobantes_pago cp
       LEFT JOIN users u ON cp.registrado_por = u.id
-      WHERE cp.solicitud_pago_id = $1
+      WHERE cp.solicitud_pago_id = $1 AND cp.activo
+      ORDER BY cp.fecha_pago DESC, cp.id DESC
     `,
           [id],
         );
@@ -1343,6 +1403,7 @@ router.get(
         SELECT a.*, u.nombre as subido_por_nombre
         FROM solicitud_pago_adjuntos a
         LEFT JOIN users u ON a.subido_por = u.id
+        JOIN comprobantes_pago cp ON cp.id = a.comprobante_pago_id AND cp.activo
         WHERE a.solicitud_pago_id = $1 AND a.tipo_adjunto = 'comprobante'
         ORDER BY a.created_at DESC
       `,
@@ -1356,9 +1417,54 @@ router.get(
         }
       }
 
-      // Factura (si está facturada)
+      // Los pagos, uno por uno, con sus comprobantes. Van también los
+      // anulados (activo = false, con quién, cuándo y por qué): quedan en el
+      // historial de la solicitud.
+      const pagosResult = await query<{
+        id: number;
+        fecha_pago: string;
+        monto: string;
+        activo: boolean;
+        registrado_por_nombre: string | null;
+        anulado_por_nombre: string | null;
+        anulado_at: string | null;
+        motivo_anulacion: string | null;
+      }>(
+        `
+      SELECT cp.id, to_char(cp.fecha_pago, 'YYYY-MM-DD') AS fecha_pago, cp.monto::text, cp.activo,
+             u.nombre AS registrado_por_nombre, ua.nombre AS anulado_por_nombre,
+             cp.anulado_at, cp.motivo_anulacion
+        FROM comprobantes_pago cp
+        LEFT JOIN users u ON u.id = cp.registrado_por
+        LEFT JOIN users ua ON ua.id = cp.anulado_por
+       WHERE cp.solicitud_pago_id = $1
+       ORDER BY cp.fecha_pago, cp.id
+    `,
+        [id],
+      );
+      const pagosAdjuntos = await query<{ comprobante_pago_id: number }>(
+        `
+      SELECT a.*, u.nombre as subido_por_nombre
+        FROM solicitud_pago_adjuntos a
+        LEFT JOIN users u ON a.subido_por = u.id
+       WHERE a.solicitud_pago_id = $1 AND a.tipo_adjunto = 'comprobante'
+       ORDER BY a.created_at, a.id
+    `,
+        [id],
+      );
+      const pagos = pagosResult.rows.map((p) => ({
+        ...p,
+        adjuntos: pagosAdjuntos.rows.filter((a) => a.comprobante_pago_id === p.id),
+      }));
+
+      // Factura: una facturada, una abonada con la factura ya subida, o una que
+      // volvió a «Por pagar» porque se anularon sus pagos y conserva la factura.
       let factura = null;
-      if (solicitud.rows[0].estado === 'facturada') {
+      if (
+        solicitud.rows[0].estado === 'facturada' ||
+        solicitud.rows[0].estado === 'abonada' ||
+        solicitud.rows[0].estado === 'aprobada'
+      ) {
         const factResult = await query<{
           fecha_factura: string;
           numero_factura: string | null;
@@ -1450,6 +1556,7 @@ router.get(
         ? parseInt(process.env.TEST_PROJECT_ID)
         : null;
       const isEstadoProtegido =
+        sol.estado === 'abonada' ||
         sol.estado === 'pagada' ||
         sol.estado === 'facturada' ||
         sol.estado === 'devolucion';
@@ -1491,6 +1598,7 @@ router.get(
         aprobaciones: aprobaciones.rows,
         aprobadores_proyecto: aprobadoresProyecto.rows,
         comprobante,
+        pagos,
         factura,
         reembolso,
         devolucion,
@@ -2162,16 +2270,17 @@ router.patch(
         return;
       }
 
-      // Block toggle ON if solicitud reached pagada/facturada without being marked
+      // Block toggle ON once money went out without the mark (abonada too:
+      // part of it was already paid by someone else)
       if (
         pinellas_paga === true &&
         !sol.pinellas_paga &&
-        (sol.estado === 'pagada' || sol.estado === 'facturada')
+        (sol.estado === 'abonada' || sol.estado === 'pagada' || sol.estado === 'facturada')
       ) {
         res.status(400).json({
           success: false,
           message:
-            'No se puede marcar como "Pinellas paga" una solicitud que ya fue pagada o facturada sin esta marca',
+            'No se puede marcar como "Pinellas paga" una solicitud que ya tiene pagos sin esta marca',
         });
         return;
       }
@@ -2430,17 +2539,19 @@ router.patch(
 );
 
 // --- Multer config for comprobante upload ---
+const filtroComprobante: multer.Options['fileFilter'] = (_req, file, cb) => {
+  const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
+  if (allowed.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Tipo de archivo no permitido. Solo PDF, JPG y PNG.'));
+  }
+};
+
 const comprobanteUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
-    if (allowed.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Tipo de archivo no permitido. Solo PDF, JPG y PNG.'));
-    }
-  },
+  fileFilter: filtroComprobante,
 });
 
 function sanitizeFilename(name: string): string {
@@ -2452,20 +2563,37 @@ function sanitizeFilename(name: string): string {
 }
 
 // --- POST /:id/corregir — Modo corrección admin ---
+// Un admin corrige una solicitud abonada, pagada o facturada con un motivo que
+// queda en el historial: sus datos, renglones y ajustes, la factura y los pagos
+// uno por uno (services/pagosCorreccion.ts). Todo va en una transacción con la
+// fila bloqueada: un pago que se registra mientras tanto espera, y la ventana
+// que se abrió antes de ese pago recibe 409 en vez de corregir sobre algo viejo.
+const correccionUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 25 },
+  fileFilter: filtroComprobante,
+});
+
 router.post(
   '/:id/corregir',
   [param('id').isInt()],
   requireRole(['admin']),
   (req: Request, res: Response, next: NextFunction) => {
-    comprobanteUpload.fields([
-      { name: 'archivos_comprobante', maxCount: 5 },
-      { name: 'archivos_factura', maxCount: 5 },
-    ])(req, res, (err) => {
+    // Cada pago trae sus archivos en su propio campo (archivos_pago_<id>), por
+    // eso .any(); leerPedidoPagos() rechaza cualquier campo que no conozca.
+    correccionUpload.any()(req, res, (err) => {
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
           res.status(400).json({
             success: false,
             message: 'El archivo excede el limite de 10MB',
+          });
+          return;
+        }
+        if (err.code === 'LIMIT_FILE_COUNT') {
+          res.status(400).json({
+            success: false,
+            message: 'Una corrección lleva hasta 25 archivos',
           });
           return;
         }
@@ -2482,13 +2610,11 @@ router.post(
   },
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-      const { id } = req.params;
+      const id = Number(req.params.id);
       const userId = req.user!.id;
-      const { motivo, updated_at, items, ajustes, ...solicitudFields } =
+      const { motivo, updated_at, items, ajustes, pagos, ...solicitudFields } =
         req.body;
-      const files = req.files as
-        | { [fieldname: string]: Express.Multer.File[] }
-        | undefined;
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
 
       // Validate motivo
       if (!motivo || !motivo.trim()) {
@@ -2498,48 +2624,31 @@ router.post(
         });
         return;
       }
+      const motivoLimpio: string = motivo.trim();
 
-      // Load current state
-      const currentResult = await query<
-        SolicitudRow & { nombre_corto: string }
-      >(
-        `SELECT sp.*, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
-         FROM solicitudes_pago sp
-         LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-         WHERE sp.id = $1 AND sp.activo = true`,
-        [id],
-      );
-      if (currentResult.rows.length === 0) {
-        res
-          .status(404)
-          .json({ success: false, message: 'Solicitud no encontrada' });
-        return;
-      }
-
-      const current = currentResult.rows[0];
-
-      // Validate estado
-      if (current.estado !== 'pagada' && current.estado !== 'facturada') {
+      // La ventana de antes de los pagos parciales corregía «el» pago con
+      // fecha_pago y archivos_comprobante. Ahora cada pago va por su cuenta;
+      // una ventana vieja, abierta en otro navegador, recibe un aviso en vez de
+      // cambiar un pago cualquiera.
+      if (
+        solicitudFields.fecha_pago !== undefined ||
+        files.some((f) => f.fieldname === 'archivos_comprobante')
+      ) {
         res.status(400).json({
           success: false,
-          message: 'Solo se pueden corregir solicitudes pagadas o facturadas',
-        });
-        return;
-      }
-
-      // Optimistic lock check
-      if (
-        updated_at &&
-        new Date(current.updated_at).getTime() !==
-          new Date(updated_at).getTime()
-      ) {
-        res.status(409).json({
-          success: false,
           message:
-            'La solicitud fue modificada por otro usuario. Recargue e intente de nuevo.',
+            'La forma de corregir los pagos cambió. Recargue la página e intente de nuevo.',
         });
         return;
       }
+      const pedidoPagos = leerPedidoPagos(pagos, files);
+      if ('error' in pedidoPagos) {
+        res.status(400).json({ success: false, message: pedidoPagos.error });
+        return;
+      }
+      const facturaFiles = files.filter(
+        (f) => f.fieldname === 'archivos_factura',
+      );
 
       // Parse items and ajustes from body (sent as JSON strings in multipart)
       const parsedItems =
@@ -2551,190 +2660,6 @@ router.post(
         res
           .status(400)
           .json({ success: false, message: 'Debe incluir al menos un item' });
-        return;
-      }
-
-      // Build diff for solicitud fields
-      const solicitudDiffFields = [
-        'proveedor',
-        'fecha',
-        'observaciones',
-        'beneficiario',
-        'banco',
-        'tipo_cuenta',
-        'numero_cuenta',
-      ];
-      const cambios: Cambio[] = buildSolicitudDiff(
-        current as unknown as Record<string, unknown>,
-        solicitudFields,
-        solicitudDiffFields.filter((f) => solicitudFields[f] !== undefined),
-      );
-
-      // Load current comprobante and factura for diff
-      const currentComprobante = await query<{ fecha_pago: string }>(
-        'SELECT fecha_pago FROM comprobantes_pago WHERE solicitud_pago_id = $1',
-        [id],
-      );
-      const currentFactura = await query<{
-        fecha_factura: string;
-        numero_factura: string;
-        tipo: string;
-      }>(
-        "SELECT fecha_factura, numero_factura, COALESCE(tipo, 'factura') as tipo FROM facturas_solicitud WHERE solicitud_pago_id = $1",
-        [id],
-      );
-
-      // Diff comprobante fields
-      if (
-        solicitudFields.fecha_pago !== undefined &&
-        currentComprobante.rows.length > 0
-      ) {
-        const oldFechaPago = normalizeDate(
-          currentComprobante.rows[0].fecha_pago,
-        );
-        const newFechaPago = normalizeDate(solicitudFields.fecha_pago);
-        if (oldFechaPago !== newFechaPago) {
-          cambios.push({
-            campo: 'fecha_pago',
-            anterior: oldFechaPago,
-            nuevo: newFechaPago,
-          });
-        }
-      }
-
-      // Diff factura fields
-      if (currentFactura.rows.length > 0) {
-        const factFields = ['fecha_factura', 'numero_factura', 'tipo'];
-        for (const f of factFields) {
-          if (solicitudFields[f] !== undefined) {
-            let oldVal: string;
-            let newVal: string;
-            if (DATE_FIELDS.includes(f)) {
-              oldVal = normalizeDate(
-                currentFactura.rows[0][
-                  f as keyof (typeof currentFactura.rows)[0]
-                ],
-              );
-              newVal = normalizeDate(solicitudFields[f]);
-            } else {
-              oldVal = String(
-                currentFactura.rows[0][
-                  f as keyof (typeof currentFactura.rows)[0]
-                ] ?? '',
-              );
-              newVal = String(solicitudFields[f] ?? '');
-            }
-            if (oldVal !== newVal) {
-              cambios.push({ campo: f, anterior: oldVal, nuevo: newVal });
-            }
-          }
-        }
-      }
-
-      // Diff items
-      const currentItems = await query<ItemRow>(
-        'SELECT * FROM solicitud_pago_items WHERE solicitud_pago_id = $1 ORDER BY orden, id',
-        [id],
-      );
-
-      const currentItemsMap = new Map(
-        currentItems.rows.map((item) => [item.id, item]),
-      );
-      const submittedItemIds = new Set(
-        parsedItems
-          .filter((i: { id?: number }) => i.id)
-          .map((i: { id: number }) => i.id),
-      );
-
-      // Items removed
-      for (const oldItem of currentItems.rows) {
-        if (!submittedItemIds.has(oldItem.id)) {
-          cambios.push({
-            campo: 'item_eliminado',
-            descripcion: oldItem.descripcion,
-            anterior: {
-              cantidad: oldItem.cantidad,
-              unidad: oldItem.unidad,
-              precio_unitario: oldItem.precio_unitario,
-              precio_total: oldItem.precio_total,
-            },
-          });
-        }
-      }
-
-      // Items modified or added
-      for (const newItem of parsedItems) {
-        if (newItem.id && currentItemsMap.has(newItem.id)) {
-          const oldItem = currentItemsMap.get(newItem.id)!;
-          const itemCambios: {
-            campo: string;
-            anterior: string;
-            nuevo: string;
-          }[] = [];
-          const itemFields = [
-            'descripcion',
-            'cantidad',
-            'unidad',
-            'precio_unitario',
-          ];
-          for (const f of itemFields) {
-            let oldVal: string;
-            let newVal: string;
-            if (NUMERIC_FIELDS.includes(f)) {
-              oldVal = normalizeNumeric(oldItem[f as keyof typeof oldItem]);
-              newVal = normalizeNumeric(newItem[f]);
-            } else {
-              oldVal = String(oldItem[f as keyof typeof oldItem] ?? '');
-              newVal = String(newItem[f] ?? '');
-            }
-            if (oldVal !== newVal) {
-              itemCambios.push({ campo: f, anterior: oldVal, nuevo: newVal });
-            }
-          }
-          if (itemCambios.length > 0) {
-            cambios.push({
-              campo: 'item',
-              item_id: newItem.id,
-              descripcion: oldItem.descripcion,
-              cambios: itemCambios,
-            });
-          }
-        } else if (!newItem.id) {
-          cambios.push({
-            campo: 'item_agregado',
-            descripcion: newItem.descripcion,
-            nuevo: {
-              cantidad: newItem.cantidad,
-              unidad: newItem.unidad,
-              precio_unitario: newItem.precio_unitario,
-            },
-          });
-        }
-      }
-
-      // Diff files
-      const comprobanteFiles = files?.archivos_comprobante;
-      const facturaFiles = files?.archivos_factura;
-      if (comprobanteFiles && comprobanteFiles.length > 0) {
-        cambios.push({
-          campo: 'comprobante',
-          anterior: '(archivos anteriores)',
-          nuevo: comprobanteFiles.map((f) => f.originalname).join(', '),
-        });
-      }
-      if (facturaFiles && facturaFiles.length > 0) {
-        cambios.push({
-          campo: 'factura',
-          anterior: '(archivos anteriores)',
-          nuevo: facturaFiles.map((f) => f.originalname).join(', '),
-        });
-      }
-
-      // Reject if nothing changed
-      if (cambios.length === 0) {
-        res
-          .status(400)
-          .json({ success: false, message: 'No se detectaron cambios' });
         return;
       }
 
@@ -2784,34 +2709,254 @@ router.post(
         )
         .reduce((sum: number, a: { monto: number }) => sum + a.monto, 0);
 
-      const newMontoTotal = newSubtotal + newImpuestos - newDescuentos;
+      // El total se guarda redondeado a centavos aquí mismo, y no por la base:
+      // los pagos se cuadran contra él centavo por centavo.
+      const totalNuevoCentavos = aCentavos(
+        newSubtotal + newImpuestos - newDescuentos,
+      );
 
-      // Check if totals changed and add to diff (round to 2 decimals to avoid float noise)
-      const oldSubtotal =
-        Math.round(parseFloat(String(current.subtotal)) * 100) / 100;
-      const roundedNewSubtotal = Math.round(newSubtotal * 100) / 100;
-      const oldMontoTotal =
-        Math.round(parseFloat(String(current.monto_total)) * 100) / 100;
-      const roundedNewMontoTotal = Math.round(newMontoTotal * 100) / 100;
-      if (oldSubtotal !== roundedNewSubtotal) {
-        cambios.push({
-          campo: 'subtotal',
-          anterior: String(oldSubtotal),
-          nuevo: String(roundedNewSubtotal),
-        });
-      }
-      if (oldMontoTotal !== roundedNewMontoTotal) {
-        cambios.push({
-          campo: 'monto_total',
-          anterior: String(oldMontoTotal),
-          nuevo: String(roundedNewMontoTotal),
-        });
-      }
+      const solicitudDiffFields = [
+        'proveedor',
+        'fecha',
+        'observaciones',
+        'beneficiario',
+        'banco',
+        'tipo_cuenta',
+        'numero_cuenta',
+      ];
 
       // --- Execute transaction ---
+      let clavesViejas: string[] = [];
+      let resultado: {
+        numero: string;
+        nombreCorto: string;
+        estado: EstadoPorPagos;
+        pagadoCentavos: number;
+        saldoCentavos: number;
+      } | null = null;
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        const fallar = async (codigo: number, message: string) => {
+          await client.query('ROLLBACK');
+          res.status(codigo).json({ success: false, message });
+        };
+
+        const sol = await leerSaldoBloqueando(client, id);
+        if (!sol) {
+          await fallar(404, 'Solicitud no encontrada');
+          return;
+        }
+        if (!['abonada', 'pagada', 'facturada'].includes(sol.estado)) {
+          await fallar(
+            400,
+            'Solo se pueden corregir solicitudes abonadas, pagadas o facturadas',
+          );
+          return;
+        }
+        const current = (
+          await client.query<SolicitudRow>(
+            'SELECT * FROM solicitudes_pago WHERE id = $1',
+            [id],
+          )
+        ).rows[0];
+
+        // Optimistic lock check
+        if (
+          updated_at &&
+          new Date(current.updated_at).getTime() !==
+            new Date(updated_at).getTime()
+        ) {
+          await fallar(
+            409,
+            'La solicitud fue modificada por otro usuario. Recargue e intente de nuevo.',
+          );
+          return;
+        }
+
+        // Build diff for solicitud fields
+        const cambios: (Cambio | CambioPago)[] = buildSolicitudDiff(
+          current as unknown as Record<string, unknown>,
+          solicitudFields,
+          solicitudDiffFields.filter((f) => solicitudFields[f] !== undefined),
+        );
+
+        // Diff factura fields
+        const currentFactura = await client.query<{
+          fecha_factura: string;
+          numero_factura: string;
+          tipo: string;
+        }>(
+          "SELECT fecha_factura, numero_factura, COALESCE(tipo, 'factura') as tipo FROM facturas_solicitud WHERE solicitud_pago_id = $1",
+          [id],
+        );
+        if (currentFactura.rows.length > 0) {
+          const factFields = ['fecha_factura', 'numero_factura', 'tipo'];
+          for (const f of factFields) {
+            if (solicitudFields[f] !== undefined) {
+              let oldVal: string;
+              let newVal: string;
+              if (DATE_FIELDS.includes(f)) {
+                oldVal = normalizeDate(
+                  currentFactura.rows[0][
+                    f as keyof (typeof currentFactura.rows)[0]
+                  ],
+                );
+                newVal = normalizeDate(solicitudFields[f]);
+              } else {
+                oldVal = String(
+                  currentFactura.rows[0][
+                    f as keyof (typeof currentFactura.rows)[0]
+                  ] ?? '',
+                );
+                newVal = String(solicitudFields[f] ?? '');
+              }
+              if (oldVal !== newVal) {
+                cambios.push({ campo: f, anterior: oldVal, nuevo: newVal });
+              }
+            }
+          }
+        }
+
+        // Diff items
+        const currentItems = await client.query<ItemRow>(
+          'SELECT * FROM solicitud_pago_items WHERE solicitud_pago_id = $1 ORDER BY orden, id',
+          [id],
+        );
+
+        const currentItemsMap = new Map(
+          currentItems.rows.map((item) => [item.id, item]),
+        );
+        const submittedItemIds = new Set(
+          parsedItems
+            .filter((i: { id?: number }) => i.id)
+            .map((i: { id: number }) => i.id),
+        );
+
+        // Items removed
+        for (const oldItem of currentItems.rows) {
+          if (!submittedItemIds.has(oldItem.id)) {
+            cambios.push({
+              campo: 'item_eliminado',
+              descripcion: oldItem.descripcion,
+              anterior: {
+                cantidad: oldItem.cantidad,
+                unidad: oldItem.unidad,
+                precio_unitario: oldItem.precio_unitario,
+                precio_total: oldItem.precio_total,
+              },
+            });
+          }
+        }
+
+        // Items modified or added
+        for (const newItem of parsedItems) {
+          if (newItem.id && currentItemsMap.has(newItem.id)) {
+            const oldItem = currentItemsMap.get(newItem.id)!;
+            const itemCambios: {
+              campo: string;
+              anterior: string;
+              nuevo: string;
+            }[] = [];
+            const itemFields = [
+              'descripcion',
+              'cantidad',
+              'unidad',
+              'precio_unitario',
+            ];
+            for (const f of itemFields) {
+              let oldVal: string;
+              let newVal: string;
+              if (NUMERIC_FIELDS.includes(f)) {
+                oldVal = normalizeNumeric(oldItem[f as keyof typeof oldItem]);
+                newVal = normalizeNumeric(newItem[f]);
+              } else {
+                oldVal = String(oldItem[f as keyof typeof oldItem] ?? '');
+                newVal = String(newItem[f] ?? '');
+              }
+              if (oldVal !== newVal) {
+                itemCambios.push({ campo: f, anterior: oldVal, nuevo: newVal });
+              }
+            }
+            if (itemCambios.length > 0) {
+              cambios.push({
+                campo: 'item',
+                item_id: newItem.id,
+                descripcion: oldItem.descripcion,
+                cambios: itemCambios,
+              });
+            }
+          } else if (!newItem.id) {
+            cambios.push({
+              campo: 'item_agregado',
+              descripcion: newItem.descripcion,
+              nuevo: {
+                cantidad: newItem.cantidad,
+                unidad: newItem.unidad,
+                precio_unitario: newItem.precio_unitario,
+              },
+            });
+          }
+        }
+
+        if (facturaFiles.length > 0) {
+          cambios.push({
+            campo: 'factura',
+            anterior: '(archivos anteriores)',
+            nuevo: facturaFiles.map((f) => f.originalname).join(', '),
+          });
+        }
+
+        // Check if totals changed and add to diff (round to 2 decimals to avoid float noise)
+        const oldSubtotal =
+          Math.round(parseFloat(String(current.subtotal)) * 100) / 100;
+        const roundedNewSubtotal = Math.round(newSubtotal * 100) / 100;
+        if (oldSubtotal !== roundedNewSubtotal) {
+          cambios.push({
+            campo: 'subtotal',
+            anterior: String(oldSubtotal),
+            nuevo: String(roundedNewSubtotal),
+          });
+        }
+        if (sol.totalCentavos !== totalNuevoCentavos) {
+          cambios.push({
+            campo: 'monto_total',
+            anterior: String(sol.totalCentavos / 100),
+            nuevo: String(totalNuevoCentavos / 100),
+          });
+        }
+
+        // Los pagos: corregidos, anulados o con comprobante nuevo, y el estado
+        // que le toca a la solicitud con el total nuevo.
+        const pagosCorregidos = await corregirPagos(client, {
+          solicitudId: id,
+          userId,
+          motivo: motivoLimpio,
+          sol,
+          totalNuevoCentavos,
+          pedido: pedidoPagos,
+          subirArchivo: async (pagoId, file) => {
+            const r2Key = `solicitudes-pago/${id}/comprobantes/${crypto.randomUUID()}_${sanitizeFilename(file.originalname)}`;
+            await uploadFile(r2Key, file.buffer, file.mimetype);
+            await client.query(
+              `INSERT INTO solicitud_pago_adjuntos
+                 (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto, comprobante_pago_id)
+               VALUES ($1, $2, $3, $4, $5, $6, 'comprobante', $7)`,
+              [id, file.originalname, r2Key, file.mimetype, file.size, userId, pagoId],
+            );
+          },
+        });
+        if ('error' in pagosCorregidos) {
+          await fallar(400, pagosCorregidos.error);
+          return;
+        }
+        cambios.push(...pagosCorregidos.cambios);
+
+        // Reject if nothing changed
+        if (cambios.length === 0) {
+          await fallar(400, 'No se detectaron cambios');
+          return;
+        }
 
         // Update solicitud main fields
         const updateFields: string[] = [];
@@ -2826,7 +2971,7 @@ router.post(
           }
         }
 
-        // Always update totals and updated_at
+        // Always update totals, estado and updated_at
         updateFields.push(`subtotal = $${paramIndex}`);
         updateValues.push(newSubtotal);
         paramIndex++;
@@ -2837,7 +2982,10 @@ router.post(
         updateValues.push(newImpuestos);
         paramIndex++;
         updateFields.push(`monto_total = $${paramIndex}`);
-        updateValues.push(newMontoTotal);
+        updateValues.push(deCentavos(totalNuevoCentavos));
+        paramIndex++;
+        updateFields.push(`estado = $${paramIndex}`);
+        updateValues.push(pagosCorregidos.estado);
         paramIndex++;
         updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
 
@@ -2891,17 +3039,6 @@ router.post(
           );
         }
 
-        // Update comprobante fields
-        if (
-          solicitudFields.fecha_pago !== undefined &&
-          currentComprobante.rows.length > 0
-        ) {
-          await client.query(
-            'UPDATE comprobantes_pago SET fecha_pago = $1 WHERE solicitud_pago_id = $2',
-            [solicitudFields.fecha_pago, id],
-          );
-        }
-
         // Update factura fields
         if (currentFactura.rows.length > 0) {
           const factUpdates: string[] = [];
@@ -2931,31 +3068,14 @@ router.post(
           }
         }
 
-        // Upload replacement comprobante files
-        if (comprobanteFiles && comprobanteFiles.length > 0) {
-          await client.query(
-            `DELETE FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 AND tipo_adjunto = 'comprobante'`,
-            [id],
-          );
-          for (const file of comprobanteFiles) {
-            const uuid = crypto.randomUUID();
-            const safeName = sanitizeFilename(file.originalname);
-            const r2Key = `solicitudes-pago/${id}/comprobantes/${uuid}_${safeName}`;
-            await uploadFile(r2Key, file.buffer, file.mimetype);
-            await client.query(
-              `INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
-               VALUES ($1, $2, $3, $4, $5, $6, 'comprobante')`,
-              [id, file.originalname, r2Key, file.mimetype, file.size, userId],
-            );
-          }
-        }
-
         // Upload replacement factura files
-        if (facturaFiles && facturaFiles.length > 0) {
-          await client.query(
-            `DELETE FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 AND tipo_adjunto = 'factura'`,
+        clavesViejas = [...pagosCorregidos.clavesViejas];
+        if (facturaFiles.length > 0) {
+          const facturasViejas = await client.query<{ r2_key: string }>(
+            `DELETE FROM solicitud_pago_adjuntos WHERE solicitud_pago_id = $1 AND tipo_adjunto = 'factura' RETURNING r2_key`,
             [id],
           );
+          clavesViejas.push(...facturasViejas.rows.map((f) => f.r2_key));
           for (const file of facturaFiles) {
             const uuid = crypto.randomUUID();
             const safeName = sanitizeFilename(file.originalname);
@@ -2970,78 +3090,35 @@ router.post(
         }
 
         // Insert correction record
-        const versionPdf: string | null = null;
         await client.query(
           `INSERT INTO correcciones_solicitud (solicitud_pago_id, user_id, motivo, cambios, version_pdf)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [id, userId, motivo.trim(), JSON.stringify(cambios), versionPdf],
+           VALUES ($1, $2, $3, $4, NULL)`,
+          [id, userId, motivoLimpio, JSON.stringify(cambios)],
         );
 
-        // Audit log
         await registrarAudit(
           userId,
           'correccion',
           'solicitud_pago',
-          parseInt(id),
+          id,
           {
-            numero: current.numero,
-            motivo: motivo.trim(),
+            numero: sol.numero,
+            motivo: motivoLimpio,
             cambios_count: cambios.length,
+            estado_antes: sol.estado,
+            estado: pagosCorregidos.estado,
           },
+          client,
         );
 
         await client.query('COMMIT');
-
-        // Post-transaction: generate versioned PDF if archived PDF exists
-        if (current.estado === 'pagada' || current.estado === 'facturada') {
-          try {
-            const nombreCorto = current.nombre_corto;
-            const numero = current.numero;
-            const baseKey = `${nombreCorto}/solicitudes/${numero}.pdf`;
-
-            // Check if base PDF exists
-            try {
-              await downloadFile(baseKey);
-            } catch {
-              // No base PDF exists, skip versioning
-              res.json({
-                success: true,
-                message: 'Corrección guardada exitosamente',
-              });
-              return;
-            }
-
-            // Count total corrections for version number
-            const countResult = await query<{ count: string }>(
-              'SELECT COUNT(*) as count FROM correcciones_solicitud WHERE solicitud_pago_id = $1',
-              [id],
-            );
-            const version = parseInt(countResult.rows[0].count) + 1;
-
-            const pdfBuffer = await generateFullPDF(parseInt(id));
-            const versionKey = `${nombreCorto}/solicitudes/${numero}-v${version}.pdf`;
-            await uploadFile(versionKey, pdfBuffer, 'application/pdf');
-
-            // Update the correction record with the PDF key
-            await query(
-              `UPDATE correcciones_solicitud SET version_pdf = $1
-               WHERE id = (
-                 SELECT id FROM correcciones_solicitud
-                 WHERE solicitud_pago_id = $2 AND version_pdf IS NULL
-                 ORDER BY created_at DESC LIMIT 1
-               )`,
-              [versionKey, id],
-            );
-          } catch (pdfErr) {
-            console.error('Error generating versioned PDF:', pdfErr);
-            // Don't fail the whole correction — data is already saved
-          }
-        }
-
-        res.json({
-          success: true,
-          message: 'Corrección guardada exitosamente',
-        });
+        resultado = {
+          numero: sol.numero,
+          nombreCorto: sol.nombreCorto,
+          estado: pagosCorregidos.estado,
+          pagadoCentavos: pagosCorregidos.pagadoCentavos,
+          saldoCentavos: pagosCorregidos.saldoCentavos,
+        };
       } catch (err) {
         await client.query('ROLLBACK');
         console.error('Error en corrección de solicitud:', err);
@@ -3049,11 +3126,68 @@ router.post(
       } finally {
         client.release();
       }
+
+      if (!resultado) return;
+      await borrarArchivos(clavesViejas);
+
+      // La copia archivada del PDF: si ya existía, la corrección deja una
+      // versión nueva al lado (-v2, -v3...); si la corrección acaba de saldar
+      // la solicitud, se archiva la primera, como al registrar el último pago.
+      try {
+        const baseKey = `${resultado.nombreCorto}/solicitudes/${resultado.numero}.pdf`;
+        let hayBase = true;
+        try {
+          await downloadFile(baseKey);
+        } catch {
+          hayBase = false;
+        }
+        if (hayBase) {
+          const countResult = await query<{ count: string }>(
+            'SELECT COUNT(*) as count FROM correcciones_solicitud WHERE solicitud_pago_id = $1',
+            [id],
+          );
+          const version = parseInt(countResult.rows[0].count) + 1;
+          const pdfBuffer = await generateFullPDF(id);
+          const versionKey = `${resultado.nombreCorto}/solicitudes/${resultado.numero}-v${version}.pdf`;
+          await uploadFile(versionKey, pdfBuffer, 'application/pdf');
+          await query(
+            `UPDATE correcciones_solicitud SET version_pdf = $1
+             WHERE id = (
+               SELECT id FROM correcciones_solicitud
+               WHERE solicitud_pago_id = $2 AND version_pdf IS NULL
+               ORDER BY created_at DESC LIMIT 1
+             )`,
+            [versionKey, id],
+          );
+        } else if (
+          resultado.estado === 'pagada' ||
+          resultado.estado === 'facturada'
+        ) {
+          const pdfBuffer = await generateFullPDF(id);
+          await uploadFile(baseKey, pdfBuffer, 'application/pdf');
+        }
+      } catch (pdfErr) {
+        console.error('Error generating versioned PDF:', pdfErr);
+        // Don't fail the whole correction — data is already saved
+      }
+
+      res.json({
+        success: true,
+        message: 'Corrección guardada exitosamente',
+        estado: resultado.estado,
+        pagado: deCentavos(resultado.pagadoCentavos),
+        saldo: deCentavos(resultado.saldoCentavos),
+      });
     },
   ),
 );
 
-// --- POST /:id/registrar-pago — Registrar pago con comprobante ---
+// --- POST /:id/registrar-pago — Registrar un pago, total o parcial, con su comprobante ---
+// Una solicitud regular se puede pagar en partes (migración 191): `monto` es lo
+// que se paga ahora y, sin `monto`, se paga el saldo. Mientras queda saldo la
+// solicitud está «abonada»; cuando el saldo llega a cero pasa a «pagada», o a
+// «facturada» si la factura ya se había registrado. Las de caja menuda
+// (reembolso, apertura) se pagan de una vez, como siempre.
 router.post(
   '/:id/registrar-pago',
   [param('id').isInt()],
@@ -3081,7 +3215,7 @@ router.post(
   },
   asyncHandler(
     async (req: Request<{ id: string }>, res: Response): Promise<void> => {
-      const { id } = req.params;
+      const id = Number(req.params.id);
       const { fecha_pago } = req.body;
       const files = req.files as Express.Multer.File[];
       const userId = req.user!.id;
@@ -3101,56 +3235,88 @@ router.post(
         return;
       }
 
-      // Verificar que la solicitud existe y está aprobada
-      const solicitud = await query<
-        SolicitudRow & { nombre_corto: string; tipo: 'regular' | 'reembolso' | 'apertura' }
-      >(
-        `SELECT sp.id, sp.numero, sp.estado, sp.tipo, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
-         FROM solicitudes_pago sp
-         LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-         WHERE sp.id = $1 AND sp.activo = true`,
-        [id],
-      );
-      if (solicitud.rows.length === 0) {
-        res
-          .status(404)
-          .json({ success: false, message: 'Solicitud no encontrada' });
-        return;
-      }
-      if (solicitud.rows[0].estado !== 'aprobada') {
+      // Sin monto se paga el saldo; con monto, tiene que ser un monto de verdad.
+      const montoEnviado = req.body.monto !== undefined && req.body.monto !== '';
+      const montoEscrito = montoEnviado ? leerMonto(req.body.monto) : null;
+      if (montoEnviado && montoEscrito === null) {
         res.status(400).json({
           success: false,
-          message: 'Solo se puede registrar pago de solicitudes aprobadas',
+          message: 'El monto del pago no es válido',
         });
         return;
       }
 
-      const tipoSol = solicitud.rows[0].tipo;
-      const targetEstado = tipoSol === 'reembolso' ? 'reembolsada'
-        : tipoSol === 'apertura' ? 'transferida'
-        : 'pagada';
-      const actionLabel = tipoSol === 'reembolso' ? 'reembolso'
-        : tipoSol === 'apertura' ? 'transferencia'
-        : 'pago';
-
-      // All DB writes run inside one transaction so a failure at any step
-      // (R2 upload, PDF render, etc.) rolls back cleanly and leaves no
-      // debris. The comprobante insert is idempotent: a previous failed
-      // attempt that left a row gets overwritten instead of colliding with
-      // the UNIQUE (solicitud_pago_id) constraint. R2 objects can't be
-      // rolled back, but orphaned R2 files are harmless.
+      // Todo en una transacción: si algo falla (R2, el PDF), no queda nada a
+      // medias. Los archivos ya subidos a R2 no se deshacen, pero sueltos no
+      // estorban.
       const archivosInfo: string[] = [];
+      let resultado: {
+        numero: string;
+        tipo: SaldoSolicitud['tipo'];
+        estado: EstadoPorPagos;
+        montoCentavos: number;
+        saldoAntes: number;
+        saldoDespues: number;
+        totalCentavos: number;
+      } | null = null;
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
 
-        await client.query(
-          `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (solicitud_pago_id)
-           DO UPDATE SET fecha_pago = EXCLUDED.fecha_pago, registrado_por = EXCLUDED.registrado_por`,
-          [id, fecha_pago, userId],
+        const sol = await leerSaldoBloqueando(client, id);
+        if (!sol) {
+          await client.query('ROLLBACK');
+          res
+            .status(404)
+            .json({ success: false, message: 'Solicitud no encontrada' });
+          return;
+        }
+
+        const regular = sol.tipo === 'regular';
+        if (!(sol.estado === 'aprobada' || (regular && sol.estado === 'abonada'))) {
+          await client.query('ROLLBACK');
+          res.status(400).json({
+            success: false,
+            message: regular
+              ? 'Solo se registra el pago de una solicitud por pagar o abonada'
+              : 'Solo se puede registrar pago de solicitudes aprobadas',
+          });
+          return;
+        }
+        if (sol.saldoCentavos <= 0) {
+          await client.query('ROLLBACK');
+          res.status(400).json({
+            success: false,
+            message: 'Esta solicitud no tiene saldo por pagar',
+          });
+          return;
+        }
+
+        const montoCentavos = montoEscrito ?? sol.saldoCentavos;
+        if (!regular && montoCentavos !== sol.saldoCentavos) {
+          await client.query('ROLLBACK');
+          res.status(400).json({
+            success: false,
+            message: 'Las solicitudes de caja menuda se pagan completas',
+          });
+          return;
+        }
+        if (montoCentavos > sol.saldoCentavos) {
+          await client.query('ROLLBACK');
+          res.status(400).json({
+            success: false,
+            message: `El monto es mayor que el saldo (${dineroCentavos(sol.saldoCentavos)})`,
+          });
+          return;
+        }
+
+        const pago = await client.query<{ id: number }>(
+          `INSERT INTO comprobantes_pago (solicitud_pago_id, fecha_pago, registrado_por, monto)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id`,
+          [id, fecha_pago, userId, deCentavos(montoCentavos)],
         );
+        const pagoId = pago.rows[0].id;
 
         for (const file of files) {
           const uuid = crypto.randomUUID();
@@ -3160,31 +3326,49 @@ router.post(
           await uploadFile(r2Key, file.buffer, file.mimetype);
 
           await client.query(
-            `INSERT INTO solicitud_pago_adjuntos (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto)
-             VALUES ($1, $2, $3, $4, $5, $6, 'comprobante')`,
-            [id, file.originalname, r2Key, file.mimetype, file.size, userId],
+            `INSERT INTO solicitud_pago_adjuntos
+               (solicitud_pago_id, nombre_original, r2_key, tipo_mime, tamano, subido_por, tipo_adjunto, comprobante_pago_id)
+             VALUES ($1, $2, $3, $4, $5, $6, 'comprobante', $7)`,
+            [id, file.originalname, r2Key, file.mimetype, file.size, userId, pagoId],
           );
 
           archivosInfo.push(file.originalname);
         }
 
-        // Cambiar estado: pagada (regular), reembolsada (reembolso) o
-        // transferida (apertura).
+        const saldoDespues = sol.saldoCentavos - montoCentavos;
+        const estado = estadoSegunPagos({
+          tipo: sol.tipo,
+          pagos: sol.pagos + 1,
+          saldoCentavos: saldoDespues,
+          conFactura: sol.conFactura,
+        });
         await client.query(
           'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
-          [targetEstado, id],
+          [estado, id],
         );
 
-        // Archive immutable PDF copy to R2. If this throws, the catch below
-        // rolls back the whole transaction — no manual estado revert needed.
-        const pdfBuffer = await generateFullPDF(parseInt(id));
-        const archiveKey = `${solicitud.rows[0].nombre_corto}/solicitudes/${solicitud.rows[0].numero}.pdf`;
-        await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
+        // La copia del PDF se archiva cuando la solicitud queda pagada
+        // completa, como siempre; una abonada todavía no ha terminado. Si
+        // falla, el catch deshace la transacción entera.
+        if (saldoDespues === 0) {
+          const pdfBuffer = await generateFullPDF(id, client);
+          const archiveKey = `${sol.nombreCorto}/solicitudes/${sol.numero}.pdf`;
+          await uploadFile(archiveKey, pdfBuffer, 'application/pdf');
+        }
 
         await client.query('COMMIT');
+        resultado = {
+          numero: sol.numero,
+          tipo: sol.tipo,
+          estado,
+          montoCentavos,
+          saldoAntes: sol.saldoCentavos,
+          saldoDespues,
+          totalCentavos: sol.totalCentavos,
+        };
       } catch (err) {
         await client.query('ROLLBACK');
-        console.error(`Error registrando ${actionLabel} (solicitud ${id}):`, err);
+        console.error(`Error registrando el pago (solicitud ${id}):`, err);
         res.status(500).json({
           success: false,
           message: 'No se pudo registrar el pago. No se guardó ningún cambio. Intente nuevamente.',
@@ -3194,27 +3378,39 @@ router.post(
         client.release();
       }
 
+      if (!resultado) return;
+      const { tipo } = resultado;
+      const parcial = resultado.saldoDespues > 0;
       await registrarAudit(
         userId,
-        tipoSol === 'reembolso' ? 'registrar_reembolso'
-          : tipoSol === 'apertura' ? 'registrar_transferencia'
+        tipo === 'reembolso' ? 'registrar_reembolso'
+          : tipo === 'apertura' ? 'registrar_transferencia'
+          : parcial ? 'registrar_pago_parcial'
           : 'registrar_pago',
         'solicitud_pago',
-        parseInt(id),
+        id,
         {
-          numero: solicitud.rows[0].numero,
+          numero: resultado.numero,
           fecha_pago,
+          monto: deCentavos(resultado.montoCentavos),
+          total: deCentavos(resultado.totalCentavos),
+          saldo_antes: deCentavos(resultado.saldoAntes),
+          saldo_despues: deCentavos(resultado.saldoDespues),
+          estado: resultado.estado,
           archivos: archivosInfo,
         },
       );
 
       res.json({
         success: true,
-        message: tipoSol === 'reembolso' ? 'Reembolso registrado exitosamente'
-          : tipoSol === 'apertura' ? 'Transferencia registrada exitosamente'
+        message: tipo === 'reembolso' ? 'Reembolso registrado exitosamente'
+          : tipo === 'apertura' ? 'Transferencia registrada exitosamente'
+          : parcial ? 'Pago parcial registrado exitosamente'
           : 'Pago registrado exitosamente',
-        estado: targetEstado,
-        tipo: tipoSol,
+        estado: resultado.estado,
+        tipo,
+        pagado: deCentavos(resultado.totalCentavos - resultado.saldoDespues),
+        saldo: deCentavos(resultado.saldoDespues),
       });
     },
   ),
@@ -3270,28 +3466,6 @@ router.post(
         return;
       }
 
-      // Verificar que la solicitud existe y está pagada
-      const solicitud = await query<SolicitudRow & { nombre_corto: string }>(
-        `SELECT sp.id, sp.numero, sp.estado, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
-         FROM solicitudes_pago sp
-         LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-         WHERE sp.id = $1 AND sp.activo = true`,
-        [id],
-      );
-      if (solicitud.rows.length === 0) {
-        res
-          .status(404)
-          .json({ success: false, message: 'Solicitud no encontrada' });
-        return;
-      }
-      if (solicitud.rows[0].estado !== 'pagada') {
-        res.status(400).json({
-          success: false,
-          message: 'Solo se puede registrar factura de solicitudes pagadas',
-        });
-        return;
-      }
-
       // All DB writes run inside one transaction so a failure at any step
       // rolls back cleanly and leaves no debris. The factura insert is
       // idempotent: a previous failed attempt that left a row gets
@@ -3299,10 +3473,50 @@ router.post(
       // constraint, which would otherwise block every retry with a
       // duplicate-key 500. R2 objects can't roll back, but orphaned files
       // are harmless.
+      //
+      // La factura también se sube a una solicitud abonada (pagos parciales,
+      // Ivan 2026-11-18): la etiqueta sigue al dinero y se queda «Abonada»; el
+      // pago que la salde la pasa directo a Facturada. La fila queda bloqueada
+      // igual que al registrar un pago, así que la factura y el último pago no
+      // se cruzan: el segundo en llegar ya ve lo que hizo el primero.
       const archivosInfo: string[] = [];
+      let numero = '';
+      let estado: EstadoPorPagos = 'facturada';
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+
+        const sol = await leerSaldoBloqueando(client, Number(id));
+        if (!sol) {
+          await client.query('ROLLBACK');
+          res
+            .status(404)
+            .json({ success: false, message: 'Solicitud no encontrada' });
+          return;
+        }
+        if (sol.estado === 'abonada' && sol.conFactura) {
+          await client.query('ROLLBACK');
+          res.status(400).json({
+            success: false,
+            message: 'Esta solicitud ya tiene su factura o recibo registrado',
+          });
+          return;
+        }
+        if (sol.estado !== 'pagada' && sol.estado !== 'abonada') {
+          await client.query('ROLLBACK');
+          res.status(400).json({
+            success: false,
+            message: 'Solo se puede registrar factura de solicitudes abonadas o pagadas',
+          });
+          return;
+        }
+        numero = sol.numero;
+        estado = estadoSegunPagos({
+          tipo: sol.tipo,
+          pagos: sol.pagos,
+          saldoCentavos: sol.saldoCentavos,
+          conFactura: true,
+        });
 
         await client.query(
           `INSERT INTO facturas_solicitud (solicitud_pago_id, fecha_factura, numero_factura, registrado_por, tipo)
@@ -3333,17 +3547,15 @@ router.post(
 
         await client.query(
           'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
-          ['facturada', id],
+          [estado, id],
         );
 
         // Archive an immutable copy of the factura file to the project
         // folder. This is best-effort: a failure here only logs and does
         // NOT roll back the registration (same as before).
         try {
-          const nombreCorto = solicitud.rows[0].nombre_corto;
-          const numero = solicitud.rows[0].numero;
           const firstFile = files[0];
-          const archiveKey = `${nombreCorto}/solicitudes/${numero}-factura.pdf`;
+          const archiveKey = `${sol.nombreCorto}/solicitudes/${numero}-factura.pdf`;
           await uploadFile(archiveKey, firstFile.buffer, firstFile.mimetype);
         } catch (archiveErr) {
           console.error('Error archiving factura file:', archiveErr);
@@ -3368,15 +3580,16 @@ router.post(
         'solicitud_pago',
         parseInt(id),
         {
-          numero: solicitud.rows[0].numero,
+          numero,
           tipo: tipoDoc,
           fecha_factura,
           numero_factura: numero_factura || null,
+          estado,
           archivos: archivosInfo,
         },
       );
 
-      res.json({ success: true, message: 'Factura registrada exitosamente' });
+      res.json({ success: true, message: 'Factura registrada exitosamente', estado });
     },
   ),
 );
@@ -3978,84 +4191,91 @@ router.post(
       const { id } = req.params;
       const userId = req.user!.id;
       const { fecha_reembolso } = req.body;
-
-      // Verificar que la solicitud existe y tiene pinellas_paga
-      const solicitud = await query<SolicitudRow>(
-        'SELECT id, pinellas_paga, numero FROM solicitudes_pago WHERE id = $1 AND activo = true',
-        [id],
-      );
-      if (solicitud.rows.length === 0) {
-        res
-          .status(404)
-          .json({ success: false, message: 'Solicitud no encontrada' });
-        return;
-      }
-      if (!solicitud.rows[0].pinellas_paga) {
-        res.status(400).json({
-          success: false,
-          message: 'Esta solicitud no está marcada como "Pinellas paga"',
-        });
-        return;
-      }
-
-      // Verificar que no tenga ya un reembolso
-      const existing = await query(
-        'SELECT id FROM reembolsos_pinellas WHERE solicitud_pago_id = $1',
-        [id],
-      );
-      if (existing.rows.length > 0) {
-        res.status(400).json({
-          success: false,
-          message: 'Esta solicitud ya tiene un reembolso registrado',
-        });
-        return;
-      }
-
-      // Comprobante es requerido
       const file = req.file;
-      if (!file) {
-        res.status(400).json({
-          success: false,
-          message: 'El comprobante de reembolso es requerido',
-        });
-        return;
-      }
 
-      let comprobanteUrl: string | null = null;
-      let comprobanteNombre: string | null = null;
+      // El reembolso a Pinellas es por el total: se registra cuando la
+      // solicitud ya está pagada completa, nunca mientras está abonada (Ivan,
+      // 2026-11-18). La fila queda bloqueada hasta el final: una corrección
+      // que anule un pago al mismo tiempo espera, y no deja un reembolso
+      // registrado sobre una solicitud con saldo.
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const fallar = async (codigo: number, message: string) => {
+          await client.query('ROLLBACK');
+          res.status(codigo).json({ success: false, message });
+        };
 
-      // Upload comprobante a R2
-      if (file) {
-        const uuid = crypto.randomUUID();
-        const safeName = sanitizeFilename(file.originalname);
-        const r2Key = `reembolsos/${id}/${uuid}_${safeName}`;
+        const solicitud = await client.query<{
+          pinellas_paga: boolean;
+          numero: string;
+          estado: string;
+        }>(
+          'SELECT pinellas_paga, numero, estado FROM solicitudes_pago WHERE id = $1 AND activo = true FOR UPDATE',
+          [id],
+        );
+        if (solicitud.rows.length === 0) {
+          await fallar(404, 'Solicitud no encontrada');
+          return;
+        }
+        const sol = solicitud.rows[0];
+        if (!sol.pinellas_paga) {
+          await fallar(400, 'Esta solicitud no está marcada como "Pinellas paga"');
+          return;
+        }
+        if (sol.estado !== 'pagada' && sol.estado !== 'facturada') {
+          await fallar(
+            400,
+            'El reembolso a Pinellas se registra cuando la solicitud está pagada completa',
+          );
+          return;
+        }
 
+        const existing = await client.query(
+          'SELECT id FROM reembolsos_pinellas WHERE solicitud_pago_id = $1',
+          [id],
+        );
+        if (existing.rows.length > 0) {
+          await fallar(400, 'Esta solicitud ya tiene un reembolso registrado');
+          return;
+        }
+
+        if (!file) {
+          await fallar(400, 'El comprobante de reembolso es requerido');
+          return;
+        }
+
+        const r2Key = `reembolsos/${id}/${crypto.randomUUID()}_${sanitizeFilename(file.originalname)}`;
         await uploadFile(r2Key, file.buffer, file.mimetype);
-        comprobanteUrl = r2Key;
-        comprobanteNombre = file.originalname;
-      }
 
-      await query(
-        `
-    INSERT INTO reembolsos_pinellas (solicitud_pago_id, comprobante_url, comprobante_nombre, fecha_reembolso, registrado_por)
-    VALUES ($1, $2, $3, $4, $5)
-  `,
-        [
-          id,
-          comprobanteUrl,
-          comprobanteNombre,
-          fecha_reembolso || new Date().toISOString().split('T')[0],
+        await client.query(
+          `INSERT INTO reembolsos_pinellas (solicitud_pago_id, comprobante_url, comprobante_nombre, fecha_reembolso, registrado_por)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [
+            id,
+            r2Key,
+            file.originalname,
+            fecha_reembolso || new Date().toISOString().split('T')[0],
+            userId,
+          ],
+        );
+
+        await registrarAudit(
           userId,
-        ],
-      );
+          'registrar_reembolso',
+          'solicitud_pago',
+          parseInt(id),
+          { numero: sol.numero },
+          client,
+        );
 
-      await registrarAudit(
-        userId,
-        'registrar_reembolso',
-        'solicitud_pago',
-        parseInt(id),
-        { numero: solicitud.rows[0].numero },
-      );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
 
       res.json({ success: true, message: 'Reembolso registrado' });
     },
@@ -4119,85 +4339,97 @@ router.post(
         return;
       }
 
-      // Verificar solicitud existe y estado válido
-      const solicitud = await query<SolicitudRow & { nombre_corto: string }>(
-        `SELECT sp.id, sp.numero, sp.estado, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
-         FROM solicitudes_pago sp
-         LEFT JOIN proyectos p ON sp.proyecto_id = p.id
-         WHERE sp.id = $1 AND sp.activo = true`,
-        [id],
-      );
-      if (solicitud.rows.length === 0) {
-        res
-          .status(404)
-          .json({ success: false, message: 'Solicitud no encontrada' });
-        return;
-      }
-      if (
-        solicitud.rows[0].estado !== 'pagada' &&
-        solicitud.rows[0].estado !== 'facturada'
-      ) {
-        res.status(400).json({
-          success: false,
-          message:
+      // La devolución es de una solicitud pagada completa, como siempre; una
+      // abonada no (Ivan, 2026-11-18). La fila queda bloqueada hasta el final:
+      // un pago o una corrección al mismo tiempo esperan, y el estado que se
+      // revisa es el que se cambia.
+      let sol: { numero: string; nombre_corto: string } | null = null;
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const fallar = async (codigo: number, message: string) => {
+          await client.query('ROLLBACK');
+          res.status(codigo).json({ success: false, message });
+        };
+
+        const solicitud = await client.query<{
+          numero: string;
+          estado: string;
+          nombre_corto: string;
+        }>(
+          `SELECT sp.numero, sp.estado, COALESCE(p.nombre_corto, p.nombre) as nombre_corto
+           FROM solicitudes_pago sp
+           LEFT JOIN proyectos p ON sp.proyecto_id = p.id
+           WHERE sp.id = $1 AND sp.activo = true
+           FOR UPDATE OF sp`,
+          [id],
+        );
+        if (solicitud.rows.length === 0) {
+          await fallar(404, 'Solicitud no encontrada');
+          return;
+        }
+        const fila = solicitud.rows[0];
+        if (fila.estado !== 'pagada' && fila.estado !== 'facturada') {
+          await fallar(
+            400,
             'Solo se puede registrar devolución en solicitudes pagadas o facturadas',
-        });
-        return;
+          );
+          return;
+        }
+
+        const existing = await client.query(
+          'SELECT id FROM devoluciones_solicitud WHERE solicitud_pago_id = $1',
+          [id],
+        );
+        if (existing.rows.length > 0) {
+          await fallar(400, 'Esta solicitud ya tiene una devolución registrada');
+          return;
+        }
+
+        const r2Key = `devoluciones/${id}/${crypto.randomUUID()}_${sanitizeFilename(file.originalname)}`;
+        await uploadFile(r2Key, file.buffer, file.mimetype);
+
+        await client.query(
+          `INSERT INTO devoluciones_solicitud (solicitud_pago_id, fecha_devolucion, motivo, comprobante_url, comprobante_nombre, registrado_por)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [id, fecha_devolucion, motivo.trim(), r2Key, file.originalname, userId],
+        );
+
+        await client.query(
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
+          ['devolucion', id],
+        );
+
+        await registrarAudit(
+          userId,
+          'registrar_devolucion',
+          'solicitud_pago',
+          parseInt(id),
+          {
+            numero: fila.numero,
+            motivo: motivo.trim(),
+            fecha_devolucion,
+          },
+          client,
+        );
+
+        await client.query('COMMIT');
+        sol = fila;
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
-
-      // Verificar que no tenga ya una devolución
-      const existing = await query(
-        'SELECT id FROM devoluciones_solicitud WHERE solicitud_pago_id = $1',
-        [id],
-      );
-      if (existing.rows.length > 0) {
-        res.status(400).json({
-          success: false,
-          message: 'Esta solicitud ya tiene una devolución registrada',
-        });
-        return;
-      }
-
-      // Upload comprobante a R2
-      const uuid = crypto.randomUUID();
-      const safeName = sanitizeFilename(file.originalname);
-      const r2Key = `devoluciones/${id}/${uuid}_${safeName}`;
-      await uploadFile(r2Key, file.buffer, file.mimetype);
-
-      // Insertar registro
-      await query(
-        `INSERT INTO devoluciones_solicitud (solicitud_pago_id, fecha_devolucion, motivo, comprobante_url, comprobante_nombre, registrado_por)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [id, fecha_devolucion, motivo.trim(), r2Key, file.originalname, userId],
-      );
-
-      // Cambiar estado a devolucion
-      await query(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
-        ['devolucion', id],
-      );
+      if (!sol) return;
 
       // Archive immutable copy of devolucion comprobante to project folder
       try {
-        const nombreCorto = solicitud.rows[0].nombre_corto;
-        const numero = solicitud.rows[0].numero;
-        const archiveKey = `${nombreCorto}/solicitudes/${numero}-devolucion.pdf`;
+        const archiveKey = `${sol.nombre_corto}/solicitudes/${sol.numero}-devolucion.pdf`;
         await uploadFile(archiveKey, file.buffer, file.mimetype);
       } catch (archiveErr) {
         console.error('Error archiving devolucion file:', archiveErr);
       }
-
-      await registrarAudit(
-        userId,
-        'registrar_devolucion',
-        'solicitud_pago',
-        parseInt(id),
-        {
-          numero: solicitud.rows[0].numero,
-          motivo: motivo.trim(),
-          fecha_devolucion,
-        },
-      );
 
       res.json({ success: true, message: 'Devolución registrada' });
     },
@@ -4288,14 +4520,16 @@ router.delete(
         return;
       }
 
-      // Block deletion of pagada/facturada unless it's the test project
+      // Block deletion of anything with money paid (abonada, pagada, facturada,
+      // devolucion) unless it's the test project
       const testProjectId = process.env.TEST_PROJECT_ID
         ? parseInt(process.env.TEST_PROJECT_ID)
         : null;
       const sol = existing.rows[0];
       if (
         isAdmin &&
-        (sol.estado === 'pagada' ||
+        (sol.estado === 'abonada' ||
+          sol.estado === 'pagada' ||
           sol.estado === 'facturada' ||
           sol.estado === 'devolucion') &&
         sol.proyecto_id !== testProjectId
@@ -4303,7 +4537,7 @@ router.delete(
         res.status(400).json({
           success: false,
           message:
-            'No se pueden eliminar solicitudes pagadas, facturadas o en devolución',
+            'No se pueden eliminar solicitudes abonadas, pagadas, facturadas o en devolución',
         });
         return;
       }

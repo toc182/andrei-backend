@@ -35,11 +35,13 @@ export const COLUMNAS_PROHIBIDAS = [
 ] as const;
 
 /** Los estados, y como se dicen. Pagar una aprobada la deja en pagada,
- *  reembolsada o transferida segun el tipo: las tres son «ya se pago». */
+ *  reembolsada o transferida segun el tipo: las tres son «ya se pago». Una
+ *  regular pagada en parte queda abonada (pagos parciales, migracion 191). */
 export const ESTADOS = {
   borrador: 'borrador, todavía no se ha mandado',
   pendiente: 'esperando aprobación',
   aprobada: 'aprobada, falta pagarla',
+  abonada: 'abonada: pagada en parte, falta el saldo',
   rechazada: 'rechazada',
   pagada: 'pagada',
   reembolsada: 'pagada (reembolso de caja menuda)',
@@ -178,8 +180,13 @@ const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 /** Lo que ya se pago, en cualquiera de sus formas. Con estados ['pagada'] el
  *  modelo busca «lo que se le ha pagado» y se dejaba fuera las facturadas: en
  *  la primera tanda (2026-09-28) contesto que a un proveedor no se le habia
- *  pagado nada teniendo una facturada. Pedir pagada trae las cuatro. */
-const YA_PAGADA: Estado[] = ['pagada', 'facturada', 'reembolsada', 'transferida'];
+ *  pagado nada teniendo una facturada. Pedir pagada trae todas las que ya
+ *  tienen pagos, tambien las abonadas; cuanto se pago lo dice total.pagado. */
+const YA_PAGADA: Estado[] = ['abonada', 'pagada', 'facturada', 'reembolsada', 'transferida'];
+
+/** Lo que falta pagar: pedir aprobada trae tambien las abonadas, que deben su
+ *  saldo; cuanto falta lo dice total.falta_por_pagar. */
+const FALTA_PAGAR: Estado[] = ['aprobada', 'abonada'];
 
 /** Sin mayusculas ni acentos, de los dos lados: «Acero Panama» encuentra a
  *  «Acero Panamá». En la base no hay unaccent, y para esto basta. */
@@ -272,9 +279,13 @@ export async function consultaDeSolicitudes(
     if (malos.length) {
       return { ok: false, error: `Estado desconocido: ${malos.join(', ')}`, extra: { estados: ESTADOS } };
     }
-    const estados = f.estados.includes('pagada')
-      ? [...new Set([...f.estados, ...YA_PAGADA])]
-      : f.estados;
+    const estados = [
+      ...new Set([
+        ...f.estados,
+        ...(f.estados.includes('pagada') ? YA_PAGADA : []),
+        ...(f.estados.includes('aprobada') ? FALTA_PAGAR : []),
+      ]),
+    ];
     donde.push(`sp.estado = ANY(${p(estados)}::text[])`);
     descripcion.push(
       f.estados.map((e) => (e === 'pagada' ? 'pagadas' : ESTADOS[e as Estado])).join(' o '),
@@ -361,6 +372,7 @@ export async function consultaDeSolicitudes(
   const desde = `
     FROM solicitudes_pago sp
     LEFT JOIN proyectos pr ON pr.id = sp.proyecto_id
+    LEFT JOIN solicitud_pago_saldo sv ON sv.solicitud_pago_id = sp.id
     LEFT JOIN LATERAL (
       SELECT pas.user_id, u.nombre
         FROM proyecto_ajustes_aprobacion pas
@@ -377,6 +389,22 @@ export async function consultaDeSolicitudes(
   return { ok: true, f, desde, params, descripcion };
 }
 
+/** Lo pagado de las que ya tienen pagos y lo que falta de las por pagar y
+ *  abonadas (la vista solicitud_pago_saldo, migracion 191). Lo suma la base. */
+const PAGADO = `COALESCE(SUM(sv.pagado) FILTER (WHERE sp.estado = ANY('{${YA_PAGADA.join(',')}}'::text[])), 0)::text`;
+const FALTA = `COALESCE(SUM(sv.saldo) FILTER (WHERE sp.estado = ANY('{${FALTA_PAGAR.join(',')}}'::text[])), 0)::text`;
+
+/** pagado y falta_por_pagar, solo los que no son cero: una lista de pendientes
+ *  no necesita decir «pagado B/. 0.00». */
+function pagadoYFalta(r: { pagado?: string | null; falta?: string | null } | undefined) {
+  const pagado = Number(r?.pagado ?? 0);
+  const falta = Number(r?.falta ?? 0);
+  return {
+    ...(pagado > 0 ? { pagado: dinero(pagado) } : {}),
+    ...(falta > 0 ? { falta_por_pagar: dinero(falta) } : {}),
+  };
+}
+
 /**
  * Busca solicitudes y devuelve lo que pide una pregunta: cuantas son, cuanto
  * suman —en total, por estado, por proyecto y por quien firma— y la lista.
@@ -389,12 +417,14 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
   const { f, desde, params } = consulta;
 
   const [total, porEstado, porProyecto, porAprobador, filas] = await Promise.all([
-    query<{ cantidad: string; monto: string }>(
-      `SELECT COUNT(*)::text AS cantidad, COALESCE(SUM(sp.monto_total), 0)::text AS monto ${desde}`,
+    query<{ cantidad: string; monto: string; pagado: string; falta: string }>(
+      `SELECT COUNT(*)::text AS cantidad, COALESCE(SUM(sp.monto_total), 0)::text AS monto,
+              ${PAGADO} AS pagado, ${FALTA} AS falta ${desde}`,
       params,
     ),
-    query<{ estado: string; cantidad: string; monto: string }>(
-      `SELECT sp.estado, COUNT(*)::text AS cantidad, COALESCE(SUM(sp.monto_total), 0)::text AS monto
+    query<{ estado: string; cantidad: string; monto: string; pagado: string; falta: string }>(
+      `SELECT sp.estado, COUNT(*)::text AS cantidad, COALESCE(SUM(sp.monto_total), 0)::text AS monto,
+              ${PAGADO} AS pagado, ${FALTA} AS falta
          ${desde}
         GROUP BY sp.estado ORDER BY COUNT(*) DESC`,
       params,
@@ -418,7 +448,7 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
       numero: string; proyecto: string | null; fecha: string; proveedor: string | null;
       concepto: string | null; que_se_compro: string | null; monto: string; estado: string;
       urgente: boolean;
-      le_toca_a: string | null; fecha_pago: string | null;
+      le_toca_a: string | null; fecha_pago: string | null; pagado: string | null; saldo: string | null;
     }>(
       `SELECT sp.numero,
               COALESCE(NULLIF(pr.nombre_corto, ''), pr.nombre) AS proyecto,
@@ -434,7 +464,8 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
               sp.urgente,
               sig.nombre AS le_toca_a,
               (SELECT to_char(MAX(c.fecha_pago), 'YYYY-MM-DD') FROM comprobantes_pago c
-                WHERE c.solicitud_pago_id = sp.id) AS fecha_pago
+                WHERE c.solicitud_pago_id = sp.id AND c.activo) AS fecha_pago,
+              sv.pagado::text AS pagado, sv.saldo::text AS saldo
          ${desde}
         ORDER BY ${ORDENES[f.orden ?? 'recientes']}
         LIMIT $${params.length + 1}`,
@@ -448,12 +479,17 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
   return {
     ok: true,
     contenido: {
-      total: { cantidad, monto: dinero(total.rows[0]?.monto ?? 0) },
+      total: {
+        cantidad,
+        monto: dinero(total.rows[0]?.monto ?? 0),
+        ...pagadoYFalta(total.rows[0]),
+      },
       por_estado: porEstado.rows.map((r) => ({
         estado: r.estado,
         significa: esEstado(r.estado) ? ESTADOS[r.estado] : r.estado,
         cantidad: Number(r.cantidad),
         monto: dinero(r.monto),
+        ...(r.estado === 'abonada' ? pagadoYFalta(r) : {}),
       })),
       ...(porProyecto.rows.length > 1
         ? {
@@ -485,6 +521,7 @@ export async function buscarSolicitudes(usuario: Usuario, entrada: Filtros): Pro
         ...(r.urgente ? { urgente: true } : {}),
         ...(r.le_toca_a ? { le_toca_aprobar_a: r.le_toca_a } : {}),
         ...(r.fecha_pago ? { fecha_de_pago: r.fecha_pago } : {}),
+        ...(r.estado === 'abonada' ? pagadoYFalta({ pagado: r.pagado, falta: r.saldo }) : {}),
       })),
       mostradas:
         filas.rows.length === cantidad
@@ -563,7 +600,7 @@ export async function verSolicitud(usuario: Usuario, numero: string): Promise<Re
     };
   }
 
-  const [lineas, firmas, cadena, pago, reembolso] = await Promise.all([
+  const [lineas, firmas, cadena, pagos, saldo, reembolso] = await Promise.all([
     query<{ cantidad: string; unidad: string | null; descripcion: string; precio_total: string }>(
       `SELECT cantidad::text AS cantidad, unidad, descripcion, precio_total::text AS precio_total
          FROM solicitud_pago_items WHERE solicitud_pago_id = $1 ORDER BY orden, id LIMIT 30`,
@@ -581,9 +618,15 @@ export async function verSolicitud(usuario: Usuario, numero: string): Promise<Re
         WHERE pas.proyecto_id = $1 AND pas.activo = true ORDER BY pas.orden`,
       [sol.proyecto_id],
     ),
-    query<{ fecha_pago: string | null }>(
-      `SELECT to_char(MAX(fecha_pago), 'YYYY-MM-DD') AS fecha_pago
-         FROM comprobantes_pago WHERE solicitud_pago_id = $1`,
+    // Los pagos que cuentan, uno por uno (un pago anulado no va).
+    query<{ fecha: string; monto: string }>(
+      `SELECT to_char(fecha_pago, 'YYYY-MM-DD') AS fecha, monto::text AS monto
+         FROM comprobantes_pago WHERE solicitud_pago_id = $1 AND activo
+        ORDER BY fecha_pago, id`,
+      [sol.id],
+    ),
+    query<{ pagado: string; saldo: string }>(
+      'SELECT pagado::text AS pagado, saldo::text AS saldo FROM solicitud_pago_saldo WHERE solicitud_pago_id = $1',
       [sol.id],
     ),
     query<{ fecha: string | null }>(
@@ -626,7 +669,14 @@ export async function verSolicitud(usuario: Usuario, numero: string): Promise<Re
       aprobadores_en_orden: cadena.rows.map((c) => c.nombre),
       firmas: firmas.rows,
       ...(leToca ? { le_toca_aprobar_a: leToca } : {}),
-      ...(pago.rows[0]?.fecha_pago ? { fecha_de_pago: pago.rows[0].fecha_pago } : {}),
+      ...(pagos.rows.length
+        ? {
+            fecha_de_pago: pagos.rows[pagos.rows.length - 1].fecha,
+            pagos: pagos.rows.map((p) => ({ fecha: p.fecha, monto: dinero(p.monto) })),
+            pagado: dinero(saldo.rows[0]?.pagado ?? 0),
+          }
+        : {}),
+      ...(sol.estado === 'abonada' ? { falta_por_pagar: dinero(saldo.rows[0]?.saldo ?? 0) } : {}),
       ...(sol.pinellas_paga
         ? { pinellas_paga: true, reembolso_registrado: reembolso.rows[0]?.fecha ?? 'todavía no' }
         : {}),

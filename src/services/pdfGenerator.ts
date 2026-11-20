@@ -83,9 +83,12 @@ interface PDFInput {
   items: ItemData[];
   ajustes: AjusteData[];
   aprobaciones: AprobacionData[];
-  comprobante?: {
-    fecha_pago: string;
-    registrado_por_nombre: string;
+  /** Los pagos que cuentan (pagos parciales, migración 191), con lo pagado y
+   *  el saldo. Una solicitud pagada de una vez trae uno. */
+  pagos?: {
+    lista: { fecha_pago: string; monto: string; registrado_por_nombre: string }[];
+    pagado: number;
+    saldo: number;
   };
   factura?: {
     fecha_factura: string;
@@ -126,7 +129,9 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
   // Pre-generate QR code buffer (must be done before entering PDFKit's sync callback)
   let qrBuffer: Buffer | null = null;
   let verifyUrl = '';
+  // Ya salió plata: abonada (pagada en parte), pagada, facturada o devuelta.
   const esPagadaOFacturada =
+    data.estado === 'abonada' ||
     data.estado === 'pagada' ||
     data.estado === 'facturada' ||
     data.estado === 'devolucion';
@@ -690,6 +695,9 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
       if (data.devolucion) {
         statusMsg = 'Solicitud con devolución registrada';
         statusRed = true;
+      } else if (data.estado === 'abonada' && data.pagos) {
+        statusMsg = `Solicitud abonada — pagado ${formatMoney(data.pagos.pagado)} de ${formatMoney(data.solicitud.monto_total)}, saldo ${formatMoney(data.pagos.saldo)}`;
+        statusGreen = true;
       } else if (esPagadaOFacturada && data.estado === 'facturada') {
         statusMsg = 'Solicitud aprobada, pagada y facturada';
         statusGreen = true;
@@ -697,10 +705,10 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
         statusMsg =
           'Solicitud aprobada y pagada — pendiente registro de factura';
         statusGreen = true;
-      } else if (allApproved && data.comprobante && data.factura) {
+      } else if (allApproved && data.pagos && data.factura) {
         statusMsg = 'Solicitud aprobada, pagada y facturada';
         statusGreen = true;
-      } else if (allApproved && data.comprobante && !data.factura) {
+      } else if (allApproved && data.pagos && !data.factura) {
         statusMsg =
           'Solicitud aprobada y pagada — pendiente registro de factura';
         statusGreen = true;
@@ -877,31 +885,47 @@ export async function generateSolicitudPDF(data: PDFInput): Promise<Buffer> {
     }
 
     // ==========================================
-    // 8. COMPROBANTE DE PAGO
+    // 8. PAGOS
     // ==========================================
-    if (data.comprobante) {
-      if (y + 40 > PAGE_BOTTOM) {
+    // Una línea por pago (pagos parciales, migración 191); una solicitud pagada
+    // de una vez trae una. Con saldo, abajo va lo pagado y lo que falta.
+    if (data.pagos && data.pagos.lista.length > 0) {
+      const pagos = data.pagos;
+      const conSaldo = pagos.saldo > 0;
+      const cpBoxH = 18 + pagos.lista.length * 12 + (conSaldo ? 12 : 0) + 2;
+      if (y + cpBoxH > PAGE_BOTTOM) {
         doc.addPage();
         y = MARGIN;
       }
 
       const PAYMENT_BG = '#eff6ff';
-      const cpBoxH = 32;
-
       doc.roundedRect(tableX, y, pageWidth, cpBoxH, 2).fill(PAYMENT_BG);
       doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#1e40af');
-      doc.text('Comprobante de Pago', tableX + 8, y + 5, {
+      doc.text('Pagos', tableX + 8, y + 5, {
         width: pageWidth - 16,
         lineBreak: false,
       });
 
+      let pY = y + 18;
       doc.font('Helvetica').fontSize(7.5).fillColor('#1e40af');
-      doc.text(
-        `Fecha de pago: ${fecha(data.comprobante.fecha_pago)}  —  Registrado por: ${data.comprobante.registrado_por_nombre}`,
-        tableX + 8,
-        y + 18,
-        { width: pageWidth - 16, lineBreak: false },
-      );
+      for (const pago of pagos.lista) {
+        doc.text(
+          `Fecha de pago: ${fecha(pago.fecha_pago)}  —  ${formatMoney(Number(pago.monto))}  —  Registrado por: ${pago.registrado_por_nombre}`,
+          tableX + 8,
+          pY,
+          { width: pageWidth - 16, lineBreak: false },
+        );
+        pY += 12;
+      }
+      if (conSaldo) {
+        doc.font('Helvetica-Bold').fontSize(7.5).fillColor('#1e40af');
+        doc.text(
+          `Pagado: ${formatMoney(pagos.pagado)} de ${formatMoney(data.solicitud.monto_total)}  —  Saldo: ${formatMoney(pagos.saldo)}`,
+          tableX + 8,
+          pY,
+          { width: pageWidth - 16, lineBreak: false },
+        );
+      }
 
       y += cpBoxH + 6;
     }

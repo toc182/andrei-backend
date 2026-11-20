@@ -225,12 +225,13 @@ router.post(
 // Lo que falta por RETIRAR de una orden no esta aqui — no se debe, y Ivan pidio
 // que viva solo dentro de la orden (2026-09-30).
 //
-// Una solicitud cuenta como gastada en los estados 'pagada' y 'facturada'
-// (facturada viene DESPUES de pagada). 'devolucion' es una plata que el
-// proveedor devolvio entera, asi que no cuenta.
-//
-// La fecha del gasto es la del comprobante de pago; si no hay comprobante, la
-// de la solicitud, que es lo mas cercano que existe.
+// Lo gastado es solo lo PAGADO (pagos parciales, Ivan 2026-11-18): de una
+// solicitud abonada cuenta lo que ya se le pagó, y cada pago en su fecha. Qué
+// solicitudes cuentan y cuánto lo dicen las vistas solicitud_pago_gasto y
+// comprobante_pago_gasto (migración 191): abonadas, pagadas y facturadas;
+// 'devolucion' es una plata que el proveedor devolvio entera, asi que no
+// cuenta. Lo repartido en partidas o facturas de una orden cuenta en
+// proporción a lo pagado (parte_pagada).
 // ---------------------------------------------------------------------------
 
 interface ResumenCategoriaRow {
@@ -260,19 +261,17 @@ interface ComparativoFilaWire {
 
 const numero = (v: string | null | undefined): number => (v != null ? parseFloat(v) : 0);
 
-/** Solicitudes ya pagadas del proyecto, con su fecha de pago resuelta. */
+/** Las solicitudes del proyecto que cuentan como gasto, con lo pagado hasta hoy
+ *  y la fecha de su último pago. */
 const PAGADAS_CTE = `
   WITH pagadas AS (
-    SELECT s.id,
-           s.monto_total,
-           s.categoria_id,
-           COALESCE(MAX(c.fecha_pago), s.fecha) AS fecha_pago
-      FROM solicitudes_pago s
-      LEFT JOIN comprobantes_pago c ON c.solicitud_pago_id = s.id
-     WHERE s.proyecto_id = $1
-       AND s.activo = TRUE
-       AND s.estado IN ('pagada', 'facturada')
-     GROUP BY s.id
+    SELECT g.solicitud_pago_id AS id,
+           g.monto_total,
+           g.pagado,
+           g.categoria_id,
+           g.ultima_fecha_pago AS fecha_pago
+      FROM solicitud_pago_gasto g
+     WHERE g.proyecto_id = $1
   )`;
 
 router.get(
@@ -327,7 +326,7 @@ router.get(
       query<ResumenCategoriaRow>(
         `${PAGADAS_CTE}
          SELECT c.id, c.codigo, c.nombre, c.color,
-                SUM(pg.monto_total)::text AS monto,
+                SUM(pg.pagado)::text AS monto,
                 COUNT(*)::text            AS solicitudes
            FROM pagadas pg
            LEFT JOIN categorias_gastos c ON c.id = pg.categoria_id
@@ -335,11 +334,12 @@ router.get(
           ORDER BY c.orden NULLS LAST, c.nombre NULLS LAST`,
         [proyectoId],
       ),
+      // La curva: cada pago en su fecha, no la solicitud en la de su último pago.
       query<ResumenSerieRow>(
-        `${PAGADAS_CTE}
-         SELECT to_char(fecha_pago, 'YYYY-MM-DD') AS fecha,
-                SUM(monto_total)::text            AS monto
-           FROM pagadas
+        `SELECT to_char(fecha_pago, 'YYYY-MM-DD') AS fecha,
+                SUM(monto)::text                  AS monto
+           FROM comprobante_pago_gasto
+          WHERE proyecto_id = $1
           GROUP BY fecha_pago
           ORDER BY fecha_pago`,
         [proyectoId],
@@ -347,13 +347,16 @@ router.get(
       // Las solicitudes que hay detras de cada categoria: la fila del reparto
       // se pincha y se abre, asi que viajan de una vez. Son pocas —solo las ya
       // pagadas de un proyecto— y ahorran una segunda espera al abrir.
+      // monto es lo pagado hasta hoy; total, el de la solicitud: el reparto en
+      // partidas se hace sobre la solicitud entera y cuenta en proporción.
       query<{
         id: number; numero: string | null; fecha: string; proveedor: string | null;
-        monto: string; categoria_id: number | null;
+        monto: string; total: string; categoria_id: number | null;
       }>(
         `${PAGADAS_CTE}
          SELECT pg.id, s.numero, to_char(pg.fecha_pago, 'YYYY-MM-DD') AS fecha,
-                s.proveedor, pg.monto_total::text AS monto, pg.categoria_id
+                s.proveedor, pg.pagado::text AS monto, pg.monto_total::text AS total,
+                pg.categoria_id
            FROM pagadas pg
            JOIN solicitudes_pago s ON s.id = pg.id
           ORDER BY pg.fecha_pago DESC, pg.id DESC`,
@@ -398,11 +401,11 @@ router.get(
             ORDER BY id LIMIT 1
          ),
          gasto AS (
-           SELECT sp.presupuesto_id, sp.row_uid, SUM(sp.monto) AS gastado
+           SELECT sp.presupuesto_id, sp.row_uid,
+                  SUM(parte_pagada(sp.monto, g.pagado, g.monto_total)) AS gastado
              FROM solicitud_pago_partidas sp
-             JOIN solicitudes_pago s ON s.id = sp.solicitud_pago_id
-            WHERE s.proyecto_id = $1 AND s.activo = TRUE
-              AND s.estado IN ('pagada', 'facturada')
+             JOIN solicitud_pago_gasto g ON g.solicitud_pago_id = sp.solicitud_pago_id
+            WHERE g.proyecto_id = $1
             GROUP BY sp.presupuesto_id, sp.row_uid
          )
          SELECT r.row_uid, r.codigo AS item, r.descripcion,
@@ -464,15 +467,16 @@ router.get(
     const gastado = categorias.reduce((s, c) => s + c.monto, 0) + numero(sinCat?.monto);
 
     const recibidoSinPagar = await query<{ por_pagar: string }>(
-      `SELECT COALESCE(SUM(
+      // Una factura pagada en parte (solicitud abonada) debe lo que falta, en
+      // proporción; el total se redondea al centavo.
+      `SELECT ROUND(COALESCE(SUM(
                 e.monto_total - COALESCE((
-                  SELECT SUM(spe.monto)
+                  SELECT SUM(parte_pagada(spe.monto, g.pagado, g.monto_total))
                     FROM solicitud_pago_entregas spe
-                    JOIN solicitudes_pago sp ON sp.id = spe.solicitud_pago_id
-                   WHERE spe.entrega_id = e.id AND sp.activo = true
-                     AND sp.estado IN ('pagada', 'facturada')
+                    JOIN solicitud_pago_gasto g ON g.solicitud_pago_id = spe.solicitud_pago_id
+                   WHERE spe.entrega_id = e.id
                 ), 0)
-              ), 0) AS por_pagar
+              ), 0), 2) AS por_pagar
          FROM orden_compra_entregas e
          JOIN ordenes_compra o ON o.id = e.orden_compra_id
         WHERE o.proyecto_id = $1 AND o.activo = true AND e.activo = true
@@ -521,6 +525,7 @@ router.get(
           fecha: s.fecha,
           proveedor: s.proveedor,
           monto: numero(s.monto),
+          total: numero(s.total),
           categoriaId: s.categoria_id,
           partidas: partidasPorPago.get(s.id) ?? [],
         })),
@@ -595,13 +600,15 @@ router.put(
       return;
     }
 
-    // El pago tiene que ser de este proyecto y estar ya pagado: el control de
-    // costos solo cuenta esos, y clasificar uno que aun no se paga daria un
-    // gasto que todavia no existe.
+    // El pago tiene que ser de este proyecto y contar ya como gasto: el control
+    // de costos solo cuenta esos, y clasificar uno que aun no se paga daria un
+    // gasto que todavia no existe. Una abonada se reparte entera, sobre su
+    // total, y cada partida cuenta en proporcion a lo pagado.
     const sol = await query<{ monto_total: string; numero: string | null }>(
-      `SELECT monto_total, numero FROM solicitudes_pago
-        WHERE id = $1 AND proyecto_id = $2 AND activo = TRUE
-          AND estado IN ('pagada', 'facturada')`,
+      `SELECT g.monto_total, s.numero
+         FROM solicitud_pago_gasto g
+         JOIN solicitudes_pago s ON s.id = g.solicitud_pago_id
+        WHERE g.solicitud_pago_id = $1 AND g.proyecto_id = $2`,
       [solicitudId, proyectoId],
     );
     if (!sol.rows.length) {
