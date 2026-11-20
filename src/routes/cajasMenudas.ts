@@ -44,6 +44,31 @@ router.param('id', (_req, res, next, id: string) => {
     .catch(next);
 });
 
+// Una caja cancelada (su apertura fue rechazada; migración 192) ya no admite
+// nada: ni gastos, ni archivos, ni cambios de monto, nombre o estado, ni
+// reembolsos. Se puede ver, y eliminar desde el menú. Como con el router.param
+// de arriba, toda ruta con :id pasa por aquí: ninguna que escribe se olvida.
+router.use('/:id', (req, res, next) => {
+  const soloLee = req.method === 'GET' || req.method === 'HEAD';
+  const eliminar = req.method === 'DELETE' && req.path === '/';
+  if (soloLee || eliminar || !/^\d+$/.test(req.params.id)) {
+    next();
+    return;
+  }
+  query<{ estado: string }>('SELECT estado FROM cajas_menudas WHERE id = $1', [req.params.id])
+    .then((r) => {
+      if (r.rows[0]?.estado === 'cancelada') {
+        res.status(409).json({
+          success: false,
+          error: 'La caja está cancelada: su solicitud de apertura fue rechazada. Ya no admite cambios.',
+        });
+        return;
+      }
+      next();
+    })
+    .catch(next);
+});
+
 // ─── Eliminar una caja ───────────────────────────────────────────────────────
 //
 // Una caja abierta por error se elimina entera —ella, sus gastos, su apertura,
@@ -149,6 +174,63 @@ function sanitizeFilename(name: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-zA-Z0-9._-]/g, '_')
     .replace(/_+/g, '_');
+}
+
+/**
+ * Crea una solicitud de apertura de la caja —su apertura, un aumento, o la que
+ * reemplaza a una apertura sin transferir— con su único renglón, dentro de la
+ * transacción de quien llama. Sin prefijo en el proyecto, generateNumero lanza
+ * PREFIJO_NO_CONFIGURADO y quien llama lo traduce en un mensaje.
+ */
+async function crearSolicitudApertura(
+  client: PoolClient,
+  datos: {
+    proyectoId: number;
+    responsableId: number;
+    monto: number | string;
+    concepto: string;
+    preparadoPor: number;
+  },
+): Promise<{ id: number; numero: string }> {
+  const responsable = await client.query<{ nombre: string }>(
+    'SELECT nombre FROM users WHERE id = $1',
+    [datos.responsableId],
+  );
+  const beneficiario = responsable.rows[0]?.nombre || '';
+  const numero = await generateNumero(datos.proyectoId, 'apertura', client);
+
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(8);
+  let codigoVerificacion = '';
+  for (let i = 0; i < 8; i++) {
+    codigoVerificacion += chars[bytes[i] % chars.length];
+  }
+
+  const solicitud = await client.query<{ id: number }>(
+    `INSERT INTO solicitudes_pago (
+       proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
+       subtotal, descuentos, impuestos, monto_total,
+       estado, observaciones, beneficiario, codigo_verificacion, tipo
+     ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, 0, 0, $6, 'pendiente', $7, $3, $8, 'apertura')
+     RETURNING id`,
+    [
+      datos.proyectoId,
+      numero,
+      beneficiario,
+      datos.preparadoPor,
+      datos.responsableId,
+      datos.monto,
+      datos.concepto,
+      codigoVerificacion,
+    ],
+  );
+  const id = solicitud.rows[0].id;
+  await client.query(
+    `INSERT INTO solicitud_pago_items (solicitud_pago_id, descripcion, cantidad, precio_unitario, precio_total, orden)
+     VALUES ($1, $2, 1, $3, $3, 0)`,
+    [id, datos.concepto, datos.monto],
+  );
+  return { id, numero };
 }
 
 // ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -488,17 +570,17 @@ router.post(
       );
       const cajaId = result.rows[0].id;
 
-      // 2. Get responsable name for beneficiario
-      const responsableResult = await client.query<{ nombre: string }>(
-        'SELECT nombre FROM users WHERE id = $1',
-        [responsable_id],
-      );
-      const beneficiarioNombre = responsableResult.rows[0]?.nombre || '';
-
-      // 3. Generate apertura solicitud numero
+      // 2. Its opening request
+      let solicitudId: number;
       let numero: string;
       try {
-        numero = await generateNumero(proyecto_id, 'apertura', client);
+        ({ id: solicitudId, numero } = await crearSolicitudApertura(client, {
+          proyectoId: proyecto_id,
+          responsableId: responsable_id,
+          monto: monto_asignado,
+          concepto: `Apertura de Caja Menuda — ${nombre}`,
+          preparadoPor: user.id,
+        }));
       } catch (err) {
         await client.query('ROLLBACK');
         if ((err as Error).message === 'PREFIJO_NO_CONFIGURADO') {
@@ -511,45 +593,7 @@ router.post(
         throw err;
       }
 
-      // 4. Generate verification code
-      const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-      const bytes = crypto.randomBytes(8);
-      let codigoVerificacion = '';
-      for (let i = 0; i < 8; i++) {
-        codigoVerificacion += chars[bytes[i] % chars.length];
-      }
-
-      // 5. Create apertura solicitud
-      const concepto = `Apertura de Caja Menuda — ${nombre}`;
-      const solicitudResult = await client.query<{ id: number }>(
-        `INSERT INTO solicitudes_pago (
-          proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
-          subtotal, descuentos, impuestos, monto_total,
-          estado, observaciones, beneficiario, codigo_verificacion, tipo
-        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, 0, 0, $6, 'pendiente', $7, $8, $9, 'apertura')
-        RETURNING id`,
-        [
-          proyecto_id,
-          numero,
-          beneficiarioNombre,
-          user.id,
-          responsable_id,
-          monto_asignado,
-          concepto,
-          beneficiarioNombre,
-          codigoVerificacion,
-        ],
-      );
-      const solicitudId = solicitudResult.rows[0].id;
-
-      // 6. Create single item for the solicitud
-      await client.query(
-        `INSERT INTO solicitud_pago_items (solicitud_pago_id, descripcion, cantidad, precio_unitario, precio_total, orden)
-         VALUES ($1, $2, 1, $3, $3, 0)`,
-        [solicitudId, concepto, monto_asignado],
-      );
-
-      // 7. Link solicitud to caja
+      // 3. Link solicitud to caja
       await client.query(
         'UPDATE cajas_menudas SET solicitud_apertura_id = $1 WHERE id = $2',
         [solicitudId, cajaId],
@@ -842,8 +886,15 @@ router.put(
       try {
         await client.query('BEGIN');
 
-        const current = await client.query<{ monto_asignado: string }>(
-          'SELECT monto_asignado FROM cajas_menudas WHERE id = $1 FOR UPDATE',
+        const current = await client.query<{
+          monto_asignado: string;
+          proyecto_id: number;
+          responsable_id: number;
+          nombre: string;
+          solicitud_apertura_id: number | null;
+        }>(
+          `SELECT monto_asignado, proyecto_id, responsable_id, nombre, solicitud_apertura_id
+             FROM cajas_menudas WHERE id = $1 FOR UPDATE`,
           [id],
         );
 
@@ -855,7 +906,8 @@ router.put(
           return;
         }
 
-        const montoAnterior = current.rows[0].monto_asignado;
+        const caja = current.rows[0];
+        const montoAnterior = caja.monto_asignado;
 
         // Reject no-op amount changes — no historial row should be created for a
         // save that did not actually modify the amount.
@@ -864,6 +916,110 @@ router.put(
           res.status(400).json({
             success: false,
             error: 'El monto asignado no ha cambiado',
+          });
+          return;
+        }
+
+        // Bajar el monto antes de que la apertura se transfiera (pendiente o
+        // aprobada): la apertura se reemplaza por una solicitud nueva por el
+        // monto nuevo, que pasa por aprobación desde el principio (Ivan,
+        // 2026-11-19). No hay dinero que devolver, así que no va historial ni
+        // comprobante; el cambio queda en el registro de auditoría.
+        const apertura = caja.solicitud_apertura_id
+          ? (
+              await client.query<{ id: number; numero: string; estado: string }>(
+                `SELECT id, numero, estado FROM solicitudes_pago
+                  WHERE id = $1 AND activo = true FOR UPDATE`,
+                [caja.solicitud_apertura_id],
+              )
+            ).rows[0]
+          : undefined;
+        const bajaSinTransferir =
+          Number(monto_asignado) < Number(montoAnterior) &&
+          (apertura?.estado === 'pendiente' || apertura?.estado === 'aprobada');
+
+        if (apertura && bajaSinTransferir) {
+          const aumento = await client.query<{ numero: string }>(
+            `SELECT sp.numero
+               FROM cajas_menudas_historial_monto h
+               JOIN solicitudes_pago sp ON sp.id = h.solicitud_pago_id AND sp.activo = true
+              WHERE h.caja_menuda_id = $1 AND h.estado = 'activa'
+              LIMIT 1`,
+            [id],
+          );
+          if (aumento.rows.length > 0) {
+            await client.query('ROLLBACK');
+            res.status(400).json({
+              success: false,
+              error: `La caja tiene el aumento ${aumento.rows[0].numero} además de la apertura sin transferir. Rechace el aumento antes de bajar el monto.`,
+            });
+            return;
+          }
+
+          const archivos = await retirarSolicitud(client, apertura.id);
+          let nueva: { id: number; numero: string };
+          try {
+            nueva = await crearSolicitudApertura(client, {
+              proyectoId: caja.proyecto_id,
+              responsableId: caja.responsable_id,
+              monto: monto_asignado,
+              concepto: `Apertura de Caja Menuda — ${caja.nombre}`,
+              preparadoPor: user.id,
+            });
+          } catch (err) {
+            await client.query('ROLLBACK');
+            if ((err as Error).message === 'PREFIJO_NO_CONFIGURADO') {
+              res.status(400).json({
+                success: false,
+                error: 'El proyecto no tiene prefijo de solicitud configurado',
+              });
+              return;
+            }
+            throw err;
+          }
+          await client.query(
+            `UPDATE cajas_menudas
+                SET solicitud_apertura_id = $1, monto_asignado = $2, updated_at = CURRENT_TIMESTAMP
+              WHERE id = $3`,
+            [nueva.id, monto_asignado, id],
+          );
+          await registrarAudit(
+            user.id,
+            'eliminar',
+            'solicitud_pago',
+            apertura.id,
+            {
+              numero: apertura.numero,
+              estado_al_eliminar: apertura.estado,
+              reemplazada_por: nueva.numero,
+              al_bajar_monto_de_caja_menuda: Number(id),
+            },
+            client,
+          );
+          await registrarAudit(
+            user.id,
+            'editar',
+            'caja_menuda',
+            Number(id),
+            {
+              campo: 'monto_asignado',
+              monto_anterior: montoAnterior,
+              monto_nuevo: monto_asignado,
+              apertura_reemplazada: apertura.numero,
+              apertura_nueva: nueva.numero,
+            },
+            client,
+          );
+          await client.query('COMMIT');
+          await borrarArchivos(archivos);
+          res.json({
+            success: true,
+            data: {
+              id: Number(id),
+              solicitud_id: nueva.id,
+              solicitud_numero: nueva.numero,
+              solicitud_reemplazada: apertura.numero,
+            },
           });
           return;
         }
@@ -910,25 +1066,15 @@ router.put(
 
         if (isIncrease) {
           // For increases: create apertura solicitud for the difference
-          const cajaResult = await client.query<{
-            proyecto_id: number;
-            nombre: string;
-            responsable_id: number;
-          }>(
-            'SELECT proyecto_id, nombre, responsable_id FROM cajas_menudas WHERE id = $1',
-            [id],
-          );
-          const caja = cajaResult.rows[0];
-
-          const responsableResult = await client.query<{ nombre: string }>(
-            'SELECT nombre FROM users WHERE id = $1',
-            [caja.responsable_id],
-          );
-          const beneficiarioNombre = responsableResult.rows[0]?.nombre || '';
-
-          let numero: string;
+          const formatMonto = (v: number) => `B/. ${v.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
           try {
-            numero = await generateNumero(caja.proyecto_id, 'apertura', client);
+            ({ id: solicitudId, numero: solicitudNumero } = await crearSolicitudApertura(client, {
+              proyectoId: caja.proyecto_id,
+              responsableId: caja.responsable_id,
+              monto: difference,
+              concepto: `Aumento de Caja Menuda — ${caja.nombre} (${formatMonto(Number(montoAnterior))} → ${formatMonto(Number(monto_asignado))})`,
+              preparadoPor: user.id,
+            }));
           } catch (err) {
             await client.query('ROLLBACK');
             if ((err as Error).message === 'PREFIJO_NO_CONFIGURADO') {
@@ -940,44 +1086,6 @@ router.put(
             }
             throw err;
           }
-
-          const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-          const bytes = crypto.randomBytes(8);
-          let codigoVerificacion = '';
-          for (let i = 0; i < 8; i++) {
-            codigoVerificacion += chars[bytes[i] % chars.length];
-          }
-
-          const formatMonto = (v: number) => `B/. ${v.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
-          const concepto = `Aumento de Caja Menuda — ${caja.nombre} (${formatMonto(Number(montoAnterior))} → ${formatMonto(Number(monto_asignado))})`;
-
-          const solicitudResult = await client.query<{ id: number }>(
-            `INSERT INTO solicitudes_pago (
-              proyecto_id, numero, fecha, proveedor, preparado_por, solicitado_por,
-              subtotal, descuentos, impuestos, monto_total,
-              estado, observaciones, beneficiario, codigo_verificacion, tipo
-            ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, 0, 0, $6, 'pendiente', $7, $8, $9, 'apertura')
-            RETURNING id`,
-            [
-              caja.proyecto_id,
-              numero,
-              beneficiarioNombre,
-              user.id,
-              caja.responsable_id,
-              difference,
-              concepto,
-              beneficiarioNombre,
-              codigoVerificacion,
-            ],
-          );
-          solicitudId = solicitudResult.rows[0].id;
-          solicitudNumero = numero;
-
-          await client.query(
-            `INSERT INTO solicitud_pago_items (solicitud_pago_id, descripcion, cantidad, precio_unitario, precio_total, orden)
-             VALUES ($1, $2, 1, $3, $3, 0)`,
-            [solicitudId, concepto, difference],
-          );
 
           // Link solicitud to historial entry
           await client.query(

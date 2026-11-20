@@ -73,6 +73,7 @@ const PRUEBAS: Record<string, string> = {
   'whatsapp-urgentes': 'whatsapp-urgentes-humo.ts',
   'caja-quitada': 'caja-quitada-humo.ts',
   'caja-eliminar': 'caja-eliminar-humo.ts',
+  'caja-apertura-rechazo': 'caja-apertura-rechazo-humo.ts',
 };
 
 async function main(): Promise<void> {

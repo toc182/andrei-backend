@@ -27,6 +27,11 @@ import { adjuntarCompra, enlazarCompra, leerCompra } from '../services/requisici
 import { fixFiles } from '../utils/fileEncoding.js';
 import { borrarArchivos, retirarSolicitud } from '../services/solicitudRetiro.js';
 import {
+  alRechazarApertura,
+  cajaDeLaApertura,
+  mensajeAperturaConGastos,
+} from '../services/cajaApertura.js';
+import {
   aCentavos,
   deCentavos,
   dineroCentavos,
@@ -1589,9 +1594,14 @@ router.get(
         [id, req.user?.id],
       );
 
+      // La apertura de una caja: la pantalla avisa antes de rechazarla (no se
+      // puede si la caja tiene gastos; si no, la caja queda cancelada).
+      const cajaApertura =
+        sol.tipo === 'apertura' ? await cajaDeLaApertura(pool, Number(id)) : null;
+
       res.json({
         success: true,
-        solicitud: solicitud.rows[0],
+        solicitud: { ...solicitud.rows[0], caja_apertura: cajaApertura },
         items: items.rows,
         ajustes: ajustes.rows,
         adjuntos: adjuntos.rows,
@@ -3990,57 +4000,49 @@ router.post(
         return;
       }
 
-      // Registrar rechazo
-      await query(
-        `
-    INSERT INTO solicitud_aprobaciones (solicitud_pago_id, user_id, orden, accion, comentario)
-    VALUES ($1, $2, $3, 'rechazado', $4)
-  `,
-        [id, userId, siguienteAprobador.orden, comentario],
-      );
+      const esApertura = solicitud.rows[0].tipo === 'apertura';
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
 
-      // Cambiar estado a rechazada
-      await query(
-        'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
-        ['rechazada', id],
-      );
-
-      // Apertura rejection side effects: revert caja monto to reflect the
-      // rejection (initial → 0, increase → monto_anterior). Rejections of
-      // apertura solicitudes are final — the user cannot reenviar.
-      if (solicitud.rows[0].tipo === 'apertura') {
-        const initial = await query<{ id: number }>(
-          'SELECT id FROM cajas_menudas WHERE solicitud_apertura_id = $1',
-          [id],
-        );
-        if (initial.rows.length > 0) {
-          await query(
-            'UPDATE cajas_menudas SET monto_asignado = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-            [initial.rows[0].id],
-          );
-        } else {
-          const historial = await query<{
-            id: number;
-            caja_menuda_id: number;
-            monto_anterior: string;
-          }>(
-            `SELECT id, caja_menuda_id, monto_anterior
-             FROM cajas_menudas_historial_monto
-             WHERE solicitud_pago_id = $1`,
-            [id],
-          );
-          if (historial.rows.length > 0) {
-            const h = historial.rows[0];
-            await query(
-              `UPDATE cajas_menudas_historial_monto SET estado = 'rechazada' WHERE id = $1`,
-              [h.id],
-            );
-            await query(
-              'UPDATE cajas_menudas SET monto_asignado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-              [h.monto_anterior, h.caja_menuda_id],
-            );
+        // La apertura de una caja que ya tiene gastos no se rechaza (Ivan,
+        // 2026-11-19): la caja queda trabada mientras se cuenta, para que
+        // ningún gasto entre entre el conteo y el rechazo.
+        if (esApertura) {
+          const caja = await cajaDeLaApertura(client, Number(id), true);
+          if (caja && caja.gastos > 0) {
+            await client.query('ROLLBACK');
+            res.status(409).json({
+              success: false,
+              message: mensajeAperturaConGastos(caja),
+              caja_apertura: caja,
+            });
+            return;
           }
         }
+
+        await client.query(
+          `INSERT INTO solicitud_aprobaciones (solicitud_pago_id, user_id, orden, accion, comentario)
+           VALUES ($1, $2, $3, 'rechazado', $4)`,
+          [id, userId, siguienteAprobador.orden, comentario],
+        );
+        await client.query(
+          'UPDATE solicitudes_pago SET estado = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND activo = true',
+          ['rechazada', id],
+        );
+
+        // Una apertura rechazada cancela su caja; un aumento rechazado la
+        // devuelve al monto anterior. Ninguna de las dos se reenvía.
+        if (esApertura) {
+          await alRechazarApertura(client, Number(id), userId, comentario);
+        }
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
 
       res.json({ success: true, message: 'Solicitud rechazada' });
